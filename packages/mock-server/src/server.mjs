@@ -136,6 +136,10 @@ function usage(inTok, outTok) {
 }
 
 function echoPlan(text) {
+  // Rich-rendering demo: prompt mentioning markdown/table/demo returns real
+  // structured markdown so the web client's table/list/link rendering is
+  // verifiable end-to-end against a live stream.
+  if (/\b(markdown|table|demo)\b/i.test(text)) return demoPlan();
   return [
     { event: "turn_start", delay: 5 },
     { event: "text_delta", data: "Mock agent: ", delay: 12 },
@@ -164,6 +168,49 @@ function echoPlan(text) {
       delay: 4,
     },
     { event: "turn_end", data: { usage: usage(12, 24), failed: false }, delay: 4 },
+  ];
+}
+
+const MD_DEMO = `## Markdown rendering demo
+
+Structured agent output renders as **real HTML**, not wrapped monospace:
+
+| Option | Cost | Risk | Verdict |
+|:-------|-----:|:----:|:--------|
+| Literal TUI clone | $0 | high | ✗ tables shred on wrap |
+| Real \`<table>\` elements | $0 | low | ✓ **this** |
+| Screenshot the terminal | $$$ | high | ✗ |
+
+Why it matters:
+- columns stay aligned at any viewport width
+  - long cells wrap *inside* their cell
+  - numeric columns right-align
+- lists are real lists, links are real links: [AgentLink spec](https://example.com/agentlink)
+
+> Terminal soul in the chrome; web power in the content.
+
+\`\`\`rust
+fn demo() -> &'static str { "code fences stay monospace" }
+\`\`\`
+
+Done.`;
+
+function demoPlan() {
+  const chunks = [];
+  const step = 160;
+  for (let i = 0; i < MD_DEMO.length; i += step) {
+    chunks.push({ event: "text_delta", data: MD_DEMO.slice(i, i + step), delay: 25 });
+  }
+  return [
+    { event: "turn_start", delay: 5 },
+    ...chunks,
+    { event: "text_block_complete", data: MD_DEMO, delay: 8 },
+    {
+      event: "usage_update",
+      data: { turn: usage(40, 220), session: usage(40, 220) },
+      delay: 4,
+    },
+    { event: "turn_end", data: { usage: usage(40, 220), failed: false }, delay: 4 },
   ];
 }
 

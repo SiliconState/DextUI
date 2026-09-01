@@ -1,9 +1,10 @@
 <script lang="ts">
-  // Transcript blocks rendered as terminal output, not chat bubbles.
-  // Tool calls use dext's swim-card idiom: ┌─ lane header, │ body, └ close.
+  // Transcript blocks: terminal chrome (❯, status glyphs, rails) around
+  // web-native content (real markdown, scrollable raw output). Structure rails
+  // are CSS borders, never literal glyphs — glyph gutters shred when lines wrap.
   import type { Block } from "@dextui/protocol";
-  import { splitFences, inlineTokens } from "../lib/markdown";
   import { copyText } from "../lib/state.svelte";
+  import Markdown from "./Markdown.svelte";
   import Diff from "./Diff.svelte";
 
   let { block, onInspect }: { block: Block; onInspect?: (b: Block) => void } = $props();
@@ -38,8 +39,8 @@
     failed: "st-red",
   };
 
-  function tailLines(t: string): string[] {
-    return t.split("\n").slice(-8);
+  function tailLines(t: string): string {
+    return t.split("\n").slice(-8).join("\n");
   }
 </script>
 
@@ -50,26 +51,14 @@
   </div>
 {:else if block.kind === "text"}
   <div class="b-text" data-agent-id="block.text">
-    {#each splitFences(block.text) as seg (seg)}
-      {#if seg.type === "code"}
-        <pre class="codeblock">{seg.text}</pre>
-      {:else}
-        {#each seg.text.split(/\n{2,}/) as para (para)}
-          <p class="para">
-            {#each inlineTokens(para) as tk (tk)}
-              {#if tk.t === "code"}<code class="ic">{tk.s}</code>{:else if tk.t === "bold"}<strong>{tk.s}</strong>{:else}{tk.s}{/if}
-            {/each}
-          </p>
-        {/each}
-      {/if}
-    {/each}
+    <Markdown src={block.text} />
     {#if !block.complete}<span class="blink cursor">▊</span>{/if}
     <button class="act hover-act" data-agent-id="block.text.copy" onclick={() => copyText(block.text, "copied")}>copy</button>
   </div>
 {:else if block.kind === "thinking"}
   {#if block.complete}
     <details class="b-think done" data-agent-id="block.thinking" data-state="complete">
-      <summary><span class="faint">▸ thinking</span><span class="faint"> ({block.text.split("\n").length} lines)</span></summary>
+      <summary><span class="faint">▸ thinking ({block.text.split("\n").length} lines)</span></summary>
       <div class="think-body">
         {#each block.text.split("\n").filter((l) => l.trim()) as line, i (i)}
           <div class="think-line"><span class="t-marker">•</span> {line}</div>
@@ -86,7 +75,6 @@
 {:else if block.kind === "tool"}
   <div class="tool" data-agent-id={`tool.${block.call_id}`} data-state={block.status}>
     <div class="tool-head">
-      <span class="faint">┌─</span>
       <span class="tool-name">{block.name}</span>
       <span class="faint">·</span>
       <span class="dim tool-summary">{block.summary}</span>
@@ -98,29 +86,22 @@
       {/if}
     </div>
     {#if block.output_tail}
-      <div class="tool-body">
-        {#if looksLikeDiff(block.output_tail)}
-          <Diff text={block.output_tail} prefix="│ " />
-        {:else}
-          {#each tailLines(block.output_tail) as line, i (i)}
-            <div class="tool-line"><span class="gut">│</span> <span class="dim">{line}</span></div>
-          {/each}
-        {/if}
-      </div>
+      {#if looksLikeDiff(block.output_tail)}
+        <Diff text={block.output_tail} />
+      {:else}
+        <pre class="tool-pre" data-agent-id={`tool.${block.call_id}.tail`}>{tailLines(block.output_tail)}</pre>
+      {/if}
     {/if}
     {#if block.content}
       <details class="tool-full">
-        <summary><span class="gut">│</span> <span class="faint">▸ output ({block.content.split("\n").length} lines)</span></summary>
-        <div class="tool-body">
-          {#if looksLikeDiff(block.content)}
-            <Diff text={block.content} prefix="│ " />
-          {:else}
-            <pre class="tool-pre" data-agent-id={`tool.${block.call_id}.content`}><span class="gut">│ </span>{block.content}</pre>
-          {/if}
-        </div>
+        <summary><span class="faint">▸ output ({block.content.split("\n").length} lines)</span></summary>
+        {#if looksLikeDiff(block.content)}
+          <Diff text={block.content} />
+        {:else}
+          <pre class="tool-pre" data-agent-id={`tool.${block.call_id}.content`}>{block.content}</pre>
+        {/if}
       </details>
     {/if}
-    <div class="faint tool-foot">└</div>
   </div>
 {:else if block.kind === "marker"}
   <div class={`b-marker ${markerClass[block.level] ?? "st-faint"}`} data-agent-id="block.marker">
@@ -128,25 +109,19 @@
   </div>
 {:else if block.kind === "slash"}
   <div class="b-slash" data-agent-id="block.slash">
-    {#each block.text.split("\n") as line, i (i)}
-      <div><span class="gut">│</span> <span class="dim">{line}</span></div>
-    {/each}
+    <pre class="slash-pre">{block.text}</pre>
     <button class="act hover-act" data-agent-id="block.slash.copy" onclick={() => copyText(block.text, "copied")}>copy</button>
   </div>
 {:else if block.kind === "view"}
-  <div class="tool" data-agent-id={`view.${block.pack}`}>
+  <div class="tool view" data-agent-id={`view.${block.pack}`}>
     <div class="tool-head">
-      <span class="faint">┌─</span>
       <span class="st-magenta">{block.pack}</span>
       <span class="faint">·</span>
       <span class="dim tool-summary">{block.title}</span>
     </div>
-    <div class="tool-body">
-      {#each block.markdown.split("\n") as line, i (i)}
-        <div class="tool-line"><span class="gut">│</span> <span class="dim">{line}</span></div>
-      {/each}
+    <div class="view-body">
+      <Markdown src={block.markdown} />
     </div>
-    <div class="faint tool-foot">└</div>
   </div>
 {/if}
 
@@ -167,25 +142,7 @@
   }
   .b-text {
     position: relative;
-    max-width: 84ch; /* readable prose measure — web-native, not full-width terminal */
-  }
-  .para {
-    white-space: pre-line;
-    margin: 4px 0;
-  }
-  .codeblock {
-    margin: 6px 0;
-    padding: 6px 10px;
-    border-left: 1px solid var(--line);
-    background: var(--bg1);
-    overflow-x: auto;
-    font-size: 12px;
-    white-space: pre;
-  }
-  .ic {
-    background: var(--bg2);
-    padding: 0 4px;
-    color: var(--orange);
+    max-width: 84ch; /* readable prose measure */
   }
   .cursor {
     color: var(--green);
@@ -193,6 +150,11 @@
   .hover-act {
     visibility: hidden;
     margin-left: 8px;
+  }
+  .b-text .hover-act {
+    position: absolute;
+    top: 0;
+    right: 0;
   }
   .b-text:hover .hover-act,
   .tool:hover .hover-act,
@@ -225,8 +187,24 @@
   .t-marker {
     color: var(--faint);
   }
+  /* Tool / pack cards: CSS rail, hover accent — never glyph gutters. */
   .tool {
-    max-width: 130ch;
+    max-width: 110ch;
+    border-left: 2px solid var(--line);
+    padding: 2px 0 2px 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    transition: border-color 0.12s ease-out;
+  }
+  .tool:hover {
+    border-left-color: var(--cyan);
+  }
+  .tool[data-state="failed"] {
+    border-left-color: color-mix(in srgb, var(--red) 55%, var(--line));
+  }
+  .tool.view {
+    border-left-color: color-mix(in srgb, var(--magenta) 40%, var(--line));
   }
   .tool-head {
     display: flex;
@@ -248,16 +226,15 @@
     margin-left: auto;
     flex-shrink: 0;
   }
-  .tool-line {
-    white-space: pre-wrap;
-  }
   .tool-pre {
-    white-space: pre-wrap;
+    white-space: pre;
+    overflow-x: auto;
+    max-height: 20rem;
+    overflow-y: auto;
     color: var(--dim);
-  }
-  .gut {
-    color: var(--faint);
-    user-select: none;
+    font-size: 12px;
+    background: var(--bg1);
+    padding: 4px 8px;
   }
   .tool-full summary {
     cursor: pointer;
@@ -267,11 +244,23 @@
   .tool-full summary::-webkit-details-marker {
     display: none;
   }
+  .view-body {
+    max-width: 84ch;
+  }
   .b-marker {
     white-space: pre-wrap;
   }
   .b-slash {
     position: relative;
+    max-width: 110ch;
+    border-left: 2px solid color-mix(in srgb, var(--cyan) 35%, var(--line));
+    padding-left: 10px;
+  }
+  .slash-pre {
+    white-space: pre;
+    overflow-x: auto;
+    color: var(--dim);
+    font-size: 12px;
   }
   .st-faint {
     color: var(--faint);

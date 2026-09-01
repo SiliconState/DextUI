@@ -1,7 +1,7 @@
 <script lang="ts">
-  // Flat terminal diff: +/-/@@ coloring, optional gutter prefix (│ inside tool
-  // cards and approval boxes). No per-file stat cards — dext shows diffs raw.
-  let { text, prefix = "" }: { text: string; prefix?: string } = $props();
+  // Flat terminal diff: +/-/@@ coloring. Lines never soft-wrap — x-scroll keeps
+  // columns honest.
+  let { text }: { text: string } = $props();
 
   interface DLine {
     kind: "add" | "del" | "hunk" | "file" | "ctx";
@@ -29,7 +29,7 @@
 
 <div class="diff" data-agent-id="diff.view">
   {#each lines as l, i (i)}
-    <div class={`d-${l.kind}`}>{#if prefix}<span class="gut">{prefix}</span>{/if}<span class="d-text">{l.text}</span></div>
+    <div class={`d-${l.kind}`}><span class="d-text">{l.text}</span></div>
   {/each}
 </div>
 
@@ -37,13 +37,12 @@
   .diff {
     overflow-x: auto;
     white-space: pre;
+    max-height: 20rem;
+    overflow-y: auto;
+    font-size: 12px;
   }
   .d-text {
     white-space: pre;
-  }
-  .gut {
-    color: var(--faint);
-    user-select: none;
   }
   .d-add {
     color: var(--green);

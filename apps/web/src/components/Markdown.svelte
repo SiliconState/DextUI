@@ -1,0 +1,215 @@
+<script lang="ts">
+  // Renders parsed markdown as real DOM: true <table>, lists, headings, safe
+  // links. Terminal soul stays in the chrome; content gets the web.
+  import { parseMarkdown, type Inline } from "../lib/markdown";
+
+  let { src }: { src: string } = $props();
+
+  const blocks = $derived(parseMarkdown(src));
+</script>
+
+{#snippet inline(parts: Inline[])}
+  {#each parts as tk, i (i)}
+    {#if tk.t === "code"}<code class="ic">{tk.s}</code>{:else if tk.t === "bold"}<strong>{tk.s}</strong>{:else if tk.t === "italic"}<em>{tk.s}</em>{:else if tk.t === "link"}<a href={tk.href} target="_blank" rel="noopener noreferrer">{tk.s}</a>{:else}{tk.s}{/if}
+  {/each}
+{/snippet}
+
+<div class="md">
+  {#each blocks as b, bi (bi)}
+    {#if b.kind === "heading"}
+      <svelte:element this={`h${Math.min(Math.max(b.level, 1), 4)}`} class="md-h">
+        {@render inline(b.inline)}
+      </svelte:element>
+    {:else if b.kind === "para"}
+      <p class="md-p">{@render inline(b.inline)}</p>
+    {:else if b.kind === "code"}
+      <div class="md-code">
+        {#if b.lang}<span class="md-lang">{b.lang}</span>{/if}
+        <pre>{b.text}</pre>
+      </div>
+    {:else if b.kind === "art"}
+      <pre class="md-art">{b.text}</pre>
+    {:else if b.kind === "list"}
+      {#if b.ordered}
+        <ol class="md-list">
+          {#each b.items as it, ii (ii)}
+            <li>
+              {@render inline(it.inline)}
+              {#if it.sub.length > 0}
+                <ul class="md-list">
+                  {#each it.sub as sub, si (si)}
+                    <li>{@render inline(sub.inline)}</li>
+                  {/each}
+                </ul>
+              {/if}
+            </li>
+          {/each}
+        </ol>
+      {:else}
+        <ul class="md-list">
+          {#each b.items as it, ii (ii)}
+            <li>
+              {@render inline(it.inline)}
+              {#if it.sub.length > 0}
+                <ul class="md-list">
+                  {#each it.sub as sub, si (si)}
+                    <li>{@render inline(sub.inline)}</li>
+                  {/each}
+                </ul>
+              {/if}
+            </li>
+          {/each}
+        </ul>
+      {/if}
+    {:else if b.kind === "table"}
+      <div class="md-tablewrap">
+        <table class="md-table">
+          <thead>
+            <tr>
+              {#each b.head as cell, ci (ci)}
+                <th style={`text-align:${b.align[ci] === "r" ? "right" : b.align[ci] === "c" ? "center" : "left"}`}>
+                  {@render inline(cell)}
+                </th>
+              {/each}
+            </tr>
+          </thead>
+          <tbody>
+            {#each b.rows as row, ri (ri)}
+              <tr>
+                {#each row as cell, ci (ci)}
+                  <td style={`text-align:${b.align[ci] === "r" ? "right" : b.align[ci] === "c" ? "center" : "left"}`}>
+                    {@render inline(cell)}
+                  </td>
+                {/each}
+              </tr>
+            {/each}
+          </tbody>
+        </table>
+      </div>
+    {:else if b.kind === "quote"}
+      <blockquote class="md-quote">{@render inline(b.inline)}</blockquote>
+    {:else if b.kind === "hr"}
+      <hr class="md-hr" />
+    {/if}
+  {/each}
+</div>
+
+<style>
+  .md {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 0;
+  }
+  .md-h {
+    font-size: 13px;
+    font-weight: bold;
+    color: var(--fg);
+    margin-top: 6px;
+  }
+  .md :is(h1, h2).md-h {
+    font-size: 14px;
+    border-bottom: 1px solid var(--line);
+    padding-bottom: 2px;
+  }
+  .md-p {
+    white-space: pre-line;
+    overflow-wrap: break-word;
+  }
+  .ic {
+    background: var(--bg2);
+    padding: 0 4px;
+    color: var(--orange);
+  }
+  a {
+    color: var(--blue);
+    text-decoration: none;
+  }
+  a:hover {
+    text-decoration: underline;
+    text-underline-offset: 3px;
+  }
+  .md-code {
+    position: relative;
+    border-left: 2px solid var(--line);
+    background: var(--bg1);
+  }
+  .md-code pre {
+    padding: 6px 10px;
+    overflow-x: auto;
+    font-size: 12px;
+  }
+  .md-lang {
+    position: absolute;
+    top: 2px;
+    right: 8px;
+    color: var(--faint);
+    font-size: 10px;
+    user-select: none;
+  }
+  .md-art {
+    overflow-x: auto;
+    white-space: pre;
+    color: var(--dim);
+    font-size: 12px;
+    line-height: 1.3;
+  }
+  .md-list {
+    padding-left: 2ch;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    list-style: none;
+  }
+  ul.md-list > li::before {
+    content: "• ";
+    color: var(--faint);
+  }
+  ol.md-list {
+    counter-reset: md;
+  }
+  ol.md-list > li {
+    counter-increment: md;
+  }
+  ol.md-list > li::before {
+    content: counter(md) ". ";
+    color: var(--faint);
+  }
+  .md-list .md-list {
+    margin-top: 2px;
+  }
+  .md-tablewrap {
+    overflow-x: auto;
+    max-width: 100%;
+  }
+  .md-table {
+    border-collapse: collapse;
+    font-size: 12.5px;
+  }
+  .md-table th,
+  .md-table td {
+    border: 1px solid var(--line);
+    padding: 3px 10px;
+    vertical-align: top;
+  }
+  .md-table th {
+    background: var(--bg1);
+    color: var(--cyan);
+    font-weight: bold;
+    white-space: nowrap;
+  }
+  .md-table tbody tr:nth-child(even) {
+    background: color-mix(in srgb, var(--bg1) 55%, transparent);
+  }
+  .md-quote {
+    border-left: 2px solid var(--faint);
+    padding-left: 10px;
+    color: var(--dim);
+    font-style: italic;
+  }
+  .md-hr {
+    border: 0;
+    border-top: 1px solid var(--line);
+    margin: 4px 0;
+  }
+</style>
