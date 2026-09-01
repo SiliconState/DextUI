@@ -49,13 +49,14 @@
 
 <style>
   .appr {
+    width: 100%;
+    min-width: 0;
     border-left: 2px solid var(--yellow);
     background: color-mix(in srgb, var(--yellow) 4%, transparent);
     padding: 6px 12px;
     display: flex;
     flex-direction: column;
     gap: 5px;
-    max-width: 110ch;
   }
   .appr-head {
     display: flex;
@@ -74,11 +75,12 @@
   }
   .appr-actions {
     display: flex;
-    gap: 16px;
+    flex-wrap: wrap;
+    gap: 6px 16px;
     align-items: baseline;
   }
   .appr-note {
-    flex: 1;
+    flex: 1 1 16rem;
     min-width: 120px;
     border-bottom: 1px solid var(--line);
     padding: 1px 0;

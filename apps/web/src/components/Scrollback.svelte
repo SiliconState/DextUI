@@ -63,24 +63,26 @@
   data-state={view.pending.size > 0 ? "awaiting_approval" : view.working ? "working" : "idle"}
 >
   <div bind:this={container} onscroll={onScroll} class="sb">
-    {#if view.blocks.length === 0}
-      <div class="sb-empty" data-agent-id="transcript.empty">
-        <p><span class="st-green">❯</span> <span class="dim">fresh session — type a request below.</span></p>
-        <p class="faint">journal events replay here on connect · / commands · ⌘k finder</p>
-      </div>
-    {:else}
-      {#each shown as block, i (i)}
-        <Block {block} {onInspect} />
-      {/each}
-      {#if view.working}
-        <p class="sb-working" data-agent-id="transcript.working">
-          <span class="st-yellow pulse">●</span>
-          <span class="dim">
-            working{view.compacting ? " · compacting" : ""}{view.turnStartedAt ? ` · ${fmtElapsed(now - view.turnStartedAt)}` : ""}
-          </span>
-        </p>
+    <div class="sb-axis content-axis">
+      {#if view.blocks.length === 0}
+        <div class="sb-empty" data-agent-id="transcript.empty">
+          <p><span class="st-green">❯</span> <span class="dim">fresh session — type a request below.</span></p>
+          <p class="faint">journal events replay here on connect · / commands · ⌘k finder</p>
+        </div>
+      {:else}
+        {#each shown as block, i (i)}
+          <Block {block} {onInspect} />
+        {/each}
+        {#if view.working}
+          <p class="sb-working" data-agent-id="transcript.working">
+            <span class="st-yellow pulse">●</span>
+            <span class="dim">
+              working{view.compacting ? " · compacting" : ""}{view.turnStartedAt ? ` · ${fmtElapsed(now - view.turnStartedAt)}` : ""}
+            </span>
+          </p>
+        {/if}
       {/if}
-    {/if}
+    </div>
   </div>
 
   {#if !pinned}
@@ -98,15 +100,22 @@
   }
   .sb {
     flex: 1;
+    min-width: 0;
     min-height: 0;
     overflow-y: auto;
-    padding: 10px 14px 16px;
+    overscroll-behavior: contain;
+    padding-block: clamp(0.65rem, 1.6vh, 1.25rem) clamp(1rem, 2.5vh, 2rem);
+    scrollbar-gutter: stable;
+  }
+  .sb-axis {
+    min-height: 100%;
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: clamp(6px, 0.8vh, 11px);
   }
   .sb-empty {
-    margin-top: 18vh;
+    margin-block: auto;
+    padding-block: min(18vh, 10rem);
     display: flex;
     flex-direction: column;
     gap: 4px;

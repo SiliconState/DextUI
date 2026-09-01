@@ -126,7 +126,7 @@
   }
 </script>
 
-<div class="c-root" data-agent-id="composer.root">
+<div class="c-root content-axis" data-agent-id="composer.root">
   {#if slashOpen && slashList.length > 0}
     <div class="c-menu" data-agent-id="composer.menu" data-state="open">
       {#each slashList as c, i (c.cmd)}
@@ -177,7 +177,7 @@
 <style>
   .c-root {
     position: relative;
-    padding: 4px 10px 6px;
+    padding-block: clamp(0.35rem, 0.8vh, 0.6rem);
   }
   .c-row {
     display: flex;
@@ -195,6 +195,8 @@
   }
   textarea {
     flex: 1;
+    width: 100%;
+    min-width: 0;
     resize: none;
     padding: 2px 0;
     line-height: 1.5;
@@ -210,8 +212,8 @@
   .c-menu {
     position: absolute;
     bottom: 100%;
-    left: 10px;
-    right: 10px;
+    left: var(--page-gutter);
+    right: var(--page-gutter);
     margin-bottom: 2px;
     border: 1px solid var(--line);
     background: var(--bg1);
@@ -245,5 +247,16 @@
   }
   .dim {
     color: var(--dim);
+  }
+  @media (max-width: 560px) {
+    .c-row {
+      gap: 6px;
+    }
+    .c-side {
+      gap: 8px;
+    }
+    .c-side .act {
+      font-size: 11px;
+    }
   }
 </style>

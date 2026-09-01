@@ -132,6 +132,8 @@
     user-select: none;
   }
   .b-user {
+    width: min(100%, var(--content-readable));
+    margin-inline: auto;
     display: flex;
     gap: 8px;
     align-items: baseline;
@@ -142,7 +144,8 @@
   }
   .b-text {
     position: relative;
-    max-width: 84ch; /* readable prose measure */
+    width: min(100%, var(--content-readable));
+    margin-inline: auto;
   }
   .cursor {
     color: var(--green);
@@ -160,6 +163,10 @@
   .tool:hover .hover-act,
   .b-slash:hover .hover-act {
     visibility: visible;
+  }
+  .b-think {
+    width: min(100%, var(--content-readable));
+    margin-inline: auto;
   }
   .b-think.live {
     background: var(--bg1);
@@ -189,7 +196,8 @@
   }
   /* Tool / pack cards: CSS rail, hover accent — never glyph gutters. */
   .tool {
-    max-width: 110ch;
+    width: 100%;
+    min-width: 0;
     border-left: 2px solid var(--line);
     padding: 2px 0 2px 10px;
     display: flex;
@@ -245,14 +253,17 @@
     display: none;
   }
   .view-body {
-    max-width: 84ch;
+    width: min(100%, var(--content-readable));
   }
   .b-marker {
+    width: min(100%, var(--content-readable));
+    margin-inline: auto;
     white-space: pre-wrap;
   }
   .b-slash {
     position: relative;
-    max-width: 110ch;
+    width: 100%;
+    min-width: 0;
     border-left: 2px solid color-mix(in srgb, var(--cyan) 35%, var(--line));
     padding-left: 10px;
   }

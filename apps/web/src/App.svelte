@@ -115,13 +115,15 @@
         <Scrollback store={activeStore} onInspect={(b) => (inspect = b)} />
         {#if pendingList.length > 0}
           <div class="appr-dock" data-agent-id="approval.dock" data-state="awaiting_approval">
-            {#each pendingList as p (p.request_id)}
-              <Approval pending={p} sessionId={app.activeId} />
-            {/each}
+            <div class="appr-axis content-axis">
+              {#each pendingList as p (p.request_id)}
+                <Approval pending={p} sessionId={app.activeId} />
+              {/each}
+            </div>
           </div>
         {/if}
       {:else}
-        <div class="hero" data-state="no_session" data-agent-id="hero">
+        <div class="hero content-axis" data-state="no_session" data-agent-id="hero">
           <p><span class="st-green">dext</span><span class="blink st-green">▊</span> <span class="dim">web console</span></p>
           <p class="dim">pick a session from the index, or start one:</p>
           <p>
@@ -216,14 +218,17 @@
     gap: 6px;
     align-items: flex-start;
     justify-content: center;
-    padding: 0 18vw;
   }
   .appr-dock {
     flex-shrink: 0;
-    max-height: 45vh;
+    max-height: min(42dvh, 26rem);
     overflow-y: auto;
+    overscroll-behavior: contain;
     border-top: 1px solid var(--line);
-    padding: 6px 8px;
+    padding-block: 6px;
+    scrollbar-gutter: stable;
+  }
+  .appr-axis {
     display: flex;
     flex-direction: column;
     gap: 6px;
@@ -241,7 +246,7 @@
   .idx-toggle {
     display: none;
   }
-  @media (max-width: 820px) {
+  @media (max-width: 900px) {
     .idx-toggle {
       display: inline;
     }
