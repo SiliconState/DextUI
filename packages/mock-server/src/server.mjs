@@ -8,7 +8,7 @@ import path from "node:path";
 import url from "node:url";
 import { acceptKey, FrameParser, encodeFrame, OP_PONG, OP_TEXT } from "./ws.mjs";
 import { loadFixture, withApprovalPause } from "./replay.mjs";
-import { fold } from "./fold.mjs";
+import { fold, foldMeta } from "./fold.mjs";
 
 const here = path.dirname(url.fileURLToPath(import.meta.url));
 const repoRoot = path.join(here, "..", "..", "..");
@@ -30,6 +30,11 @@ const CAPABILITIES = [
   "steering",
   "interrupt",
   "slash",
+  "slash.help",
+  "slash.approval",
+  "slash.compact",
+  "slash.model",
+  "slash.todos",
   "multi_session",
   "usage",
   "thinking",
@@ -53,6 +58,7 @@ function makeSession({ title, fixture, approvalFlow, live }) {
     cwd: "/tmp/scratch",
     status: live ? "live" : "cold",
     working: false,
+    turnStartedAt: null,
     createdAt: Date.now(),
     seq: 0,
     journal: [],
@@ -119,14 +125,30 @@ function publish(env) {
 }
 
 function snapshotEnvelope(s) {
-  const env = journalData(s, "session.snapshot", {
-    meta: metaOf(s),
-    blocks: fold(s.journal),
-    pending_permissions: [...s.pending.values()],
-    last_seq: 0,
-  });
-  env.data.last_seq = env.seq;
-  return env;
+  // Point-in-time projection at the current journal tail; snapshots are not
+  // journal entries and therefore do not consume sequence numbers.
+  const meta = foldMeta(s.journal);
+  return {
+    v: 1,
+    session: s.id,
+    seq: s.seq,
+    ts: Date.now(),
+    event: "session.snapshot",
+    data: {
+      meta: metaOf(s),
+      blocks: fold(s.journal),
+      pending_permissions: [...s.pending.values()],
+      last_seq: s.seq,
+      working: s.working,
+      turn_started_at: s.turnStartedAt ?? undefined,
+      turn_usage: meta.turnUsage,
+      session_usage: meta.sessionUsage,
+      context_chars: meta.contextChars,
+      diagnostics: meta.diagnostics,
+      compacting: meta.compacting,
+      failed: meta.failed,
+    },
+  };
 }
 
 // ---------- replay engine ----------
@@ -217,6 +239,7 @@ function demoPlan() {
 function beginTurn(s, plan) {
   if (s.working) return false;
   s.working = true;
+  s.turnStartedAt = Date.now();
   s.plan = plan;
   s.pos = 0;
   stepReplay(s);
@@ -229,6 +252,7 @@ function stepReplay(s) {
     if (!s.working || !s.plan) return;
     if (s.pos >= s.plan.length) {
       s.working = false;
+      s.turnStartedAt = null;
       s.plan = null;
       return;
     }
@@ -239,6 +263,15 @@ function stepReplay(s) {
         ? startEnv.data
         : { call_id: `call_${s.id}_${s.approvalCounter + 1}`, name: "bash", summary: "bash: (mock)" };
       openApproval(s, ref);
+      return;
+    }
+    if (item.event === "turn_end") {
+      // Mark the engine ready before publishing the event that re-enables the
+      // composer; an immediate next prompt must not receive a false busy.
+      s.working = false;
+      s.turnStartedAt = null;
+      s.plan = null;
+      publish(journalData(s, item.event, item.data));
       return;
     }
     publish(journalData(s, item.event, item.data));
@@ -422,6 +455,7 @@ function handleCommand(client, frame) {
       clearTimeout(s.timer);
       if (s.working) publish(journalData(s, "interrupted"));
       s.working = false;
+      s.turnStartedAt = null;
       s.plan = null;
       s.status = "cold";
       flushPending(s);

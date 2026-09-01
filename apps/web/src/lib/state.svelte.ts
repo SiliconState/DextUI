@@ -26,8 +26,9 @@ export const app = $state({
 
 let started = false;
 let everLive = false;
+let reconcileAfterReconnect = false;
 let wantNewSession = false;
-const knownIds = new Set<string>();
+let newSessionBaseline = new Set<string>();
 let toastSeq = 0;
 
 export function connection(): Connection | null {
@@ -53,7 +54,13 @@ function resolveTheme(t: Theme): "dark" | "light" {
 }
 
 function applyTheme(t: Theme): void {
-  document.documentElement.dataset.theme = resolveTheme(t);
+  const resolved = resolveTheme(t);
+  document.documentElement.dataset.theme = resolved;
+  // Keep installed-PWA/browser chrome in sync with the resolved scheme.
+  document.querySelector<HTMLMetaElement>('meta[name="theme-color"]')?.setAttribute(
+    "content",
+    resolved === "dark" ? "#0b0d10" : "#f4f2ec",
+  );
 }
 
 /** dark → light → system → dark */
@@ -114,29 +121,46 @@ export function start(token: string): void {
         app.needsToken = true;
         localStorage.removeItem("dextui.token");
       }
-      if (p === "reconnecting") pushToast("warn", "Connection lost — reconnecting…");
+      if (p === "reconnecting") {
+        if (wantNewSession) {
+          wantNewSession = false;
+          newSessionBaseline.clear();
+        }
+        pushToast("warn", "Connection lost — reconnecting…");
+      }
       if (p === "live") {
         // Snapshot capabilities into reactive state: conn.capabilities is a
         // plain mutated array, so deriveds can't track it directly.
         app.caps = [...c.capabilities];
+        reconcileAfterReconnect = everLive;
         if (everLive) pushToast("ok", "Reconnected");
-        // Server subscriptions die with the socket; resubscribe after any reconnect.
-        if (everLive && app.activeId) c.subscribe(app.activeId);
+        // hello_ok's session list is delivered immediately after this callback;
+        // reconcile ids there before resubscribing (host may have restarted).
         everLive = true;
       }
     },
     onSessionList: (sessions) => {
       if (app.conn !== c) return; // stale connection
       app.sessions = sessions;
-      // A session we haven't seen before appeared after we asked for one: switch to it.
+      const ids = new Set(sessions.map((s) => s.id));
+      // Host restart: an active id can disappear while the Connection's local
+      // stores survive. Drop the stale selection; a reused id will be reset by
+      // the next snapshot rather than displaying the old host's transcript.
+      if (app.activeId && !ids.has(app.activeId)) app.activeId = "";
+      if (reconcileAfterReconnect) {
+        reconcileAfterReconnect = false;
+        // Force a snapshot: a restarted host can reuse sess_001 and even the
+        // same tail seq, which must replace (not resume) the old transcript.
+        if (app.activeId) c.subscribe(app.activeId, true);
+      }
       if (wantNewSession) {
-        const fresh = sessions.find((s) => !knownIds.has(s.id));
+        const fresh = sessions.find((s) => !newSessionBaseline.has(s.id));
         if (fresh) {
           wantNewSession = false;
+          newSessionBaseline.clear();
           activate(fresh.id);
         }
       }
-      for (const s of sessions) knownIds.add(s.id);
       if (!app.activeId && sessions.length > 0) {
         // Auto-activate a live session only: waking a cold one would spawn an
         // agent process the user never asked for. Cold sessions open on click.
@@ -146,6 +170,11 @@ export function start(token: string): void {
     },
     onControlError: (code, message) => {
       if (app.conn !== c) return; // stale connection
+      // A failed session.open must not leave the new-session latch armed.
+      if (wantNewSession) {
+        wantNewSession = false;
+        newSessionBaseline.clear();
+      }
       app.lastError = `${code}: ${message}`;
       pushToast("err", `${code}: ${message}`);
     },
@@ -161,12 +190,13 @@ export function activate(id: string): void {
   if (!c) return;
   const meta = app.sessions.find((s) => s.id === id);
   if (meta && meta.status === "cold") c.openSession({ id });
-  c.subscribe(id);
+  c.subscribe(id, true);
 }
 
 export function newSession(): void {
   const c = app.conn;
-  if (!c) return;
+  if (!c || app.phase !== "live" || wantNewSession) return;
   wantNewSession = true;
+  newSessionBaseline = new Set(app.sessions.map((s) => s.id));
   c.openSession();
 }

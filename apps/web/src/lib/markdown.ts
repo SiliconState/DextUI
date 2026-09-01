@@ -50,8 +50,25 @@ export function parseInline(s: string): Inline[] {
 function splitRow(line: string): string[] {
   let l = line.trim();
   if (l.startsWith("|")) l = l.slice(1);
-  if (l.endsWith("|")) l = l.slice(0, -1);
-  return l.split("|").map((c) => c.trim());
+  if (l.endsWith("|") && !l.endsWith("\\|")) l = l.slice(0, -1);
+  const cells: string[] = [];
+  let cell = "";
+  let inCode = false;
+  for (let i = 0; i < l.length; i++) {
+    const ch = l[i] ?? "";
+    if (ch === "`" && l[i - 1] !== "\\") inCode = !inCode;
+    if (ch === "|" && !inCode && l[i - 1] !== "\\") {
+      cells.push(cell.trim());
+      cell = "";
+    } else if (ch === "\\" && l[i + 1] === "|") {
+      cell += "|";
+      i++;
+    } else {
+      cell += ch;
+    }
+  }
+  cells.push(cell.trim());
+  return cells;
 }
 
 function isTableStart(lines: string[], i: number): boolean {

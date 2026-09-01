@@ -215,6 +215,47 @@ async function main() {
     ok("snapshot carries blocks + last_seq", Array.isArray(snap?.data?.blocks) && snap.data.blocks.length > 0 && snap.data.last_seq > 0);
     const toolBlock = snap.data.blocks.find((bl) => bl.kind === "tool");
     ok("snapshot fold includes tool result", toolBlock?.status === "ok" && !!toolBlock?.content);
+    ok("snapshot is at journal tail", snap.seq === snap.data.last_seq && snap.seq === allSeq.at(-1), `seq ${snap.seq}`);
+    const resolvedMarker = snap.data.blocks.find((bl) => bl.kind === "marker" && bl.text === "bash: once");
+    ok("snapshot fold includes approval resolution", !!resolvedMarker);
+
+    // A snapshot is sent to one subscriber and must not consume a journal seq;
+    // otherwise every other subscriber sees a phantom gap. The next journaled
+    // event must be exactly snapshot-tail + 1.
+    a.send({ v: 1, cmd: "slash", session: toolSession.id, raw: "/help" });
+    const afterSnap = await a.waitFor(
+      (e) => e.session === toolSession.id && e.event === "slash" && e.seq > snap.seq,
+      5000,
+      "post-snapshot slash",
+    );
+    ok("snapshot does not consume seq", afterSnap.seq === snap.seq + 1, `${snap.seq} → ${afterSnap.seq}`);
+
+    // --- J: a subscriber joining while a turn is paused for approval receives
+    // working=true and the original turn start time, so it cannot submit a
+    // conflicting second prompt.
+    const boundary = afterSnap.seq;
+    a.send({ v: 1, cmd: "prompt.submit", session: toolSession.id, text: "run fixture again" });
+    const req2 = await a.waitFor(
+      (e) => e.session === toolSession.id && e.event === "permission.request" && e.seq > boundary,
+      8000,
+      "second permission.request",
+    );
+    const c4 = connect();
+    await new Promise((r) => {
+      if (c4.phase === "open") r();
+      else c4.ws.addEventListener("open", r);
+    });
+    c4.send({ v: 1, cmd: "hello", token: TOKEN, client: "smoke-4", protocol: 1 });
+    await c4.waitFor((e) => e.event === "hello_ok", 5000, "hello_ok(D)");
+    c4.send({ v: 1, cmd: "session.subscribe", id: toolSession.id });
+    const midSnap = await c4.waitFor((e) => isData(e, "session.snapshot"), 5000, "mid-turn snapshot");
+    ok(
+      "mid-turn snapshot preserves working state",
+      midSnap.data.working === true && typeof midSnap.data.turn_started_at === "number",
+    );
+    ok("mid-turn snapshot stays at journal tail", midSnap.seq === midSnap.data.last_seq && midSnap.seq === req2.seq);
+    a.send({ v: 1, cmd: "interrupt", session: toolSession.id });
+    await a.waitFor((e) => e.session === toolSession.id && e.event === "interrupted" && e.seq > req2.seq, 5000, "cleanup interrupt");
   } catch (err) {
     ok("smoke completed without exception", false, String(err));
   } finally {

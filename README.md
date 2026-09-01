@@ -34,7 +34,7 @@ session via a dedicated dext seat.
 
 Host flags: `--port` (8788) · `--token` (random, printed) · `--dext` (auto-detects
 `~/Dext/target/release/dext`, falls back to PATH) · `--cwd` (session working dir —
-must be owner-safe, not under /tmp) · `--approval` (`ask|auto-read|auto-write|never|always`,
+must be owner-safe, not under /tmp) · `--approval` (`auto-read|auto-write|never|always`,
 default `auto-read`) · `--static` (built PWA dir).
 
 In-session host commands: `/help`, `/approval <profile>` (applies from the next turn).

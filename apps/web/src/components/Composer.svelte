@@ -9,12 +9,12 @@
   let menuIdx = $state(0);
   let inputEl: HTMLTextAreaElement | undefined = $state();
 
-  const COMMANDS = [
-    { cmd: "/approval", desc: "set dext approval profile (host)" },
-    { cmd: "/compact", desc: "compact session context" },
-    { cmd: "/model", desc: "show or switch model" },
-    { cmd: "/todos", desc: "show the todo list" },
-    { cmd: "/help", desc: "list host commands" },
+  const ALL_COMMANDS = [
+    { cmd: "/approval", desc: "set dext approval profile", cap: "slash.approval" },
+    { cmd: "/compact", desc: "compact session context", cap: "slash.compact" },
+    { cmd: "/model", desc: "show or switch model", cap: "slash.model" },
+    { cmd: "/todos", desc: "show the todo list", cap: "slash.todos" },
+    { cmd: "/help", desc: "list host commands", cap: "slash.help" },
   ];
 
   let tick = $state(0);
@@ -31,9 +31,10 @@
     return { ...store.state };
   });
 
+  const commands = $derived(ALL_COMMANDS.filter((c) => app.caps.includes(c.cap)));
   const slashOpen = $derived(text.startsWith("/") && !text.includes(" "));
   const slashList = $derived(
-    slashOpen ? COMMANDS.filter((c) => c.cmd.startsWith(text.trim().toLowerCase())) : [],
+    slashOpen ? commands.filter((c) => c.cmd.startsWith(text.trim().toLowerCase())) : [],
   );
   // menuIdx can outlive a shrinking list (typing narrows matches); clamp before use.
   const menuCur = $derived(slashList.length === 0 ? 0 : Math.min(menuIdx, slashList.length - 1));

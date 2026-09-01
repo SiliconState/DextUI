@@ -86,6 +86,9 @@ export class Connection {
       this.reconnectTimer = undefined;
     }
     this.ws?.close();
+    // During backoff the socket is already CLOSED, so no onclose callback will
+    // arrive to publish the final phase.
+    if (this.phase !== "failed") this.setPhase("closed");
   }
 
   onControl(fn: (e: Envelope) => void): () => void {
@@ -112,9 +115,9 @@ export class Connection {
     this.sendRaw(cmd("session.open", { ...opts }));
   }
 
-  subscribe(id: string): void {
+  subscribe(id: string, fresh = false): void {
     const s = this.session(id);
-    this.sendRaw(cmd("session.subscribe", { id, since_seq: s.state.lastSeq || undefined }));
+    this.sendRaw(cmd("session.subscribe", { id, since_seq: fresh ? undefined : s.state.lastSeq || undefined }));
   }
 
   unsubscribe(id: string): void {
@@ -167,20 +170,22 @@ export class Connection {
       w.__agentlink.last = { event: env.event, session: env.session, seq: env.seq };
     }
     if (isSessionRouted(env)) {
-      const store = this.session(env.session as string);
-      if (typeof env.seq === "number") {
+      const sessionId = env.session as string;
+      const store = this.session(sessionId);
+      if (env.event !== "session.snapshot" && typeof env.seq === "number") {
+        // Idempotence: reconnect replays and races can deliver an already-folded
+        // envelope. Reapplying it would duplicate user/text/marker blocks.
+        if (env.seq <= store.state.lastSeq) return;
         const expected = store.state.lastSeq + 1;
-        if (env.seq > expected && store.state.lastSeq > 0 && env.event !== "session.snapshot") {
-          // Resync of last resort: fresh snapshot. Guard against a flood of
-          // out-of-order events each triggering another resubscribe.
-          if (!this.resyncPending.has(env.session as string)) {
-            this.resyncPending.add(env.session as string);
-            this.opts.onSeqGap?.(env.session as string, expected, env.seq);
-            this.sendRaw(cmd("session.subscribe", { id: env.session }));
-          }
+        if (this.resyncPending.has(sessionId)) return; // quarantine until snapshot
+        if (env.seq > expected && store.state.lastSeq > 0) {
+          this.resyncPending.add(sessionId);
+          this.opts.onSeqGap?.(sessionId, expected, env.seq);
+          this.sendRaw(cmd("session.subscribe", { id: sessionId }));
+          return; // never apply an event across a known gap
         }
       }
-      if (env.event === "session.snapshot") this.resyncPending.delete(env.session as string);
+      if (env.event === "session.snapshot") this.resyncPending.delete(sessionId);
       store.apply(env);
       return;
     }

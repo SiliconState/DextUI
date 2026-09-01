@@ -20,7 +20,7 @@ import url from "node:url";
 import crypto from "node:crypto";
 import { spawn } from "node:child_process";
 import { acceptKey, FrameParser, encodeFrame, OP_PONG, OP_TEXT } from "../../mock-server/src/ws.mjs";
-import { fold } from "../../mock-server/src/fold.mjs";
+import { fold, foldMeta } from "../../mock-server/src/fold.mjs";
 
 const here = path.dirname(url.fileURLToPath(import.meta.url));
 const repoRoot = path.join(here, "..", "..", "..");
@@ -47,13 +47,30 @@ const DEXT_BIN = resolveDext();
 const DEFAULT_CWD = path.resolve(argValue("cwd", process.cwd()));
 const DEFAULT_APPROVAL = argValue("approval", process.env.DEXT_APPROVAL ?? "auto-read");
 const STATIC_DIR = path.resolve(argValue("static", path.join(repoRoot, "apps", "web", "dist")));
-const APPROVALS = new Set(["ask", "auto-read", "auto-write", "never", "always"]);
+const APPROVALS = new Set(["auto-read", "auto-write", "never", "always"]);
+const MAX_PROMPT_CHARS = 1_000_000;
+const MAX_STDOUT_BUFFER = 16 * 1024 * 1024;
+
+if (!Number.isInteger(PORT) || PORT < 1 || PORT > 65535) throw new Error(`invalid --port '${PORT}'`);
+if (!TOKEN) throw new Error("pairing token must not be empty");
+if (!APPROVALS.has(DEFAULT_APPROVAL)) throw new Error(`invalid --approval '${DEFAULT_APPROVAL}'`);
+if (!fs.existsSync(DEFAULT_CWD) || !fs.statSync(DEFAULT_CWD).isDirectory()) {
+  throw new Error(`--cwd is not a directory: ${DEFAULT_CWD}`);
+}
 
 // Real capabilities only. No "steering" (one-shot children have no stdin
 // channel mid-turn) and no "approvals" (the interactive round-trip needs the
 // upstream dext PermissionRequested bridge); dext's own --approval profile
 // governs tool policy instead.
-const CAPABILITIES = ["multi_session", "interrupt", "usage", "thinking", "slash"];
+const CAPABILITIES = [
+  "multi_session",
+  "interrupt",
+  "usage",
+  "thinking",
+  "slash",
+  "slash.help",
+  "slash.approval",
+];
 
 // ---------- state ----------
 
@@ -72,6 +89,7 @@ function makeSession({ cwd, approval }) {
     seat: `dextui-${crypto.randomBytes(4).toString("hex")}`,
     status: "live",
     working: false,
+    turnStartedAt: null,
     createdAt: Date.now(),
     seq: 0,
     journal: [],
@@ -133,14 +151,31 @@ function publish(env) {
 }
 
 function snapshotEnvelope(s) {
-  const env = journalData(s, "session.snapshot", {
-    meta: metaOf(s),
-    blocks: fold(s.journal),
-    pending_permissions: [],
-    last_seq: 0,
-  });
-  env.data.last_seq = env.seq;
-  return env;
+  // Snapshot is a point-in-time projection at the current journal tail. It
+  // MUST NOT consume a new seq: it is sent to one subscriber, so incrementing
+  // would create an invisible gap for every other subscriber.
+  const meta = foldMeta(s.journal);
+  return {
+    v: 1,
+    session: s.id,
+    seq: s.seq,
+    ts: Date.now(),
+    event: "session.snapshot",
+    data: {
+      meta: metaOf(s),
+      blocks: fold(s.journal),
+      pending_permissions: [],
+      last_seq: s.seq,
+      working: s.working,
+      turn_started_at: s.turnStartedAt ?? undefined,
+      turn_usage: meta.turnUsage,
+      session_usage: meta.sessionUsage,
+      context_chars: meta.contextChars,
+      diagnostics: meta.diagnostics,
+      compacting: meta.compacting,
+      failed: meta.failed,
+    },
+  };
 }
 
 // ---------- turn engine: one dext child per prompt ----------
@@ -151,9 +186,10 @@ function zeroUsage() {
 
 function runTurn(s, prompt) {
   s.working = true;
+  s.turnStartedAt = Date.now();
   s.killed = false;
   let sawTurnEnd = false;
-  let sawAnyEvent = false;
+  let turnEndData;
   let finished = false;
   let buf = "";
   let errTail = "";
@@ -167,11 +203,14 @@ function runTurn(s, prompt) {
       cwd: s.cwd,
       env: { ...process.env, DEXT_NO_TUI: "1" },
       stdio: ["pipe", "pipe", "pipe"],
+      // A process group lets interrupt stop dext and any tool descendants.
+      detached: process.platform !== "win32",
     });
   } catch (err) {
     publish(journalData(s, "error", `failed to spawn dext (${DEXT_BIN}): ${String(err)}`));
     publish(journalData(s, "turn_end", { usage: zeroUsage(), failed: true }));
     s.working = false;
+    s.turnStartedAt = null;
     return;
   }
   s.child = child;
@@ -191,8 +230,13 @@ function runTurn(s, prompt) {
       return; // non-event noise on stdout
     }
     if (typeof v.event !== "string") return;
-    sawAnyEvent = true;
-    if (v.event === "turn_end") sawTurnEnd = true;
+    if (v.event === "turn_end") {
+      // Hold the terminal event until the child is actually closed. Otherwise
+      // the UI enables Send while the host still rejects the next prompt busy.
+      sawTurnEnd = true;
+      turnEndData = v.data;
+      return;
+    }
     if (v.event === "turn_diagnostics" && v.data && typeof v.data.model === "string") s.model = v.data.model;
     publish(journalData(s, v.event, v.data));
   };
@@ -217,14 +261,23 @@ function runTurn(s, prompt) {
       }
     }
     s.working = false;
-    // Only arm --resume when dext actually ran (emitted events): a spawn
-    // failure must not poison the next turn with a resume of nothing.
-    if (sawAnyEvent) s.turns += 1;
+    s.turnStartedAt = null;
+    // Only arm --resume after a protocol-complete turn. A child that emitted
+    // turn_start and then crashed may not have persisted a resumable seat.
+    if (sawTurnEnd) {
+      s.turns += 1;
+      publish(journalData(s, "turn_end", turnEndData));
+    }
     scheduleList();
   };
 
   child.stdout.on("data", (chunk) => {
     buf += chunk.toString("utf8");
+    if (buf.length > MAX_STDOUT_BUFFER) {
+      errTail = `dext emitted more than ${MAX_STDOUT_BUFFER} bytes without a newline`;
+      killChild(s, false);
+      return;
+    }
     let i;
     while ((i = buf.indexOf("\n")) >= 0) {
       const line = buf.slice(0, i);
@@ -238,21 +291,38 @@ function runTurn(s, prompt) {
   });
 
   child.on("error", (err) => {
-    publish(journalData(s, "error", `dext spawn error: ${String(err)}`));
+    // Let finalize emit the one canonical error marker; publishing here as
+    // well produced duplicate errors for every failed spawn.
+    errTail = String(err);
     setTimeout(() => finalize(null), 1000);
   });
 
   child.on("close", (code) => finalize(code));
 }
 
-/** SIGINT with a SIGKILL escalation if the child lingers. */
-function killChild(s) {
+/** SIGINT the entire process group, with SIGKILL escalation if it lingers. */
+function signalChild(child, signal) {
+  if (!child?.pid) return;
+  try {
+    if (process.platform !== "win32") process.kill(-child.pid, signal);
+    else child.kill(signal);
+  } catch {
+    // The group may already be gone; direct-child fallback handles races.
+    try {
+      child.kill(signal);
+    } catch {
+      /* gone */
+    }
+  }
+}
+
+function killChild(s, interrupted = true) {
   const child = s.child;
   if (!child) return;
-  s.killed = true;
-  child.kill("SIGINT");
+  s.killed = interrupted;
+  signalChild(child, "SIGINT");
   setTimeout(() => {
-    if (s.child === child) child.kill("SIGKILL");
+    if (s.child === child) signalChild(child, "SIGKILL");
   }, 5000);
 }
 
@@ -345,7 +415,12 @@ function handleCommand(client, frame) {
         scheduleList();
         return;
       }
-      const cwd = typeof frame.cwd === "string" && fs.existsSync(frame.cwd) ? path.resolve(frame.cwd) : DEFAULT_CWD;
+      const requestedCwd = typeof frame.cwd === "string" ? path.resolve(frame.cwd) : DEFAULT_CWD;
+      if (!fs.existsSync(requestedCwd) || !fs.statSync(requestedCwd).isDirectory()) {
+        sendError(client, "bad_request", `cwd is not a directory: ${requestedCwd}`);
+        return;
+      }
+      const cwd = requestedCwd;
       const approval = APPROVALS.has(frame.approval) ? frame.approval : DEFAULT_APPROVAL;
       const s = makeSession({ cwd, approval });
       publish(journalData(s, "session.state", { status: "live" }));
@@ -404,6 +479,10 @@ function handleCommand(client, frame) {
       }
       if (typeof frame.text !== "string" || !frame.text.trim()) {
         sendError(client, "bad_request", "text required");
+        return;
+      }
+      if (frame.text.length > MAX_PROMPT_CHARS) {
+        sendError(client, "bad_request", `text exceeds ${MAX_PROMPT_CHARS} characters`);
         return;
       }
       if (s.status !== "live") {
@@ -555,6 +634,29 @@ server.on("upgrade", (req, socket, head) => {
   socket.on("close", () => clients.delete(client));
   socket.on("error", () => clients.delete(client));
 });
+
+let shuttingDown = false;
+function shutdown() {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  server.close();
+  for (const s of sessions.values()) killChild(s);
+  const deadline = Date.now() + 5500;
+  const wait = setInterval(() => {
+    const active = [...sessions.values()].filter((s) => s.child);
+    if (active.length === 0) {
+      clearInterval(wait);
+      process.exit(0);
+    }
+    if (Date.now() >= deadline) {
+      for (const s of active) signalChild(s.child, "SIGKILL");
+      clearInterval(wait);
+      process.exit(1);
+    }
+  }, 100);
+}
+process.once("SIGINT", shutdown);
+process.once("SIGTERM", shutdown);
 
 server.listen(PORT, "127.0.0.1", () => {
   console.log(`agentlinkd listening on http://127.0.0.1:${PORT}`);

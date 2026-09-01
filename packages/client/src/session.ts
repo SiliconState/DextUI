@@ -114,10 +114,14 @@ export class SessionStore {
           lastSeq: s.last_seq,
           model: s.meta.model,
           approvalProfile: s.meta.approval_profile,
-          working: false,
-          compacting: false,
-          failed: false,
-          turnStartedAt: undefined,
+          working: s.working ?? false,
+          compacting: s.compacting ?? false,
+          failed: s.failed ?? false,
+          turnStartedAt: s.working ? s.turn_started_at : undefined,
+          turnUsage: s.turn_usage,
+          sessionUsage: s.session_usage,
+          contextChars: s.context_chars,
+          diagnostics: s.diagnostics,
         });
         return;
       }

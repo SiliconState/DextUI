@@ -3,11 +3,60 @@
 
 const TAIL_CAP = 4000;
 
+export function foldMeta(journal) {
+  let turnUsage;
+  let sessionUsage;
+  let contextChars;
+  let diagnostics;
+  let compacting = false;
+  let failed = false;
+  for (const env of journal) {
+    const d = env.data;
+    switch (env.event) {
+      case "turn_start":
+        failed = false;
+        break;
+      case "usage_update":
+        turnUsage = d?.turn;
+        sessionUsage = d?.session;
+        break;
+      case "turn_end":
+        failed = !!d?.failed;
+        if (d?.usage) sessionUsage = d.usage;
+        break;
+      case "history_context_updated":
+        contextChars = d?.chars;
+        break;
+      case "turn_diagnostics":
+        diagnostics = d;
+        break;
+      case "compact_start":
+        compacting = true;
+        break;
+      case "compact_end":
+      case "compact_failed":
+        compacting = false;
+        break;
+      default:
+        break;
+    }
+  }
+  return { turnUsage, sessionUsage, contextChars, diagnostics, compacting, failed };
+}
+
 export function fold(journal) {
   const blocks = [];
   const toolIndex = new Map();
+  const pendingRequests = new Map();
   let openText = null;
   let openThinking = null;
+
+  const sealOpen = () => {
+    if (openText) openText.complete = true;
+    if (openThinking) openThinking.complete = true;
+    openText = null;
+    openThinking = null;
+  };
 
   const mergeTool = (d, patch) => {
     let i = toolIndex.get(d.call_id);
@@ -79,6 +128,18 @@ export function fold(journal) {
       case "tool_call_result":
         mergeTool(d, { status: d.ok ? "ok" : "failed", content: d.content });
         break;
+      case "tool_batch_start":
+        blocks.push({ kind: "marker", level: "note", text: `Batch: ${(d.labels ?? []).join(" · ")}` });
+        break;
+      case "tool_batch_end":
+        if ((d.failed ?? 0) > 0) blocks.push({ kind: "marker", level: "warn", text: `Batch: ${d.failed} tool call(s) failed.` });
+        break;
+      case "runtime_view":
+        blocks.push({ kind: "view", pack: d.pack, title: d.title, markdown: d.markdown });
+        break;
+      case "local_auth_prompt":
+        blocks.push({ kind: "marker", level: "warn", text: `Credentials requested by ${d.tool}: ${d.message}` });
+        break;
       case "info":
         blocks.push({ kind: "marker", level: "info", text: d });
         break;
@@ -97,7 +158,29 @@ export function fold(journal) {
       case "compact_end":
         blocks.push({ kind: "marker", level: "note", text: `Context compacted: ${d.before} → ${d.after} chars.` });
         break;
+      case "compact_failed":
+        blocks.push({ kind: "marker", level: "warn", text: `Compaction failed: ${d.message}` });
+        break;
+      case "permission.request":
+        pendingRequests.set(d.request_id, d);
+        break;
+      case "permission.resolved": {
+        const request = pendingRequests.get(d.request_id);
+        pendingRequests.delete(d.request_id);
+        if (request) blocks.push({ kind: "marker", level: d.choice === "deny" ? "warn" : "info", text: `${request.tool}: ${d.choice}` });
+        break;
+      }
+      case "permission.timeout": {
+        const request = pendingRequests.get(d.request_id);
+        pendingRequests.delete(d.request_id);
+        if (request) blocks.push({ kind: "marker", level: "warn", text: `${request.tool}: approval timed out (denied)` });
+        break;
+      }
+      case "turn_end":
+        sealOpen();
+        break;
       case "interrupted":
+        sealOpen();
         blocks.push({ kind: "marker", level: "warn", text: "Interrupted." });
         break;
       case "steering_received":

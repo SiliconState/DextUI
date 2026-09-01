@@ -168,6 +168,15 @@ export interface SnapshotEvent {
   blocks: Block[];
   pending_permissions: PermissionRequestEvent[];
   last_seq: number;
+  /** Live turn state is projection metadata, not a journal event. */
+  working?: boolean;
+  turn_started_at?: number;
+  turn_usage?: Usage;
+  session_usage?: Usage;
+  context_chars?: number;
+  diagnostics?: TurnDiagnosticsEvent;
+  compacting?: boolean;
+  failed?: boolean;
 }
 
 export interface SessionStateEvent {
@@ -216,9 +225,11 @@ export interface AgentEventMap {
   steering_received: SteeringReceivedEvent;
 }
 
-/** Host-synthesized, journaled, sequenced. */
+/** Host-synthesized data plane. Snapshots are sequenced projections but are not appended to the journal. */
 export interface HostEventMap {
+  /** Journaled, monotonically sequenced host event. */
   user_message: { text: string };
+  /** Sequenced point-in-time projection; not appended to the session journal. */
   "session.snapshot": SnapshotEvent;
   "session.state": SessionStateEvent;
   "permission.request": PermissionRequestEvent;
