@@ -1,16 +1,17 @@
 <script lang="ts">
-  import { app, start, connection, newSession, toggleTheme, copyText } from "./lib/state.svelte";
+  import { app, start, connection, newSession } from "./lib/state.svelte";
   import type { Block } from "@dextui/protocol";
-  import SessionRail from "./components/SessionRail.svelte";
-  import Transcript from "./components/Transcript.svelte";
-  import PermissionCard from "./components/PermissionCard.svelte";
+  import SessionIndex from "./components/SessionIndex.svelte";
+  import Scrollback from "./components/Scrollback.svelte";
+  import Approval from "./components/Approval.svelte";
   import Composer from "./components/Composer.svelte";
-  import StatusFooter from "./components/StatusFooter.svelte";
+  import StatusLine from "./components/StatusLine.svelte";
+  import Finder from "./components/Finder.svelte";
   import Toasts from "./components/Toasts.svelte";
-  import CommandPalette from "./components/CommandPalette.svelte";
 
   let tokenInput = $state("");
   let inspect: Block | null = $state(null);
+  let indexOpen = $state(false);
 
   const activeStore = $derived.by(() => {
     const c = connection();
@@ -31,29 +32,10 @@
 
   const view = $derived.by(() => {
     void tick;
-    // Shallow copy per tick: Svelte 5 deriveds skip propagation when the value
-    // is reference-equal, so the mutated-in-place store state must be re-boxed.
+    // Re-boxed per tick: Svelte 5 deriveds skip propagation on reference equality.
     return activeStore ? { ...activeStore.state } : null;
   });
   const pendingList = $derived(view ? [...view.pending.values()] : []);
-  const activeMeta = $derived(app.sessions.find((s) => s.id === app.activeId) ?? null);
-
-  const phaseClass: Record<string, string> = {
-    connecting: "border-line text-faint",
-    authing: "border-warn/40 text-warn",
-    live: "border-ok/40 text-ok",
-    reconnecting: "border-warn/40 text-warn",
-    closed: "border-line text-faint",
-    failed: "border-err/40 text-err",
-  };
-  const phaseDot: Record<string, string> = {
-    connecting: "bg-faint animate-pulse",
-    authing: "bg-warn animate-pulse",
-    live: "bg-ok",
-    reconnecting: "bg-warn animate-pulse",
-    closed: "bg-faint",
-    failed: "bg-err",
-  };
 
   function connectSubmit(e: SubmitEvent) {
     e.preventDefault();
@@ -66,11 +48,12 @@
     if (c && app.activeId) c.respond(app.activeId, requestId, choice);
   }
 
-  // Keyboard-first approvals on desktop: a=once, s=always, d=deny; esc closes overlays.
+  // Keyboard-first approvals: a=once, s=always, d=deny; esc closes overlays.
   $effect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         if (inspect) inspect = null;
+        else if (indexOpen) indexOpen = false;
         return;
       }
       if (app.paletteOpen) return;
@@ -89,156 +72,231 @@
   });
 </script>
 
-<div class="flex h-full flex-col" data-state={app.phase} data-agent-id="app.root">
-  {#if app.needsToken}
-    <div class="flex flex-1 items-center justify-center p-6">
-      <form
-        onsubmit={connectSubmit}
-        class="w-full max-w-sm space-y-4 rounded-2xl border border-line bg-panel p-6 shadow-2xl"
-        data-state="connect"
-        data-agent-id="connect.form"
-      >
-        <div class="space-y-1">
-          <div class="flex items-center gap-2">
-            <img src="/icon.svg" class="h-7 w-7" alt="" />
-            <h1 class="dext-gradient-text text-xl font-semibold tracking-tight">DextUI</h1>
-          </div>
-          <p class="text-sm text-dim">
-            Pair with the agent host. Paste the token printed by
-            <code class="rounded bg-raised px-1 font-mono text-xs">agentlinkd</code> — the mock host defaults to
-            <code class="rounded bg-raised px-1 font-mono text-xs">dev-token</code>.
-          </p>
-        </div>
-        {#if app.lastError}
-          <p class="rounded-lg border border-err/30 bg-err/10 px-3 py-2 text-sm text-err" data-agent-id="connect.error">{app.lastError}</p>
-        {/if}
+{#if app.needsToken}
+  <div class="pair" data-state="connect" data-agent-id="app.root">
+    <form onsubmit={connectSubmit} class="pair-box" data-agent-id="connect.form">
+      <p class="pair-title"><span class="st-green">dext</span><span class="blink st-green">▊</span> <span class="dim">web console</span></p>
+      <p class="dim">pair with the agent host — paste the token printed by <span class="st-cyan">agentlinkd</span></p>
+      <p class="faint">(mock host default: dev-token)</p>
+      {#if app.lastError}
+        <p class="st-red" data-agent-id="connect.error">✗ {app.lastError}</p>
+      {/if}
+      <div class="pair-row">
+        <span class="st-green">❯</span>
         <input
           bind:value={tokenInput}
           type="password"
           autocomplete="off"
           placeholder="pairing token"
-          class="w-full rounded-xl border border-line bg-raised px-3 py-2 text-sm focus:border-accent focus:outline-none"
           data-agent-id="connect.token"
         />
-        <button
-          type="submit"
-          class="w-full rounded-xl bg-accent px-4 py-2 text-sm font-semibold text-bg hover:opacity-90"
-          data-agent-id="connect.submit"
-        >
-          Connect
-        </button>
-      </form>
-    </div>
-  {:else}
-    <header class="flex h-12 shrink-0 items-center gap-2 border-b border-line bg-panel px-3 md:gap-3 md:px-4" data-agent-id="app.header">
-      <div class="flex items-center gap-2">
-        <img src="/icon.svg" class="h-5 w-5" alt="" />
-        <span class="dext-gradient-text font-semibold tracking-tight">DextUI</span>
+        <button type="submit" class="act accent" data-agent-id="connect.submit">[⏎] connect</button>
       </div>
-      <span
-        class={`flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs ${phaseClass[app.phase] ?? ""}`}
-        data-agent-id="status.phase"
-        data-state={app.phase}
-      >
-        <span class={`h-1.5 w-1.5 rounded-full ${phaseDot[app.phase] ?? "bg-faint"}`}></span>
-        {app.phase}{app.phaseDetail ? ` · ${app.phaseDetail}` : ""}
-      </span>
-      {#if activeMeta}
-        <span class="hidden min-w-0 flex-1 truncate text-sm text-dim lg:inline" data-agent-id="app.session.title">{activeMeta.title}</span>
-      {:else}
-        <span class="flex-1"></span>
-      {/if}
-      {#if pendingList.length > 0}
-        <span class="ml-auto rounded-lg bg-warn/20 px-2 py-0.5 text-xs font-medium text-warn" data-agent-id="queue.count">
-          {pendingList.length} pending approval{pendingList.length === 1 ? "" : "s"}
-        </span>
-      {/if}
-      <button
-        data-agent-id="palette.open"
-        onclick={() => (app.paletteOpen = true)}
-        class="ml-auto shrink-0 rounded-lg border border-line px-2.5 py-1 font-mono text-xs text-dim hover:border-accent/60 hover:text-ink"
-        title="Command palette"
-      >
-        ⌘K
-      </button>
-      <button
-        data-agent-id="theme.toggle"
-        onclick={toggleTheme}
-        class="shrink-0 rounded-lg border border-line px-2.5 py-1 text-xs text-dim hover:border-accent/60 hover:text-ink"
-        title="Toggle theme"
-      >
-        {app.theme === "dark" ? "☀" : "☾"}
-      </button>
-    </header>
+    </form>
+  </div>
+{:else}
+  <div class="shell" data-state={app.phase} data-agent-id="app.root">
+    <aside class="index" data-state={indexOpen ? "open" : "closed"} data-agent-id="session.rail.wrap">
+      <SessionIndex onPick={() => (indexOpen = false)} />
+    </aside>
+    {#if indexOpen}
+      <div class="index-scrim" onclick={() => (indexOpen = false)} onkeydown={() => {}} role="presentation"></div>
+    {/if}
 
-    <div class="flex min-h-0 flex-1">
-      <aside class="hidden w-64 shrink-0 border-r border-line bg-panel md:block" data-agent-id="session.rail.wrap">
-        <SessionRail variant="rail" />
-      </aside>
-
-      <main class="flex min-h-0 flex-1 flex-col">
-        <div class="shrink-0 border-b border-line bg-panel md:hidden" data-agent-id="session.chips.bar">
-          <SessionRail variant="chips" />
+    <main class="main">
+      {#if app.lastError && app.phase !== "failed"}
+        <div class="errbar" data-agent-id="banner.error">
+          <span class="st-red">✗ {app.lastError}</span>
+          <button class="act" data-agent-id="banner.error.dismiss" onclick={() => (app.lastError = "")}>dismiss</button>
         </div>
+      {/if}
 
-        {#if app.lastError && app.phase !== "failed"}
-          <div
-            class="flex shrink-0 items-center gap-2 border-b border-err/30 bg-err/10 px-4 py-1.5 text-xs text-err"
-            data-agent-id="banner.error"
-          >
-            <span class="flex-1 truncate">{app.lastError}</span>
-            <button onclick={() => (app.lastError = "")} data-agent-id="banner.error.dismiss">×</button>
+      {#if activeStore}
+        <Scrollback store={activeStore} onInspect={(b) => (inspect = b)} />
+        {#if pendingList.length > 0}
+          <div class="appr-dock" data-agent-id="approval.dock" data-state="awaiting_approval">
+            {#each pendingList as p (p.request_id)}
+              <Approval pending={p} sessionId={app.activeId} />
+            {/each}
           </div>
         {/if}
+      {:else}
+        <div class="hero" data-state="no_session" data-agent-id="hero">
+          <p><span class="st-green">dext</span><span class="blink st-green">▊</span> <span class="dim">web console</span></p>
+          <p class="dim">pick a session from the index, or start one:</p>
+          <p>
+            <button class="act accent" data-agent-id="hero.new" onclick={newSession}>+ new session</button>
+            <span class="faint"> · ⌘k finder</span>
+          </p>
+        </div>
+      {/if}
+    </main>
 
-        {#if activeStore}
-          <Transcript store={activeStore} onInspect={(b) => (inspect = b)} />
-          {#each pendingList as p (p.request_id)}
-            <PermissionCard pending={p} sessionId={app.activeId} />
-          {/each}
-          <Composer store={activeStore} />
-          <StatusFooter store={activeStore} />
-        {:else}
-          <div class="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center" data-state="no_session" data-agent-id="hero">
-            <span class="dext-gradient-text text-2xl font-semibold tracking-tight">DextUI</span>
-            <p class="max-w-sm text-sm text-dim">
-              Create a session or pick one from the rail. Press
-              <kbd class="rounded border border-line bg-raised px-1.5 py-0.5 font-mono text-xs">⌘K</kbd>
-              anytime for the command palette.
-            </p>
-            <button
-              data-agent-id="hero.new"
-              onclick={newSession}
-              class="rounded-xl bg-accent px-4 py-2 text-sm font-semibold text-bg hover:opacity-90"
-            >
-              + New session
-            </button>
-          </div>
-        {/if}
-      </main>
+    <div class="composer">
+      {#if activeStore}
+        <Composer store={activeStore} />
+      {/if}
     </div>
-  {/if}
-</div>
 
-{#if inspect}
-  <div
-    class="fixed inset-y-0 right-0 z-30 flex w-[26rem] max-w-[90vw] flex-col border-l border-line bg-panel shadow-2xl"
-    data-agent-id="drawer.block"
-    data-state="open"
-  >
-    <div class="flex shrink-0 items-center gap-2 border-b border-line px-4 py-2.5">
-      <span class="rounded border border-line bg-raised px-1.5 py-0.5 font-mono text-[10px] uppercase text-accent2">{inspect.kind}</span>
-      <span class="flex-1 truncate text-sm text-dim">raw block</span>
-      <button class="text-xs text-dim hover:text-ink" data-agent-id="drawer.block.copy" onclick={() => copyText(JSON.stringify(inspect, null, 2), "Copied JSON")}>
-        copy
-      </button>
-      <button class="rounded-lg border border-line px-2 py-0.5 text-xs text-dim hover:text-ink" data-agent-id="drawer.block.close" onclick={() => (inspect = null)}>
-        esc
-      </button>
+    <div class="statusline">
+      {#if activeStore}
+        <StatusLine store={activeStore} onToggleIndex={() => (indexOpen = !indexOpen)} />
+      {:else}
+        <div class="sl-min" data-agent-id="status.phase" data-state={app.phase}>
+          <button class="act idx-toggle" data-agent-id="index.toggle" onclick={() => (indexOpen = !indexOpen)}>[≡]</button>
+          <span class={app.phase === "live" ? "st-green" : app.phase === "failed" ? "st-red" : "st-yellow pulse"}>●</span>
+          <span class="dim">{app.phase}{app.phaseDetail ? ` · ${app.phaseDetail}` : ""}</span>
+          <span class="faint sl-min-right">⌘k finder</span>
+        </div>
+      {/if}
     </div>
-    <pre class="min-h-0 flex-1 overflow-auto p-3 font-mono text-xs leading-relaxed text-dim" data-agent-id="drawer.block.json">{JSON.stringify(inspect, null, 2)}</pre>
   </div>
 {/if}
 
-<CommandPalette />
+{#if inspect}
+  <div class="insp" data-agent-id="drawer.block" data-state="open">
+    <div class="insp-head">
+      <span class="st-magenta">{inspect.kind}</span>
+      <span class="dim">raw block</span>
+      <span class="insp-acts">
+        <button class="act" data-agent-id="drawer.block.close" onclick={() => (inspect = null)}>esc</button>
+      </span>
+    </div>
+    <pre class="insp-body" data-agent-id="drawer.block.json">{JSON.stringify(inspect, null, 2)}</pre>
+  </div>
+{/if}
+
+<Finder />
 <Toasts />
+
+<style>
+  .pair {
+    display: flex;
+    height: 100%;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+  }
+  .pair-box {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    width: min(520px, 100%);
+    border: 1px solid var(--line);
+    background: var(--bg1);
+    padding: 18px 20px;
+  }
+  .pair-title {
+    font-weight: bold;
+    margin-bottom: 4px;
+  }
+  .pair-row {
+    display: flex;
+    gap: 8px;
+    align-items: baseline;
+    margin-top: 8px;
+    border-top: 1px solid var(--line);
+    padding-top: 10px;
+  }
+  .pair-row input {
+    flex: 1;
+  }
+  .errbar {
+    display: flex;
+    gap: 10px;
+    align-items: baseline;
+    padding: 3px 14px;
+    border-bottom: 1px solid var(--line);
+    background: color-mix(in srgb, var(--red) 6%, transparent);
+  }
+  .hero {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    align-items: flex-start;
+    justify-content: center;
+    padding: 0 18vw;
+  }
+  .appr-dock {
+    flex-shrink: 0;
+    max-height: 45vh;
+    overflow-y: auto;
+    border-top: 1px solid var(--line);
+    padding: 6px 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .sl-min {
+    display: flex;
+    gap: 8px;
+    align-items: baseline;
+    padding: 3px 10px;
+    font-size: 12px;
+  }
+  .sl-min-right {
+    margin-left: auto;
+  }
+  .idx-toggle {
+    display: none;
+  }
+  @media (max-width: 820px) {
+    .idx-toggle {
+      display: inline;
+    }
+  }
+  .insp {
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 35;
+    width: min(30rem, 92vw);
+    display: flex;
+    flex-direction: column;
+    border-left: 1px solid var(--line);
+    background: var(--bg1);
+    box-shadow: -8px 0 40px rgba(0, 0, 0, 0.4);
+  }
+  .insp-head {
+    display: flex;
+    gap: 10px;
+    align-items: baseline;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--line);
+  }
+  .insp-acts {
+    margin-left: auto;
+  }
+  .insp-body {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    padding: 10px 12px;
+    white-space: pre-wrap;
+    color: var(--dim);
+    font-size: 12px;
+  }
+  .st-green {
+    color: var(--green);
+  }
+  .st-cyan {
+    color: var(--cyan);
+  }
+  .st-red {
+    color: var(--red);
+  }
+  .st-yellow {
+    color: var(--yellow);
+  }
+  .st-magenta {
+    color: var(--magenta);
+  }
+  .dim {
+    color: var(--dim);
+  }
+  .faint {
+    color: var(--faint);
+  }
+</style>

@@ -1,4 +1,5 @@
 <script lang="ts">
+  // Inline ❯ prompt — the composer is a terminal input line, not a chat box.
   import type { SessionStore } from "@dextui/client";
   import { app, connection } from "../lib/state.svelte";
 
@@ -26,7 +27,6 @@
   });
   const view = $derived.by(() => {
     void tick;
-    // Re-boxed per tick: see App.svelte note on Svelte 5 derived equality.
     return { ...store.state };
   });
 
@@ -39,9 +39,9 @@
   const live = $derived(view.status === "live");
   const canSend = $derived(text.trim().length > 0 && app.phase === "live" && app.activeId !== "" && live);
   const placeholder = $derived(
-    !live ? "Waking session…" : view.working ? "Steer the agent mid-turn…" : "Ask dext…  / for commands",
+    !live ? "waking session…" : view.working ? "steer the agent mid-turn…" : "type a request…   / commands",
   );
-  const rows = $derived(Math.min(6, 1 + (text.match(/\n/g)?.length ?? 0)));
+  const rows = $derived(Math.min(8, 1 + (text.match(/\n/g)?.length ?? 0)));
 
   // Per-session draft persistence: restore on switch, save on leave/send.
   $effect(() => {
@@ -95,6 +95,10 @@
         if (item) complete(item.cmd);
         return;
       }
+      if (e.key === "Escape") {
+        text = "";
+        return;
+      }
     }
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -103,64 +107,124 @@
   }
 </script>
 
-<div class="relative border-t border-line bg-panel px-3 py-3 md:px-4" data-agent-id="composer.root">
+<div class="c-root" data-agent-id="composer.root">
   {#if slashOpen && slashList.length > 0}
-    <div
-      class="absolute bottom-full left-3 right-3 mb-1 overflow-hidden rounded-xl border border-line bg-panel shadow-2xl md:left-4 md:right-4"
-      data-agent-id="composer.menu"
-      data-state="open"
-    >
+    <div class="c-menu" data-agent-id="composer.menu" data-state="open">
       {#each slashList as c, i (c.cmd)}
         <button
+          class="c-menu-row"
+          class:cursor={i === menuCur}
           data-agent-id={`composer.menu.item.${c.cmd.slice(1)}`}
           data-state={i === menuCur ? "cursor" : "idle"}
           onclick={() => complete(c.cmd)}
           onmousemove={() => (menuIdx = i)}
-          class={`flex w-full items-center gap-3 px-3 py-2 text-left text-sm ${
-            i === menuCur ? "bg-accent/15" : "hover:bg-raised"
-          }`}
         >
-          <span class="font-mono text-accent">{c.cmd}</span>
-          <span class="truncate text-xs text-dim">{c.desc}</span>
-          {#if i === menuCur}
-            <span class="ml-auto shrink-0 rounded border border-line bg-raised px-1.5 font-mono text-[10px] text-faint">tab</span>
-          {/if}
+          <span class="c-cur">{i === menuCur ? "❯" : " "}</span>
+          <span class="st-accent">{c.cmd}</span>
+          <span class="dim">{c.desc}</span>
         </button>
       {/each}
     </div>
   {/if}
 
-  <div class="flex items-end gap-2">
+  <div class="c-row">
+    <span class="pg" class:pg-busy={view.working}>❯</span>
     <textarea
       bind:this={inputEl}
       bind:value={text}
       onkeydown={onKey}
       {rows}
       {placeholder}
-      class="flex-1 resize-none rounded-xl border border-line bg-raised px-3 py-2 text-[15px] leading-snug focus:border-accent focus:outline-none"
       data-agent-id="composer.input"
       data-state={view.working ? "working" : "idle"}
     ></textarea>
-    {#if view.working}
+    <span class="c-side">
+      {#if view.working}
+        <button class="act err" data-agent-id="composer.stop" onclick={stop}>^c stop</button>
+      {/if}
       <button
-        data-agent-id="composer.stop"
-        onclick={stop}
-        class="rounded-xl border border-err/50 px-4 py-2 text-sm font-medium text-err hover:bg-err/10"
+        class="act accent"
+        data-agent-id={view.working ? "composer.steer" : "composer.send"}
+        data-state={canSend ? "ready" : "disabled"}
+        onclick={send}
+        disabled={!canSend}
       >
-        Stop
+        [⏎] {view.working ? "steer" : "send"}
       </button>
-    {/if}
-    <button
-      data-agent-id={view.working ? "composer.steer" : "composer.send"}
-      data-state={canSend ? "ready" : "disabled"}
-      onclick={send}
-      disabled={!canSend}
-      class="rounded-xl bg-accent px-4 py-2 text-sm font-semibold text-bg transition-opacity disabled:opacity-40"
-    >
-      {view.working ? "Steer" : "Send"}
-    </button>
+    </span>
   </div>
-  <p class="mt-1.5 hidden px-1 text-[11px] text-faint md:block">
-    enter to send · shift+enter newline · <span class="font-mono">/</span> commands · <span class="font-mono">⌘K</span> palette
-  </p>
 </div>
+
+<style>
+  .c-root {
+    position: relative;
+    padding: 4px 10px 6px;
+  }
+  .c-row {
+    display: flex;
+    align-items: flex-end;
+    gap: 8px;
+  }
+  .pg {
+    color: var(--green);
+    font-weight: bold;
+    padding-bottom: 3px;
+    user-select: none;
+  }
+  .pg-busy {
+    color: var(--yellow);
+  }
+  textarea {
+    flex: 1;
+    resize: none;
+    padding: 2px 0;
+    line-height: 1.5;
+    caret-color: var(--green);
+  }
+  .c-side {
+    display: flex;
+    gap: 12px;
+    align-items: baseline;
+    padding-bottom: 3px;
+    flex-shrink: 0;
+  }
+  .c-menu {
+    position: absolute;
+    bottom: 100%;
+    left: 10px;
+    right: 10px;
+    margin-bottom: 2px;
+    border: 1px solid var(--line);
+    background: var(--bg1);
+    z-index: 20;
+  }
+  .c-menu-row {
+    display: flex;
+    gap: 10px;
+    width: 100%;
+    padding: 3px 8px;
+    align-items: baseline;
+  }
+  .c-menu-row.cursor {
+    background: var(--fg);
+    color: var(--bg);
+  }
+  .c-menu-row.cursor .st-accent,
+  .c-menu-row.cursor .dim {
+    color: var(--bg);
+  }
+  .c-cur {
+    color: var(--cyan);
+    width: 12px;
+    flex-shrink: 0;
+  }
+  .c-menu-row.cursor .c-cur {
+    color: var(--bg);
+  }
+  .st-accent {
+    color: var(--cyan);
+  }
+  .dim {
+    color: var(--dim);
+  }
+</style>

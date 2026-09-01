@@ -1,28 +1,52 @@
 <script lang="ts">
   import { app, dismissToast } from "../lib/state.svelte";
 
-  const style: Record<string, string> = {
-    info: "border-line bg-raised text-ink",
-    ok: "border-ok/40 bg-ok/10 text-ok",
-    warn: "border-warn/40 bg-warn/10 text-warn",
-    err: "border-err/40 bg-err/10 text-err",
-  };
-  const icon: Record<string, string> = { info: "i", ok: "✓", warn: "!", err: "✕" };
+  const icon: Record<string, string> = { info: "·", ok: "✓", warn: "⚠", err: "✗" };
 </script>
 
-<div
-  class="pointer-events-none fixed right-3 top-3 z-50 flex w-[22rem] max-w-[calc(100vw-1.5rem)] flex-col gap-2"
-  data-agent-id="toast.stack"
-  data-state={app.toasts.length > 0 ? "active" : "empty"}
->
+<div class="toasts" data-agent-id="toast.stack" data-state={app.toasts.length > 0 ? "active" : "empty"}>
   {#each app.toasts as t (t.id)}
     <button
+      class={`toast t-${t.kind}`}
       data-agent-id={`toast.${t.id}`}
       data-state={t.kind}
       onclick={() => dismissToast(t.id)}
-      class={`pointer-events-auto animate-[toast-in_.18s_ease-out] rounded-lg border px-3 py-2 text-left text-sm shadow-xl backdrop-blur ${style[t.kind]}`}
     >
-      <span class="mr-2 font-mono text-xs opacity-70">{icon[t.kind]}</span>{t.text}
+      {icon[t.kind]} {t.text}
     </button>
   {/each}
 </div>
+
+<style>
+  .toasts {
+    position: fixed;
+    left: 10px;
+    bottom: 34px;
+    z-index: 50;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    max-width: min(420px, calc(100vw - 20px));
+    pointer-events: none;
+  }
+  .toast {
+    pointer-events: auto;
+    padding: 5px 10px;
+    border: 1px solid var(--line);
+    background: var(--bg1);
+    color: var(--fg);
+    animation: fade-in 0.12s ease-out;
+  }
+  .t-ok {
+    border-left: 2px solid var(--green);
+  }
+  .t-warn {
+    border-left: 2px solid var(--yellow);
+  }
+  .t-err {
+    border-left: 2px solid var(--red);
+  }
+  .t-info {
+    border-left: 2px solid var(--faint);
+  }
+</style>

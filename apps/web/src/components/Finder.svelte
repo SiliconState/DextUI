@@ -1,4 +1,5 @@
 <script lang="ts">
+  // Finder: fzf in a browser. One input, one cursor, subsequence scoring.
   import {
     app,
     connection,
@@ -14,7 +15,7 @@
   let inputEl: HTMLInputElement | undefined = $state();
 
   // store.state is a plain (non-reactive) object: subscribe so turn/approval
-  // actions (Stop, Once/Always/Deny) refresh while the palette is open.
+  // actions (stop, once/always/deny) refresh while the finder is open.
   let tick = $state(0);
   $effect(() => {
     const c = connection();
@@ -37,23 +38,24 @@
     void tick;
     const c = connection();
     const out: Action[] = [
-      { slug: "session.new", label: "New session", hint: "switches to it", group: "Session", run: newSession },
-      { slug: "theme.toggle", label: `Switch to ${app.theme === "dark" ? "light" : "dark"} theme`, group: "App", run: toggleTheme },
-      { slug: "pair.reset", label: "Re-pair with agent host…", hint: "clears token", group: "App", run: rePair },
+      { slug: "session.new", label: "new session", hint: "switches to it", group: "sess", run: newSession },
+      { slug: "theme.toggle", label: `theme: ${app.theme === "dark" ? "light" : "dark"}`, group: "app", run: toggleTheme },
+      { slug: "pair.reset", label: "re-pair with agent host", hint: "clears token", group: "app", run: rePair },
     ];
     if (c && app.activeId) {
       out.push({
         slug: "session.copyid",
-        label: "Copy session id",
-        group: "Session",
-        run: () => copyText(app.activeId, "Session id"),
+        label: "copy session id",
+        group: "sess",
+        run: () => copyText(app.activeId, "session id"),
       });
       const store = c.session(app.activeId);
       if (store.state.working) {
         out.push({
           slug: "turn.stop",
-          label: "Stop the running turn",
-          group: "Turn",
+          label: "stop the running turn",
+          hint: "^c",
+          group: "turn",
           run: () => connection()?.interrupt(app.activeId),
         });
       }
@@ -61,23 +63,23 @@
         const short = p.summary ? ` — ${p.summary.slice(0, 40)}` : "";
         out.push({
           slug: `approve.${p.request_id}.once`,
-          label: `Approve once: ${p.tool}${short}`,
+          label: `approve once: ${p.tool}${short}`,
           hint: "a",
-          group: "Approvals",
+          group: "appr",
           run: () => connection()?.respond(app.activeId, p.request_id, "once"),
         });
         out.push({
           slug: `approve.${p.request_id}.always`,
-          label: `Approve always: ${p.tool}${short}`,
+          label: `approve always: ${p.tool}${short}`,
           hint: "s",
-          group: "Approvals",
+          group: "appr",
           run: () => connection()?.respond(app.activeId, p.request_id, "always"),
         });
         out.push({
           slug: `approve.${p.request_id}.deny`,
-          label: `Deny: ${p.tool}${short}`,
+          label: `deny: ${p.tool}${short}`,
           hint: "d",
-          group: "Approvals",
+          group: "appr",
           run: () => connection()?.respond(app.activeId, p.request_id, "deny"),
         });
       }
@@ -86,9 +88,9 @@
       if (s.id === app.activeId) continue;
       out.push({
         slug: `goto.${s.id}`,
-        label: `Switch to: ${s.title}`,
+        label: `switch: ${s.title}`,
         hint: s.status,
-        group: "Sessions",
+        group: "sess",
         run: () => activate(s.id),
       });
     }
@@ -111,12 +113,11 @@
 
   const filtered = $derived.by(() => {
     const q = query.trim().toLowerCase();
-    void actions.length; // recompute when session/app state shifts the action list
     return actions
       .map((a) => ({ a, s: score(a, q) }))
       .filter((x) => x.s >= 0)
       .sort((x, y) => y.s - x.s)
-      .slice(0, 12)
+      .slice(0, 14)
       .map((x) => x.a);
   });
 
@@ -128,6 +129,9 @@
       query = "";
     }
   });
+
+  // Cursor can outlive a shrinking result list; clamp before use.
+  const cur = $derived(filtered.length === 0 ? 0 : Math.min(cursor, filtered.length - 1));
 
   function close() {
     app.paletteOpen = false;
@@ -150,13 +154,13 @@
       close();
     } else if (e.key === "ArrowDown") {
       e.preventDefault();
-      cursor = Math.min(filtered.length - 1, cursor + 1);
+      cursor = Math.min(filtered.length - 1, cur + 1);
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
-      cursor = Math.max(0, cursor - 1);
+      cursor = Math.max(0, cur - 1);
     } else if (e.key === "Enter") {
       e.preventDefault();
-      const a = filtered[cursor];
+      const a = filtered[cur];
       if (a) run(a);
     }
   }
@@ -165,49 +169,119 @@
 <svelte:window onkeydown={onWindowKey} />
 
 {#if app.paletteOpen}
-  <div
-    class="fixed inset-0 z-40 bg-black/50 backdrop-blur-[2px]"
-    data-agent-id="palette.overlay"
-    onclick={close}
-    onkeydown={() => {}}
-    role="presentation"
-  ></div>
-  <div
-    class="fixed left-1/2 top-20 z-40 w-[36rem] max-w-[92vw] -translate-x-1/2 animate-[rise_.15s_ease-out] rounded-2xl border border-line bg-panel shadow-2xl"
-    data-agent-id="palette.root"
-    data-state="open"
-  >
-    <div class="flex items-center gap-2 border-b border-line px-4 py-3">
-      <span class="font-mono text-sm text-faint">⌘K</span>
+  <div class="fz-scrim" data-agent-id="palette.overlay" onclick={close} onkeydown={() => {}} role="presentation"></div>
+  <div class="fz fade-in" data-agent-id="palette.root" data-state="open">
+    <div class="fz-input-row">
+      <span class="st-green">❯</span>
       <input
         bind:this={inputEl}
         bind:value={query}
-        placeholder="Type a command or session name…"
-        class="w-full bg-transparent text-[15px] outline-none placeholder:text-faint"
+        placeholder="command or session…"
         data-agent-id="palette.input"
       />
-      <span class="text-xs text-faint">esc</span>
+      <span class="faint">esc</span>
     </div>
-    <div class="max-h-80 overflow-y-auto p-1.5" data-agent-id="palette.list">
+    <div class="fz-list" data-agent-id="palette.list">
       {#each filtered as a, i (a.slug)}
         <button
+          class="fz-row"
+          class:cursor={i === cur}
           data-agent-id={`palette.item.${a.slug}`}
-          data-state={i === cursor ? "cursor" : "idle"}
+          data-state={i === cur ? "cursor" : "idle"}
           onclick={() => run(a)}
           onmousemove={() => (cursor = i)}
-          class={`flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm ${
-            i === cursor ? "bg-accent/15 text-ink" : "text-dim hover:bg-raised"
-          }`}
         >
-          <span class="w-20 shrink-0 text-[10px] font-semibold uppercase tracking-wider text-faint">{a.group}</span>
-          <span class="flex-1 truncate">{a.label}</span>
+          <span class="fz-cur">{i === cur ? "❯" : " "}</span>
+          <span class="fz-group">{a.group}</span>
+          <span class="fz-label">{a.label}</span>
           {#if a.hint}
-            <span class="shrink-0 rounded border border-line bg-raised px-1.5 py-0.5 font-mono text-[10px] text-faint">{a.hint}</span>
+            <span class="fz-hint">{a.hint}</span>
           {/if}
         </button>
       {:else}
-        <p class="px-3 py-6 text-center text-sm text-faint" data-agent-id="palette.empty">No matches.</p>
+        <p class="fz-empty" data-agent-id="palette.empty">no matches</p>
       {/each}
     </div>
   </div>
 {/if}
+
+<style>
+  .fz-scrim {
+    position: fixed;
+    inset: 0;
+    z-index: 40;
+    background: rgba(0, 0, 0, 0.55);
+  }
+  .fz {
+    position: fixed;
+    left: 50%;
+    top: 14vh;
+    transform: translateX(-50%);
+    z-index: 41;
+    width: min(620px, 94vw);
+    border: 1px solid var(--line);
+    background: var(--bg1);
+    box-shadow: 0 8px 40px rgba(0, 0, 0, 0.5);
+  }
+  .fz-input-row {
+    display: flex;
+    gap: 8px;
+    align-items: baseline;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--line);
+  }
+  .fz-input-row input {
+    flex: 1;
+  }
+  .fz-list {
+    max-height: 46vh;
+    overflow-y: auto;
+    padding: 4px 0;
+  }
+  .fz-row {
+    display: flex;
+    gap: 10px;
+    width: 100%;
+    padding: 3px 12px;
+    align-items: baseline;
+  }
+  .fz-row.cursor {
+    background: var(--fg);
+    color: var(--bg);
+  }
+  .fz-cur {
+    color: var(--cyan);
+    width: 12px;
+    flex-shrink: 0;
+  }
+  .fz-row.cursor .fz-cur,
+  .fz-row.cursor .fz-group,
+  .fz-row.cursor .fz-hint {
+    color: var(--bg);
+  }
+  .fz-group {
+    color: var(--faint);
+    width: 4ch;
+    flex-shrink: 0;
+  }
+  .fz-label {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .fz-hint {
+    color: var(--faint);
+    flex-shrink: 0;
+  }
+  .fz-empty {
+    padding: 14px 12px;
+    color: var(--faint);
+  }
+  .st-green {
+    color: var(--green);
+  }
+  .faint {
+    color: var(--faint);
+  }
+</style>
