@@ -1,0 +1,112 @@
+@import "tailwindcss";
+
+@theme {
+  --color-bg: #0a0c11;
+  --color-panel: #10131b;
+  --color-raised: #161b26;
+  --color-line: #232a39;
+  --color-ink: #e7eaf2;
+  --color-dim: #8d95a9;
+  --color-faint: #5d6679;
+  --color-accent: #7db0ff;
+  --color-accent2: #b28cff;
+  --color-ok: #4ade80;
+  --color-warn: #fbbf24;
+  --color-err: #f87171;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+html[data-theme="light"] {
+  --color-bg: #f4f6fa;
+  --color-panel: #ffffff;
+  --color-raised: #edf0f6;
+  --color-line: #dde2ec;
+  --color-ink: #1a2030;
+  --color-dim: #5a6478;
+  --color-faint: #98a1b4;
+  --color-accent: #2563eb;
+  --color-accent2: #7c3aed;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  background: var(--color-bg);
+  color: var(--color-ink);
+  font-family:
+    Inter,
+    system-ui,
+    -apple-system,
+    "Segoe UI",
+    sans-serif;
+  overscroll-behavior-y: none;
+}
+
+::selection {
+  background: color-mix(in oklab, var(--color-accent) 30%, transparent);
+}
+
+*:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-line) transparent;
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+.thinking-live {
+  background: linear-gradient(
+    90deg,
+    var(--color-faint) 0%,
+    var(--color-dim) 50%,
+    var(--color-faint) 100%
+  );
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: shimmer 2.2s linear infinite;
+}
+
+.dext-gradient-text {
+  background: linear-gradient(120deg, var(--color-accent), var(--color-accent2));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}

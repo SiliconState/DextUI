@@ -1,0 +1,28 @@
+{"event":"turn_start"}
+{"data":"[objective: Use the bash tool exactly once to run this exact command: echo fixture-tool-ok -- then reply with exactly: done | checkpoints: deliver requested outcome with verifiable steps]","event":"info"}
+{"data":"[phase:probe] validate one representative source item before scaling","event":"info"}
+{"data":"The","event":"thinking_delta"}
+{"data":" user wants me to","event":"thinking_delta"}
+{"data":" run exactly","event":"thinking_delta"}
+{"data":" one bash command and","event":"thinking_delta"}
+{"data":" reply with exactly","event":"thinking_delta"}
+{"data":" \"done\". Let","event":"thinking_delta"}
+{"data":" me do that.","event":"thinking_delta"}
+{"data":"The user wants me to run exactly one bash command and reply with exactly \"done\". Let me do that.","event":"thinking_block_complete"}
+{"data":{"call_id":"tool_7bBdclW3AbyAsj42BeAjbGxh","name":"bash","summary":"bash: echo fixture-tool-ok --"},"event":"tool_call_preview"}
+{"data":{"session":{"cache_create":0,"cache_read":1536,"cost_usd":0.0,"input":262,"output":78},"turn":{"cache_create":0,"cache_read":1536,"cost_usd":0.0,"input":262,"output":78}},"event":"usage_update"}
+{"data":"[phase:synthesize] consolidating results into deliverable artifacts","event":"info"}
+{"data":{"call_id":"tool_7bBdclW3AbyAsj42BeAjbGxh","name":"bash","summary":"bash: echo fixture-tool-ok --"},"event":"tool_call_start"}
+{"data":{"telemetry":{"circuit_breaker_trips":0,"dedupe_hits":0,"empty_tool_call_hints":0,"http_retries":0,"partial_delivery_hints":0,"similarity_blocks":0}},"event":"external_telemetry"}
+{"data":{"call_id":"tool_7bBdclW3AbyAsj42BeAjbGxh","content":"exit: 0\n--- stdout ---\nfixture-tool-ok --\n--- stderr ---\n","name":"bash","ok":true,"preview":"bash: echo fixture-tool-ok --"},"event":"tool_call_result"}
+{"data":"The","event":"thinking_delta"}
+{"data":" user asked me to","event":"thinking_delta"}
+{"data":" reply with exactly:","event":"thinking_delta"}
+{"data":" done. The bash","event":"thinking_delta"}
+{"data":" command was","event":"thinking_delta"}
+{"data":"The user asked me to reply with exactly: done. The bash command was already run successfully. I should just reply with \"done\".","event":"thinking_block_complete"}
+{"data":"done","event":"text_delta"}
+{"data":"done","event":"text_block_complete"}
+{"data":{"session":{"cache_create":0,"cache_read":3072,"cost_usd":0.0,"input":720,"output":122},"turn":{"cache_create":0,"cache_read":1536,"cost_usd":0.0,"input":458,"output":44}},"event":"usage_update"}
+{"data":{"api_family":"anthropic-messages","auth_source":"auth:kimi","compacted":false,"context_mode":"Standard","context_window":1048576,"last_retry_reason":null,"model":"k3","provider":"kimi","tool_profile":"default:lean","turn_duration_ms":7231,"workaround_fired":false},"event":"turn_diagnostics"}
+{"data":{"failed":false,"usage":{"cache_create":0,"cache_read":3072,"cost_usd":0.0,"input":720,"output":122}},"event":"turn_end"}
