@@ -57,7 +57,8 @@ answers `markdown table demo` with a rich-markdown turn.
 - **Keyboard-first approvals** (mock/upstream): `a` / `s` / `d`, note, diff preview
 - **Finder** (`⌘K`/`Ctrl+K`): fzf-style — sessions, approvals, theme, stop, re-pair
 - **Terminal composer**: `❯` prompt line, slash menu with tab completion, per-session drafts
-- **Status line** in dext's TUI idiom: `● cwd | title │ model │ approval │ Ctx [██████░░░░] │ ↑↓ $`
+- **Status line** in dext's TUI idiom: `● cwd | title │ model │ effort │ approval │ Ctx [██████░░░░] │ ↑↓ $`
+- **Per-session model + reasoning controls**: native web selectors populated from dext's configured provider catalog. Choose a provider/model before a fresh session's first turn; model then locks to the durable seat. Reasoning effort (`off` through `max`) remains changeable between turns and is reapplied after resume.
 - **Themes**: dark / light / system (follows OS live), persisted
 - **Capability negotiation**: steer/approve controls appear only when the host
   advertises them (`hello_ok.capabilities`)
@@ -76,6 +77,7 @@ DextUI is designed to be drivable by other agents, not just humans:
 
 ## Real-host limits (until the upstream dext bridge lands)
 
+- **Model changes after history exists require a new UI session** — resumed dext seats restore their persisted model. DextUI rejects the change instead of mutating dext's global provider defaults or pretending it applied. Effort remains configurable between turns.
 - **No mid-turn steering** — one-shot children have no live stdin; the composer
   disables send while a turn runs (capability-gated).
 - **No interactive approvals** — tool policy is dext's own `--approval` profile;
@@ -94,5 +96,5 @@ See [PROTOCOL.md](./PROTOCOL.md) for the AgentLink v1 wire format
 ## Screenshots
 
 [`docs/screenshots/`](./docs/screenshots) — `real.png` / `real-light.png` are live
-dext turns through `agentlinkd`; the rest are mock-host captures (approval flow,
+dext turns through `agentlinkd`; `model-controls.png` shows the model lock + editable effort state; the rest are mock-host captures (approval flow,
 markdown table result, finder, desktop, mobile).

@@ -48,13 +48,15 @@ Commands are fire-and-forget; effects arrive as events. Only two commands have d
 
 | event | data | meaning |
 |---|---|---|
-| `hello_ok` | `{server, version, protocol, capabilities[], sessions[]}` | auth accepted; includes session list |
+| `hello_ok` | `{server, version, protocol, capabilities[], sessions[], model_catalog?, effort_options?}` | auth accepted; includes session list and optional host controls |
 | `hello_fail` | `{reason}` | auth or version rejected; socket closes |
 | `session.list` | `{sessions[]}` | pushed whenever the list changes |
 | `pong` | `{}` | reply to `ping` |
 | `error` | `{code, message}` | rejected command; no state changed |
 
-`SessionMeta`: `{id, title, cwd, agent:{name,version}, model?, approval_profile?, status:"cold"|"starting"|"live", created_at, updated_at, last_seq, unread, pending_permissions}`. `title` is host-derived from the first prompt (60 chars); `session.rename` overrides.
+`SessionMeta`: `{id, title, cwd, agent:{name,version}, model?, provider?, thinking_effort?, model_locked?, approval_profile?, status:"cold"|"starting"|"live", created_at, updated_at, last_seq, unread, pending_permissions}`. `title` is host-derived from the first prompt (60 chars); `session.rename` overrides.
+
+`model_catalog` is grouped as `[{provider, label?, models[]}]`; `effort_options` contains host-supported values such as `off|minimal|low|medium|high|xhigh|max`. Clients expose these controls only when the matching capability is advertised.
 
 ## Data plane (sequenced, journaled)
 
@@ -97,8 +99,9 @@ Tag and payload are byte-identical to dext's `stream-json` output (unit variants
 | event | data | why it exists |
 |---|---|---|
 | `user_message` | `{text}` | prompts are journaled so reconnects/snapshots rebuild full transcripts |
-| `session.snapshot` | `{meta, blocks[], pending_permissions[], last_seq}` | bootstrap/resync payload; **blocks, not raw events** (see below) |
+| `session.snapshot` | `{meta, blocks[], pending_permissions[], last_seq, working?, turn_started_at?, turn_usage?, session_usage?, context_chars?, diagnostics?, compacting?, failed?, provider?, thinking_effort?, model_locked?}` | bootstrap/resync projection at the existing journal tail; snapshots do not consume `seq` |
 | `session.state` | `{status, detail?}` | `starting` when a cold session's child is spawning, `live`, `cold`, `exited` |
+| `session.configured` | `{provider?, model?, thinking_effort?, model_locked}` | accepted per-session runtime configuration; sequenced before it is visible in the UI |
 | `permission.request` | `{request_id, call_id?, tool, summary, input?, diff?, risk}` | decision needed; `diff` is dext's mutation preview |
 | `permission.resolved` | `{request_id, choice, by}` | broadcast to all clients; first response wins |
 | `permission.already_resolved` | `{request_id}` | direct reply to the losing responder |
@@ -117,6 +120,7 @@ Tag and payload are byte-identical to dext's `stream-json` output (unit variants
 | `session.subscribe` | `{id, since_seq?}` | attach; replay `seq > since_seq`, then live tail; `since_seq` absent or stale → `session.snapshot` |
 | `session.unsubscribe` | `{id}` | detach; session keeps running |
 | `session.rename` | `{id, title}` | |
+| `session.configure` | `{id, provider?, model?, thinking_effort?}` | idle-only. Model requires provider+model and may be fresh-session-only; effort applies to the next turn. Success emits `session.configured`; rejection emits control `error` |
 | `session.close` | `{id}` | stop the child; durable state remains, session goes `cold` |
 | `prompt.submit` | `{session, text}` | new turn; host journals `user_message` then the turn stream |
 | `steering.inject` | `{session, text}` | mid-turn input (dext steering) |
@@ -131,6 +135,8 @@ Tag and payload are byte-identical to dext's `stream-json` output (unit variants
 
 **Turn.** `prompt.submit` → `user_message`, `turn_start`, deltas/blocks/tool events, `usage_update`(s), `turn_end`. `working` is true between `turn_start` and `turn_end`/`interrupted`.
 
+**Model and effort controls.** Hosts advertise `model_select` and/or `effort_select`, plus option data in `hello_ok`. Configuration is accepted only while idle and applies to the next turn; it never aborts or replays an active/partial stream. The one-shot `agentlinkd` bridge permits model selection only before the session's first completed turn because dext seats restore their persisted model on resume; after history exists it returns `model_locked` and the user starts a new session to choose another model. Effort remains changeable between all turns because dext reapplies `--effort` after seat resume. A provider-close warning with preserved partial text remains a completed turn: text and warning stay journaled once, model locks, and no replay occurs.
+
 **Approval.** `permission.request` → (any client) `permission.respond` → host applies first response, broadcasts `permission.resolved`, replies `permission.already_resolved` to losers. Host deadline (default 600 s, configurable) → `permission.timeout` + the child receives Deny. The agent always sees a resolution; it never hangs on a closed laptop.
 
 **Cold session.** `session.open {id}` → `session.state:"starting"` → child spawn + resume → `session.snapshot` → `session.state:"live"`. Hosts cap live children and reap idle ones; cold sessions cost nothing.
@@ -139,7 +145,7 @@ Tag and payload are byte-identical to dext's `stream-json` output (unit variants
 
 ## Capabilities
 
-Advertised in `hello_ok`: `approvals`, `steering`, `interrupt`, `slash`, `multi_session`, `usage`, `thinking`, `todos_read`, `checkpoints`, `seats`, `packs`, `push`. A host without `approvals` never sends `permission.request`; a client without approval UI must not subscribe to sessions that require them. Extensions are namespaced: `x-<host>.<thing>`.
+Advertised in `hello_ok`: `approvals`, `steering`, `interrupt`, `slash`, `multi_session`, `usage`, `thinking`, `model_select`, `effort_select`, `todos_read`, `checkpoints`, `seats`, `packs`, `push`. A host without `approvals` never sends `permission.request`; a client without approval UI must not subscribe to sessions that require them. Model/effort controls require both their capability and option data. Extensions are namespaced: `x-<host>.<thing>`.
 
 ## Agent surface
 

@@ -1,7 +1,7 @@
 // App-level reactive state bridging the framework-free Connection into Svelte 5 runes.
 
 import { Connection, type ConnPhase } from "@dextui/client";
-import type { SessionMeta } from "@dextui/protocol";
+import type { ModelGroup, SessionMeta, ThinkingEffort } from "@dextui/protocol";
 
 export type Theme = "dark" | "light" | "system";
 export interface Toast {
@@ -19,6 +19,8 @@ export const app = $state({
   lastError: "",
   conn: null as Connection | null,
   caps: [] as string[],
+  modelCatalog: [] as ModelGroup[],
+  effortOptions: [] as ThinkingEffort[],
   paletteOpen: false,
   theme: "dark" as Theme,
   toasts: [] as Toast[],
@@ -116,6 +118,8 @@ export function start(token: string): void {
       app.phaseDetail = detail ?? "";
       if (p === "failed") {
         app.caps = [];
+        app.modelCatalog = [];
+        app.effortOptions = [];
         app.lastError = detail ?? "authentication failed";
         pushToast("err", `Connection failed: ${app.lastError}`);
         app.needsToken = true;
@@ -132,6 +136,8 @@ export function start(token: string): void {
         // Snapshot capabilities into reactive state: conn.capabilities is a
         // plain mutated array, so deriveds can't track it directly.
         app.caps = [...c.capabilities];
+        app.modelCatalog = c.modelCatalog.map((g) => ({ ...g, models: [...g.models] }));
+        app.effortOptions = [...c.effortOptions];
         reconcileAfterReconnect = everLive;
         if (everLive) pushToast("ok", "Reconnected");
         // hello_ok's session list is delivered immediately after this callback;

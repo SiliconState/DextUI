@@ -25,6 +25,11 @@ const PORT = Number(argValue("port", process.env.MOCK_PORT ?? 8787));
 const TOKEN = argValue("token", process.env.MOCK_TOKEN ?? "dev-token");
 const APPROVAL_TIMEOUT_MS = Number(argValue("approval-timeout-ms", process.env.MOCK_APPROVAL_TIMEOUT_MS ?? 120000));
 const STATIC_DIR = path.resolve(argValue("static", path.join(repoRoot, "apps", "web", "dist")));
+const MOCK_MODEL_CATALOG = [
+  { provider: "mock", label: "Mock", models: ["mock-echo", "k3-fixture"] },
+];
+const EFFORT_OPTIONS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+const EFFORTS = new Set(EFFORT_OPTIONS);
 const CAPABILITIES = [
   "approvals",
   "steering",
@@ -38,6 +43,8 @@ const CAPABILITIES = [
   "multi_session",
   "usage",
   "thinking",
+  "model_select",
+  "effort_select",
   "todos_read",
 ];
 
@@ -55,6 +62,11 @@ function makeSession({ title, fixture, approvalFlow, live }) {
     title,
     fixture,
     approvalFlow,
+    provider: "mock",
+    model: fixture ? "k3-fixture" : "mock-echo",
+    thinkingEffort: "medium",
+    modelLocked: false,
+    turns: 0,
     cwd: "/tmp/scratch",
     status: live ? "live" : "cold",
     working: false,
@@ -91,7 +103,10 @@ function metaOf(s) {
     title: s.title,
     cwd: s.cwd,
     agent: { name: "dext-mock", version: "0.1.0" },
-    model: s.fixture ? "k3" : "mock-echo",
+    model: s.model,
+    provider: s.provider,
+    thinking_effort: s.thinkingEffort,
+    model_locked: s.modelLocked,
     approval_profile: s.approvalFlow ? "ask" : "always",
     status: s.status,
     created_at: s.createdAt,
@@ -147,6 +162,9 @@ function snapshotEnvelope(s) {
       diagnostics: meta.diagnostics,
       compacting: meta.compacting,
       failed: meta.failed,
+      provider: s.provider,
+      thinking_effort: s.thinkingEffort,
+      model_locked: s.modelLocked,
     },
   };
 }
@@ -240,7 +258,24 @@ function beginTurn(s, plan) {
   if (s.working) return false;
   s.working = true;
   s.turnStartedAt = Date.now();
-  s.plan = plan;
+  // Apply session controls to every mock plan (fixture, demo, echo) so a
+  // selected model/effort cannot be overwritten by recording-era diagnostics.
+  const configured = plan.map((item) => {
+    if (item.event !== "turn_diagnostics") return { ...item };
+    return {
+      ...item,
+      data: { ...item.data, provider: s.provider, model: s.model },
+    };
+  });
+  const end = configured.findIndex((item) => item.event === "turn_end");
+  if (end >= 0) {
+    configured.splice(end, 0, {
+      event: "thinking_effort_changed",
+      data: { effort: s.thinkingEffort },
+      delay: 2,
+    });
+  }
+  s.plan = configured;
   s.pos = 0;
   stepReplay(s);
   return true;
@@ -271,6 +306,14 @@ function stepReplay(s) {
       s.working = false;
       s.turnStartedAt = null;
       s.plan = null;
+      s.turns += 1;
+      s.modelLocked = true;
+      publish(journalData(s, "session.configured", {
+        provider: s.provider,
+        model: s.model,
+        thinking_effort: s.thinkingEffort,
+        model_locked: true,
+      }));
       publish(journalData(s, item.event, item.data));
       return;
     }
@@ -375,6 +418,8 @@ function handleCommand(client, frame) {
       protocol: 1,
       capabilities: CAPABILITIES,
       sessions: [...sessions.values()].map(metaOf),
+      model_catalog: MOCK_MODEL_CATALOG,
+      effort_options: EFFORT_OPTIONS,
     });
     return;
   }
@@ -432,6 +477,50 @@ function handleCommand(client, frame) {
 
     case "session.unsubscribe": {
       client.subs.delete(frame.id);
+      return;
+    }
+
+    case "session.configure": {
+      const s = sessions.get(frame.id);
+      if (!s) {
+        sendError(client, "no_session", `unknown session ${frame.id}`);
+        return;
+      }
+      if (s.status !== "live") {
+        sendError(client, "not_live", "session is not live");
+        return;
+      }
+      if (s.working) {
+        sendError(client, "busy", "settings apply between turns");
+        return;
+      }
+      const wantsModel = frame.provider !== undefined || frame.model !== undefined;
+      if (wantsModel) {
+        if (s.modelLocked || s.turns > 0) {
+          sendError(client, "model_locked", "this session has history; start a new session to change model");
+          return;
+        }
+        const group = MOCK_MODEL_CATALOG.find((g) => g.provider === frame.provider);
+        if (!group || typeof frame.model !== "string" || !group.models.includes(frame.model)) {
+          sendError(client, "bad_request", `unknown model selection ${String(frame.provider)}/${String(frame.model)}`);
+          return;
+        }
+        s.provider = frame.provider;
+        s.model = frame.model;
+      }
+      if (frame.thinking_effort !== undefined) {
+        if (!EFFORTS.has(frame.thinking_effort)) {
+          sendError(client, "bad_request", `invalid thinking effort '${String(frame.thinking_effort)}'`);
+          return;
+        }
+        s.thinkingEffort = frame.thinking_effort;
+      }
+      publish(journalData(s, "session.configured", {
+        provider: s.provider,
+        model: s.model,
+        thinking_effort: s.thinkingEffort,
+        model_locked: s.modelLocked,
+      }));
       return;
     }
 
@@ -580,7 +669,7 @@ function digest() {
       title: s.title,
       status: s.status,
       working: s.working,
-      model: s.fixture ? "k3" : "mock-echo",
+      model: s.model,
       pending: [...s.pending.values()].map((p) => ({
         request_id: p.request_id,
         tool: p.tool,
@@ -594,6 +683,7 @@ function digest() {
       "steering.inject",
       "interrupt",
       "permission.respond",
+      "session.configure",
       "slash",
       "session.rename",
       "session.close",

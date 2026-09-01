@@ -18,7 +18,7 @@ import fs from "node:fs";
 import path from "node:path";
 import url from "node:url";
 import crypto from "node:crypto";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { acceptKey, FrameParser, encodeFrame, OP_PONG, OP_TEXT } from "../../mock-server/src/ws.mjs";
 import { fold, foldMeta } from "../../mock-server/src/fold.mjs";
 
@@ -48,6 +48,8 @@ const DEFAULT_CWD = path.resolve(argValue("cwd", process.cwd()));
 const DEFAULT_APPROVAL = argValue("approval", process.env.DEXT_APPROVAL ?? "auto-read");
 const STATIC_DIR = path.resolve(argValue("static", path.join(repoRoot, "apps", "web", "dist")));
 const APPROVALS = new Set(["auto-read", "auto-write", "never", "always"]);
+const EFFORT_OPTIONS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+const EFFORTS = new Set(EFFORT_OPTIONS);
 const MAX_PROMPT_CHARS = 1_000_000;
 const MAX_STDOUT_BUFFER = 16 * 1024 * 1024;
 
@@ -56,6 +58,66 @@ if (!TOKEN) throw new Error("pairing token must not be empty");
 if (!APPROVALS.has(DEFAULT_APPROVAL)) throw new Error(`invalid --approval '${DEFAULT_APPROVAL}'`);
 if (!fs.existsSync(DEFAULT_CWD) || !fs.statSync(DEFAULT_CWD).isDirectory()) {
   throw new Error(`--cwd is not a directory: ${DEFAULT_CWD}`);
+}
+
+function dextOutput(args) {
+  const result = spawnSync(DEXT_BIN, args, {
+    encoding: "utf8",
+    env: { ...process.env, DEXT_NO_TUI: "1" },
+    timeout: 15_000,
+    maxBuffer: 4 * 1024 * 1024,
+  });
+  return result.status === 0 ? result.stdout : "";
+}
+
+function discoverModels() {
+  const groups = [];
+  let current = null;
+  let readingModels = false;
+  for (const line of dextOutput(["auth", "models"]).split("\n")) {
+    const header = /^\s*\*?\s*provider '([^']+)' models:/.exec(line);
+    const fallback = /^\s*\*?\s*provider '([^']+)' default model:\s*(\S+)/.exec(line);
+    if (header) {
+      current = { provider: header[1], models: [] };
+      groups.push(current);
+      readingModels = true;
+      continue;
+    }
+    if (fallback) {
+      current = { provider: fallback[1], models: [fallback[2]] };
+      groups.push(current);
+      readingModels = false;
+      continue;
+    }
+    if (readingModels && current) {
+      const model = /^-\s+(\S+)\s*$/.exec(line);
+      if (model) current.models.push(model[1]);
+      else if (line.trim()) readingModels = false;
+    }
+  }
+  return groups.filter((g) => g.models.length > 0);
+}
+
+function discoverActiveModel(catalog) {
+  const status = dextOutput(["auth", "status"]);
+  const active = /^active provider:\s*(\S+)/m.exec(status)?.[1];
+  const line = status
+    .split("\n")
+    .find((l) => /^\s*\*/.test(l) || (active && l.trimStart().startsWith(active + " ")));
+  const model = line ? /\bmodel=(\S+)/.exec(line)?.[1] : undefined;
+  const group = catalog.find((g) => g.provider === active) ?? catalog[0];
+  return { provider: active ?? group?.provider, model: model ?? group?.models[0] };
+}
+
+const MODEL_CATALOG = discoverModels();
+const DEFAULT_MODEL = discoverActiveModel(MODEL_CATALOG);
+if (DEFAULT_MODEL.provider && DEFAULT_MODEL.model) {
+  let group = MODEL_CATALOG.find((g) => g.provider === DEFAULT_MODEL.provider);
+  if (!group) {
+    group = { provider: DEFAULT_MODEL.provider, models: [] };
+    MODEL_CATALOG.push(group);
+  }
+  if (!group.models.includes(DEFAULT_MODEL.model)) group.models.unshift(DEFAULT_MODEL.model);
 }
 
 // Real capabilities only. No "steering" (one-shot children have no stdin
@@ -67,6 +129,8 @@ const CAPABILITIES = [
   "interrupt",
   "usage",
   "thinking",
+  "effort_select",
+  ...(MODEL_CATALOG.length > 0 ? ["model_select"] : []),
   "slash",
   "slash.help",
   "slash.approval",
@@ -86,6 +150,10 @@ function makeSession({ cwd, approval }) {
     title: "New session",
     cwd,
     approval,
+    provider: DEFAULT_MODEL.provider ?? null,
+    model: DEFAULT_MODEL.model ?? null,
+    thinkingEffort: "medium",
+    modelLocked: false,
     seat: `dextui-${crypto.randomBytes(4).toString("hex")}`,
     status: "live",
     working: false,
@@ -97,7 +165,6 @@ function makeSession({ cwd, approval }) {
     turns: 0,
     child: null,
     killed: false,
-    model: null,
   };
   sessions.set(id, s);
   return s;
@@ -119,6 +186,9 @@ function metaOf(s) {
     cwd: s.cwd,
     agent: { name: "dext", version: "cli" },
     model: s.model ?? undefined,
+    provider: s.provider ?? undefined,
+    thinking_effort: s.thinkingEffort,
+    model_locked: s.modelLocked,
     approval_profile: s.approval,
     status: s.status,
     created_at: s.createdAt,
@@ -174,6 +244,9 @@ function snapshotEnvelope(s) {
       diagnostics: meta.diagnostics,
       compacting: meta.compacting,
       failed: meta.failed,
+      provider: s.provider ?? undefined,
+      thinking_effort: s.thinkingEffort,
+      model_locked: s.modelLocked,
     },
   };
 }
@@ -194,14 +267,32 @@ function runTurn(s, prompt) {
   let buf = "";
   let errTail = "";
 
-  const args = ["-p", "--output", "stream-json", "--cd", s.cwd, "--approval", s.approval, "--seat", s.seat];
+  const args = [
+    "-p",
+    "--output",
+    "stream-json",
+    "--cd",
+    s.cwd,
+    "--approval",
+    s.approval,
+    "--effort",
+    s.thinkingEffort,
+    "--seat",
+    s.seat,
+  ];
   if (s.turns > 0) args.push("--resume");
+  const childEnv = { ...process.env, DEXT_NO_TUI: "1" };
+  if (s.provider && s.model) {
+    childEnv.DEXT_PROVIDER = s.provider;
+    childEnv.DEXT_MODEL = s.model;
+    childEnv.DEXT_MODEL_FORCE = "1";
+  }
 
   let child;
   try {
     child = spawn(DEXT_BIN, args, {
       cwd: s.cwd,
-      env: { ...process.env, DEXT_NO_TUI: "1" },
+      env: childEnv,
       stdio: ["pipe", "pipe", "pipe"],
       // A process group lets interrupt stop dext and any tool descendants.
       detached: process.platform !== "win32",
@@ -237,7 +328,13 @@ function runTurn(s, prompt) {
       turnEndData = v.data;
       return;
     }
-    if (v.event === "turn_diagnostics" && v.data && typeof v.data.model === "string") s.model = v.data.model;
+    if (v.event === "turn_diagnostics" && v.data) {
+      if (typeof v.data.model === "string") s.model = v.data.model;
+      if (typeof v.data.provider === "string") s.provider = v.data.provider;
+    }
+    if (v.event === "thinking_effort_changed" && EFFORTS.has(v.data?.effort)) {
+      s.thinkingEffort = v.data.effort;
+    }
     publish(journalData(s, v.event, v.data));
   };
 
@@ -266,6 +363,13 @@ function runTurn(s, prompt) {
     // turn_start and then crashed may not have persisted a resumable seat.
     if (sawTurnEnd) {
       s.turns += 1;
+      s.modelLocked = true;
+      publish(journalData(s, "session.configured", {
+        provider: s.provider ?? undefined,
+        model: s.model ?? undefined,
+        thinking_effort: s.thinkingEffort,
+        model_locked: true,
+      }));
       publish(journalData(s, "turn_end", turnEndData));
     }
     scheduleList();
@@ -391,6 +495,8 @@ function handleCommand(client, frame) {
       protocol: 1,
       capabilities: CAPABILITIES,
       sessions: [...sessions.values()].map(metaOf),
+      model_catalog: MODEL_CATALOG,
+      effort_options: EFFORT_OPTIONS,
     });
     return;
   }
@@ -445,6 +551,54 @@ function handleCommand(client, frame) {
 
     case "session.unsubscribe": {
       client.subs.delete(frame.id);
+      return;
+    }
+
+    case "session.configure": {
+      const s = sessions.get(frame.id);
+      if (!s) {
+        sendError(client, "no_session", `unknown session ${frame.id}`);
+        return;
+      }
+      if (s.status !== "live") {
+        sendError(client, "not_live", "session is not live");
+        return;
+      }
+      if (s.working) {
+        sendError(client, "busy", "settings apply between turns; stop or wait for the current turn");
+        return;
+      }
+      const wantsModel = frame.provider !== undefined || frame.model !== undefined;
+      if (wantsModel) {
+        if (s.modelLocked || s.turns > 0) {
+          sendError(client, "model_locked", "this session has history; start a new session to change model");
+          return;
+        }
+        if (typeof frame.provider !== "string" || typeof frame.model !== "string") {
+          sendError(client, "bad_request", "model selection requires provider and model");
+          return;
+        }
+        const group = MODEL_CATALOG.find((g) => g.provider === frame.provider);
+        if (!group || !group.models.includes(frame.model)) {
+          sendError(client, "bad_request", `unknown model selection ${frame.provider}/${frame.model}`);
+          return;
+        }
+      }
+      if (frame.thinking_effort !== undefined && !EFFORTS.has(frame.thinking_effort)) {
+        sendError(client, "bad_request", `invalid thinking effort '${String(frame.thinking_effort)}'`);
+        return;
+      }
+      if (wantsModel) {
+        s.provider = frame.provider;
+        s.model = frame.model;
+      }
+      if (frame.thinking_effort !== undefined) s.thinkingEffort = frame.thinking_effort;
+      publish(journalData(s, "session.configured", {
+        provider: s.provider ?? undefined,
+        model: s.model ?? undefined,
+        thinking_effort: s.thinkingEffort,
+        model_locked: s.modelLocked,
+      }));
       return;
     }
 
@@ -664,4 +818,5 @@ server.listen(PORT, "127.0.0.1", () => {
   console.log(`  dext:     ${DEXT_BIN}`);
   console.log(`  cwd:      ${DEFAULT_CWD}`);
   console.log(`  approval: ${DEFAULT_APPROVAL} (per-session: /approval <profile>)`);
+  console.log(`  models:   ${MODEL_CATALOG.reduce((n, g) => n + g.models.length, 0)} across ${MODEL_CATALOG.length} provider(s)`);
 });

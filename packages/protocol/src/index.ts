@@ -111,6 +111,13 @@ export interface LocalAuthPromptEvent {
 // ---------- host-synthesized payloads ----------
 
 export type SessionStatus = "cold" | "starting" | "live" | "exited";
+export type ThinkingEffort = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+
+export interface ModelGroup {
+  provider: string;
+  label?: string;
+  models: string[];
+}
 
 export interface SessionMeta {
   id: string;
@@ -118,6 +125,9 @@ export interface SessionMeta {
   cwd: string;
   agent: { name: string; version: string };
   model?: string;
+  provider?: string;
+  thinking_effort?: ThinkingEffort;
+  model_locked?: boolean;
   approval_profile?: string;
   status: SessionStatus;
   created_at: number;
@@ -125,6 +135,13 @@ export interface SessionMeta {
   last_seq: number;
   unread: number;
   pending_permissions: number;
+}
+
+export interface SessionConfiguredEvent {
+  provider?: string;
+  model?: string;
+  thinking_effort?: ThinkingEffort;
+  model_locked: boolean;
 }
 
 export interface PermissionRequestEvent {
@@ -177,6 +194,9 @@ export interface SnapshotEvent {
   diagnostics?: TurnDiagnosticsEvent;
   compacting?: boolean;
   failed?: boolean;
+  provider?: string;
+  thinking_effort?: ThinkingEffort;
+  model_locked?: boolean;
 }
 
 export interface SessionStateEvent {
@@ -232,6 +252,7 @@ export interface HostEventMap {
   /** Sequenced point-in-time projection; not appended to the session journal. */
   "session.snapshot": SnapshotEvent;
   "session.state": SessionStateEvent;
+  "session.configured": SessionConfiguredEvent;
   "permission.request": PermissionRequestEvent;
   "permission.resolved": PermissionResolvedEvent;
   "permission.already_resolved": { request_id: string };
@@ -246,6 +267,8 @@ export interface ControlEventMap {
     protocol: number;
     capabilities: string[];
     sessions: SessionMeta[];
+    model_catalog?: ModelGroup[];
+    effort_options?: ThinkingEffort[];
   };
   hello_fail: { reason: string };
   "session.list": { sessions: SessionMeta[] };
@@ -275,6 +298,8 @@ export const CAPABILITIES = [
   "multi_session",
   "usage",
   "thinking",
+  "model_select",
+  "effort_select",
   "todos_read",
 ] as const;
 

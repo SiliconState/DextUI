@@ -110,6 +110,13 @@ async function main() {
     const helloOk = await a.waitFor((e) => e.event === "hello_ok", 5000, "hello_ok");
     ok("hello_ok carries protocol 1", helloOk?.data?.protocol === 1);
     ok("hello_ok advertises approvals", helloOk?.data?.capabilities?.includes("approvals"));
+    ok(
+      "hello_ok advertises model + effort controls",
+      helloOk?.data?.capabilities?.includes("model_select") &&
+        helloOk?.data?.capabilities?.includes("effort_select") &&
+        helloOk?.data?.model_catalog?.[0]?.models?.includes("mock-echo") &&
+        helloOk?.data?.effort_options?.includes("xhigh"),
+    );
     const seeded = helloOk?.data?.sessions ?? [];
     ok("two seeded sessions", seeded.length === 2, seeded.map((s) => s.id).join(","));
     const toolSession = seeded.find((s) => s.approval_flow !== undefined || s.title.includes("tool"));

@@ -2,6 +2,7 @@
   // Status line, verbatim dext TUI idiom:
   //   ● ~/cwd | session │ model │ approval:ask │ Ctx [██████░░░░] 42% │ ↑12k ↓3k $0.04
   import type { SessionStore } from "@dextui/client";
+  import type { ThinkingEffort } from "@dextui/protocol";
   import { app, toggleTheme, rePair } from "../lib/state.svelte";
   import { fmtTokens, fmtElapsed } from "../lib/markdown";
 
@@ -51,6 +52,34 @@
           ? "st-yellow pulse"
           : "st-faint",
   );
+
+  const modelValue = $derived(view.provider && view.model ? `${view.provider}\u001f${view.model}` : "");
+  const canSelectModel = $derived(
+    app.phase === "live" &&
+      app.caps.includes("model_select") &&
+      view.status === "live" &&
+      !view.working && !view.modelLocked && app.modelCatalog.length > 0,
+  );
+  const canSelectEffort = $derived(
+    app.phase === "live" &&
+      app.caps.includes("effort_select") &&
+      view.status === "live" &&
+      !view.working && app.effortOptions.length > 0,
+  );
+
+  function selectModel(e: Event) {
+    const raw = (e.currentTarget as HTMLSelectElement).value;
+    const split = raw.indexOf("\u001f");
+    if (split < 1) return;
+    const provider = raw.slice(0, split);
+    const model = raw.slice(split + 1);
+    app.conn?.configureSession(view.id, { provider, model });
+  }
+
+  function selectEffort(e: Event) {
+    const thinking_effort = (e.currentTarget as HTMLSelectElement).value as ThinkingEffort;
+    app.conn?.configureSession(view.id, { thinking_effort });
+  }
 </script>
 
 <div class="sl" data-agent-id="status.hud" data-state={view.working ? "working" : "idle"}>
@@ -63,9 +92,47 @@
     <span class="sep">|</span>
     <span class="dim truncate">{view.title}</span>
   {/if}
-  {#if view.model}
+  {#if app.caps.includes("model_select") && app.modelCatalog.length > 0}
+    <span class="sep">│</span>
+    <label class="ctl" title={view.modelLocked ? "Model is fixed once this session has history. Start a new session to change it." : "Model for this session's first turn"}>
+      <span class="faint">model:</span>
+      <select
+        value={modelValue}
+        onchange={selectModel}
+        disabled={!canSelectModel}
+        data-agent-id="status.model.select"
+        data-state={view.modelLocked ? "locked" : canSelectModel ? "ready" : "disabled"}
+      >
+        {#each app.modelCatalog as group (group.provider)}
+          <optgroup label={group.label ? `${group.label} (${group.provider})` : group.provider}>
+            {#each group.models as model (model)}
+              <option value={`${group.provider}\u001f${model}`}>{model}</option>
+            {/each}
+          </optgroup>
+        {/each}
+      </select>
+      {#if view.modelLocked}<span class="faint">⌁</span>{/if}
+    </label>
+  {:else if view.model}
     <span class="sep">│</span>
     <span class="st-cyan" data-agent-id="status.model">{view.model}</span>
+  {/if}
+  {#if app.caps.includes("effort_select") && app.effortOptions.length > 0}
+    <span class="sep">│</span>
+    <label class="ctl" title="Reasoning effort for the next turn">
+      <span class="faint">effort:</span>
+      <select
+        value={view.thinkingEffort ?? "medium"}
+        onchange={selectEffort}
+        disabled={!canSelectEffort}
+        data-agent-id="status.effort.select"
+        data-state={canSelectEffort ? "ready" : "disabled"}
+      >
+        {#each app.effortOptions as effort (effort)}
+          <option value={effort}>{effort}</option>
+        {/each}
+      </select>
+    </label>
   {/if}
   {#if view.approvalProfile}
     <span class="sep">│</span>
@@ -123,6 +190,32 @@
   .sep {
     color: var(--faint);
     flex-shrink: 0;
+  }
+  .ctl {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 2px;
+    flex-shrink: 0;
+  }
+  .ctl select {
+    appearance: auto;
+    border: 0;
+    background: transparent;
+    color: var(--cyan);
+    font: inherit;
+    padding: 0;
+    max-width: 20ch;
+    cursor: pointer;
+  }
+  .ctl select:disabled {
+    color: var(--dim);
+    cursor: default;
+    opacity: 1;
+  }
+  .ctl option,
+  .ctl optgroup {
+    background: var(--bg1);
+    color: var(--fg);
   }
   .truncate {
     overflow: hidden;

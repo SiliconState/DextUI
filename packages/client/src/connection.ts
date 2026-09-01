@@ -1,7 +1,15 @@
 // AgentLink client: WebSocket lifecycle, hello auth, seq-resume, reconnect.
 // Framework-free and dependency-free; runs in browsers and Node 22+ (global WebSocket).
 
-import { cmd, isSessionRouted, PROTOCOL_VERSION, type Envelope, type SessionMeta } from "@dextui/protocol";
+import {
+  cmd,
+  isSessionRouted,
+  PROTOCOL_VERSION,
+  type Envelope,
+  type ModelGroup,
+  type SessionMeta,
+  type ThinkingEffort,
+} from "@dextui/protocol";
 import { SessionStore } from "./session.js";
 
 export type ConnPhase = "connecting" | "authing" | "live" | "reconnecting" | "closed" | "failed";
@@ -23,6 +31,8 @@ const PING_INTERVAL_MS = 25_000;
 export class Connection {
   phase: ConnPhase = "connecting";
   capabilities: string[] = [];
+  modelCatalog: ModelGroup[] = [];
+  effortOptions: ThinkingEffort[] = [];
   sessions = new Map<string, SessionStore>();
   private ws?: WebSocket;
   private opts: ConnectionOpts;
@@ -144,6 +154,13 @@ export class Connection {
     this.sendRaw(cmd("slash", { session: sessionId, raw }));
   }
 
+  configureSession(
+    id: string,
+    patch: { provider?: string; model?: string; thinking_effort?: ThinkingEffort },
+  ): void {
+    this.sendRaw(cmd("session.configure", { id, ...patch }));
+  }
+
   renameSession(id: string, title: string): void {
     this.sendRaw(cmd("session.rename", { id, title }));
   }
@@ -191,8 +208,15 @@ export class Connection {
     }
     switch (env.event) {
       case "hello_ok": {
-        const d = env.data as { capabilities: string[]; sessions: SessionMeta[] };
+        const d = env.data as {
+          capabilities: string[];
+          sessions: SessionMeta[];
+          model_catalog?: ModelGroup[];
+          effort_options?: ThinkingEffort[];
+        };
         this.capabilities = d.capabilities;
+        this.modelCatalog = d.model_catalog ?? [];
+        this.effortOptions = d.effort_options ?? [];
         this.attempt = 0;
         this.setPhase("live");
         this.startPing();

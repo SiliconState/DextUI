@@ -9,6 +9,7 @@ import type {
   PermissionRequestEvent,
   PermissionResolvedEvent,
   RuntimeViewEvent,
+  SessionConfiguredEvent,
   SessionMeta,
   SnapshotEvent,
   SteeringReceivedEvent,
@@ -16,6 +17,7 @@ import type {
   ToolOutputDeltaEvent,
   ToolRef,
   ToolResultEvent,
+  ThinkingEffort,
   TurnDiagnosticsEvent,
   TurnEndEvent,
   UsageUpdateEvent,
@@ -38,6 +40,9 @@ export interface SessionState {
   working: boolean;
   turnStartedAt?: number;
   model?: string;
+  provider?: string;
+  thinkingEffort?: ThinkingEffort;
+  modelLocked: boolean;
   approvalProfile?: string;
   turnUsage?: UsageUpdateEvent["turn"];
   sessionUsage?: UsageUpdateEvent["session"];
@@ -66,6 +71,7 @@ export class SessionStore {
       working: false,
       compacting: false,
       failed: false,
+      modelLocked: false,
     };
   }
 
@@ -113,6 +119,9 @@ export class SessionStore {
           status: s.meta.status,
           lastSeq: s.last_seq,
           model: s.meta.model,
+          provider: s.provider ?? s.meta.provider,
+          thinkingEffort: s.thinking_effort ?? s.meta.thinking_effort,
+          modelLocked: s.model_locked ?? s.meta.model_locked ?? false,
           approvalProfile: s.meta.approval_profile,
           working: s.working ?? false,
           compacting: s.compacting ?? false,
@@ -128,6 +137,17 @@ export class SessionStore {
       case "session.state": {
         const s = d as { status: SessionMeta["status"]; detail?: string };
         this.bump({ status: s.status });
+        return;
+      }
+      case "session.configured": {
+        const c = d as SessionConfiguredEvent;
+        const patch: Partial<SessionState> = { modelLocked: c.model_locked };
+        // Optional fields are patches, not replacements: an effort-only host
+        // event must not erase the current provider/model projection.
+        if (c.provider !== undefined) patch.provider = c.provider;
+        if (c.model !== undefined) patch.model = c.model;
+        if (c.thinking_effort !== undefined) patch.thinkingEffort = c.thinking_effort;
+        this.bump(patch);
         return;
       }
       // --- turn lifecycle ---
@@ -294,8 +314,13 @@ export class SessionStore {
         this.bump({ contextChars: h.chars });
         return;
       }
-      case "turn_diagnostics":
-        this.bump({ diagnostics: d as TurnDiagnosticsEvent, model: (d as TurnDiagnosticsEvent).model });
+      case "turn_diagnostics": {
+        const diag = d as TurnDiagnosticsEvent;
+        this.bump({ diagnostics: diag, model: diag.model, provider: diag.provider });
+        return;
+      }
+      case "thinking_effort_changed":
+        this.bump({ thinkingEffort: (d as { effort: ThinkingEffort }).effort });
         return;
       case "approval_profile_changed":
         this.bump({ approvalProfile: (d as { profile: string }).profile });
