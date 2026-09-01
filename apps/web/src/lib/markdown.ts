@@ -170,6 +170,7 @@ export function parseMarkdown(src: string): MdBlock[] {
         /^(#{1,6})\s/.test(l) ||
         /^```/.test(l) ||
         /^\s*>\s?/.test(l) ||
+        /^ {0,3}(-{3,}|\*{3,}|_{3,})\s*$/.test(l) ||
         LIST_ITEM.test(l) ||
         BOX_ART.test(l) ||
         isTableStart(lines, i)

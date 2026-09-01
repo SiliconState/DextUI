@@ -18,6 +18,7 @@ export const app = $state({
   needsToken: false,
   lastError: "",
   conn: null as Connection | null,
+  caps: [] as string[],
   paletteOpen: false,
   theme: "dark" as Theme,
   toasts: [] as Toast[],
@@ -107,6 +108,7 @@ export function start(token: string): void {
       app.phase = p;
       app.phaseDetail = detail ?? "";
       if (p === "failed") {
+        app.caps = [];
         app.lastError = detail ?? "authentication failed";
         pushToast("err", `Connection failed: ${app.lastError}`);
         app.needsToken = true;
@@ -114,6 +116,9 @@ export function start(token: string): void {
       }
       if (p === "reconnecting") pushToast("warn", "Connection lost — reconnecting…");
       if (p === "live") {
+        // Snapshot capabilities into reactive state: conn.capabilities is a
+        // plain mutated array, so deriveds can't track it directly.
+        app.caps = [...c.capabilities];
         if (everLive) pushToast("ok", "Reconnected");
         // Server subscriptions die with the socket; resubscribe after any reconnect.
         if (everLive && app.activeId) c.subscribe(app.activeId);

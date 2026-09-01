@@ -153,6 +153,10 @@ function runTurn(s, prompt) {
   s.working = true;
   s.killed = false;
   let sawTurnEnd = false;
+  let sawAnyEvent = false;
+  let finished = false;
+  let buf = "";
+  let errTail = "";
 
   const args = ["-p", "--output", "stream-json", "--cd", s.cwd, "--approval", s.approval, "--seat", s.seat];
   if (s.turns > 0) args.push("--resume");
@@ -171,10 +175,12 @@ function runTurn(s, prompt) {
     return;
   }
   s.child = child;
+  // A failed spawn (ENOENT etc.) destroys stdin and emits an async stream
+  // error; without a listener that unhandled error would crash the server.
+  child.stdin.on("error", () => {});
   child.stdin.write(prompt);
   child.stdin.end();
 
-  let buf = "";
   const handleLine = (line) => {
     const t = line.trim();
     if (!t) return;
@@ -185,31 +191,17 @@ function runTurn(s, prompt) {
       return; // non-event noise on stdout
     }
     if (typeof v.event !== "string") return;
+    sawAnyEvent = true;
     if (v.event === "turn_end") sawTurnEnd = true;
     if (v.event === "turn_diagnostics" && v.data && typeof v.data.model === "string") s.model = v.data.model;
     publish(journalData(s, v.event, v.data));
   };
 
-  child.stdout.on("data", (chunk) => {
-    buf += chunk.toString("utf8");
-    let i;
-    while ((i = buf.indexOf("\n")) >= 0) {
-      const line = buf.slice(0, i);
-      buf = buf.slice(i + 1);
-      handleLine(line);
-    }
-  });
-
-  let errTail = "";
-  child.stderr.on("data", (d) => {
-    errTail = (errTail + d.toString("utf8")).slice(-2000);
-  });
-
-  child.on("error", (err) => {
-    publish(journalData(s, "error", `dext spawn error: ${String(err)}`));
-  });
-
-  child.on("close", (code) => {
+  // Idempotent: normally driven by 'close'; the spawn-error path schedules a
+  // fallback because a failed spawn is not guaranteed to emit 'close'.
+  const finalize = (code) => {
+    if (finished) return;
+    finished = true;
     if (s.child === child) s.child = null;
     if (buf.trim()) {
       handleLine(buf);
@@ -225,9 +217,43 @@ function runTurn(s, prompt) {
       }
     }
     s.working = false;
-    s.turns += 1;
+    // Only arm --resume when dext actually ran (emitted events): a spawn
+    // failure must not poison the next turn with a resume of nothing.
+    if (sawAnyEvent) s.turns += 1;
     scheduleList();
+  };
+
+  child.stdout.on("data", (chunk) => {
+    buf += chunk.toString("utf8");
+    let i;
+    while ((i = buf.indexOf("\n")) >= 0) {
+      const line = buf.slice(0, i);
+      buf = buf.slice(i + 1);
+      handleLine(line);
+    }
   });
+
+  child.stderr.on("data", (d) => {
+    errTail = (errTail + d.toString("utf8")).slice(-2000);
+  });
+
+  child.on("error", (err) => {
+    publish(journalData(s, "error", `dext spawn error: ${String(err)}`));
+    setTimeout(() => finalize(null), 1000);
+  });
+
+  child.on("close", (code) => finalize(code));
+}
+
+/** SIGINT with a SIGKILL escalation if the child lingers. */
+function killChild(s) {
+  const child = s.child;
+  if (!child) return;
+  s.killed = true;
+  child.kill("SIGINT");
+  setTimeout(() => {
+    if (s.child === child) child.kill("SIGKILL");
+  }, 5000);
 }
 
 // ---------- command dispatch ----------
@@ -364,10 +390,7 @@ function handleCommand(client, frame) {
         sendError(client, "no_session", `unknown session ${frame.id}`);
         return;
       }
-      if (s.child) {
-        s.killed = true;
-        s.child.kill("SIGINT");
-      }
+      killChild(s);
       s.status = "exited";
       publish(journalData(s, "session.state", { status: "exited" }));
       return;
@@ -408,10 +431,7 @@ function handleCommand(client, frame) {
         sendError(client, "no_session", `unknown session ${frame.session}`);
         return;
       }
-      if (s.child) {
-        s.killed = true;
-        s.child.kill("SIGINT");
-      }
+      killChild(s);
       return;
     }
 

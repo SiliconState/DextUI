@@ -10,6 +10,7 @@
   let inputEl: HTMLTextAreaElement | undefined = $state();
 
   const COMMANDS = [
+    { cmd: "/approval", desc: "set dext approval profile (host)" },
     { cmd: "/compact", desc: "compact session context" },
     { cmd: "/model", desc: "show or switch model" },
     { cmd: "/todos", desc: "show the todo list" },
@@ -37,8 +38,9 @@
   // menuIdx can outlive a shrinking list (typing narrows matches); clamp before use.
   const menuCur = $derived(slashList.length === 0 ? 0 : Math.min(menuIdx, slashList.length - 1));
   const live = $derived(view.status === "live");
-  // Real hosts may not support mid-turn steering; honor the hello capability.
-  const canSteer = $derived(app.conn?.hasCap("steering") ?? false);
+  // Real hosts may not support mid-turn steering; honor the hello capability
+  // (snapshotted into reactive app.caps at phase=live).
+  const canSteer = $derived(app.caps.includes("steering"));
   const canSend = $derived(
     text.trim().length > 0 &&
       app.phase === "live" &&
@@ -47,13 +49,15 @@
       (!view.working || canSteer),
   );
   const placeholder = $derived(
-    !live
-      ? "waking session…"
-      : view.working
-        ? canSteer
-          ? "steer the agent mid-turn…"
-          : "turn running… (^c to stop)"
-        : "type a request…   / commands",
+    view.status === "exited"
+      ? "session closed"
+      : !live
+        ? "waking session…"
+        : view.working
+          ? canSteer
+            ? "steer the agent mid-turn…"
+            : "turn running… (^c to stop)"
+          : "type a request…   / commands",
   );
   const rows = $derived(Math.min(8, 1 + (text.match(/\n/g)?.length ?? 0)));
 
