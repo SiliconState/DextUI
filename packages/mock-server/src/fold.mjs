@@ -33,28 +33,30 @@ export function fold(journal) {
         blocks.push({ kind: "user", text: d.text });
         break;
       case "text_delta":
-        if (openText) openText.text += d;
+        // Only append when the open text block is still the last block — tool
+        // cards or markers in between must start a fresh block (client parity).
+        if (openText && blocks[blocks.length - 1] === openText) openText.text += d;
         else {
           openText = { kind: "text", text: d, complete: false };
           blocks.push(openText);
         }
         break;
       case "text_block_complete":
-        if (openText) {
+        if (openText && blocks[blocks.length - 1] === openText) {
           openText.text = d;
           openText.complete = true;
         } else blocks.push({ kind: "text", text: d, complete: true });
         openText = null;
         break;
       case "thinking_delta":
-        if (openThinking) openThinking.text += d;
+        if (openThinking && blocks[blocks.length - 1] === openThinking) openThinking.text += d;
         else {
           openThinking = { kind: "thinking", text: d, complete: false };
           blocks.push(openThinking);
         }
         break;
       case "thinking_block_complete":
-        if (openThinking) {
+        if (openThinking && blocks[blocks.length - 1] === openThinking) {
           openThinking.text = d;
           openThinking.complete = true;
         } else blocks.push({ kind: "thinking", text: d, complete: true });

@@ -34,6 +34,8 @@
   const slashList = $derived(
     slashOpen ? COMMANDS.filter((c) => c.cmd.startsWith(text.trim().toLowerCase())) : [],
   );
+  // menuIdx can outlive a shrinking list (typing narrows matches); clamp before use.
+  const menuCur = $derived(slashList.length === 0 ? 0 : Math.min(menuIdx, slashList.length - 1));
   const live = $derived(view.status === "live");
   const canSend = $derived(text.trim().length > 0 && app.phase === "live" && app.activeId !== "" && live);
   const placeholder = $derived(
@@ -79,17 +81,18 @@
     if (slashOpen && slashList.length > 0) {
       if (e.key === "ArrowDown") {
         e.preventDefault();
-        menuIdx = (menuIdx + 1) % slashList.length;
+        menuIdx = (menuCur + 1) % slashList.length;
         return;
       }
       if (e.key === "ArrowUp") {
         e.preventDefault();
-        menuIdx = (menuIdx - 1 + slashList.length) % slashList.length;
+        menuIdx = (menuCur - 1 + slashList.length) % slashList.length;
         return;
       }
       if (e.key === "Tab") {
         e.preventDefault();
-        complete(slashList[menuIdx].cmd);
+        const item = slashList[menuCur];
+        if (item) complete(item.cmd);
         return;
       }
     }
@@ -110,16 +113,16 @@
       {#each slashList as c, i (c.cmd)}
         <button
           data-agent-id={`composer.menu.item.${c.cmd.slice(1)}`}
-          data-state={i === menuIdx ? "cursor" : "idle"}
+          data-state={i === menuCur ? "cursor" : "idle"}
           onclick={() => complete(c.cmd)}
           onmousemove={() => (menuIdx = i)}
           class={`flex w-full items-center gap-3 px-3 py-2 text-left text-sm ${
-            i === menuIdx ? "bg-accent/15" : "hover:bg-raised"
+            i === menuCur ? "bg-accent/15" : "hover:bg-raised"
           }`}
         >
           <span class="font-mono text-accent">{c.cmd}</span>
           <span class="truncate text-xs text-dim">{c.desc}</span>
-          {#if i === menuIdx}
+          {#if i === menuCur}
             <span class="ml-auto shrink-0 rounded border border-line bg-raised px-1.5 font-mono text-[10px] text-faint">tab</span>
           {/if}
         </button>

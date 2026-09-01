@@ -29,6 +29,8 @@ export class Connection {
   private attempt = 0;
   private closedByUser = false;
   private pingTimer?: ReturnType<typeof setInterval>;
+  private reconnectTimer?: ReturnType<typeof setTimeout>;
+  private resyncPending = new Set<string>();
   private controlListeners = new Set<(e: Envelope) => void>();
 
   constructor(opts: ConnectionOpts) {
@@ -36,6 +38,8 @@ export class Connection {
   }
 
   connect(): void {
+    // A manual connect() after close() must re-arm the reconnect path.
+    this.closedByUser = false;
     this.setPhase(this.attempt === 0 ? "connecting" : "reconnecting");
     const ws = new WebSocket(this.opts.url);
     this.ws = ws;
@@ -57,13 +61,17 @@ export class Connection {
     ws.onclose = () => {
       this.clearPing();
       if (this.closedByUser) {
-        this.setPhase("closed");
+        // hello_fail already published "failed" — don't downgrade it to "closed".
+        if (this.phase !== "failed") this.setPhase("closed");
         return;
       }
       this.attempt += 1;
       const wait = Math.min(RECONNECT_MAX_MS, RECONNECT_BASE_MS * 2 ** Math.min(this.attempt, 5));
       this.setPhase("reconnecting", `retry in ${Math.round(wait / 1000)}s`);
-      setTimeout(() => this.connect(), wait);
+      this.reconnectTimer = setTimeout(() => {
+        this.reconnectTimer = undefined;
+        if (!this.closedByUser) this.connect();
+      }, wait);
     };
     ws.onerror = () => {
       // onclose follows; handled there.
@@ -73,6 +81,10 @@ export class Connection {
   close(): void {
     this.closedByUser = true;
     this.clearPing();
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = undefined;
+    }
     this.ws?.close();
   }
 
@@ -159,11 +171,16 @@ export class Connection {
       if (typeof env.seq === "number") {
         const expected = store.state.lastSeq + 1;
         if (env.seq > expected && store.state.lastSeq > 0 && env.event !== "session.snapshot") {
-          this.opts.onSeqGap?.(env.session as string, expected, env.seq);
-          // Resync of last resort: fresh snapshot.
-          this.sendRaw(cmd("session.subscribe", { id: env.session }));
+          // Resync of last resort: fresh snapshot. Guard against a flood of
+          // out-of-order events each triggering another resubscribe.
+          if (!this.resyncPending.has(env.session as string)) {
+            this.resyncPending.add(env.session as string);
+            this.opts.onSeqGap?.(env.session as string, expected, env.seq);
+            this.sendRaw(cmd("session.subscribe", { id: env.session }));
+          }
         }
       }
+      if (env.event === "session.snapshot") this.resyncPending.delete(env.session as string);
       store.apply(env);
       return;
     }

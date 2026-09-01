@@ -74,6 +74,8 @@
         return;
       }
       if (app.paletteOpen) return;
+      // Modified combos belong to the browser/app (Ctrl+A select-all, Ctrl+S save…).
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
       const t = e.target as HTMLElement | null;
       if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
       const first = pendingList[0];

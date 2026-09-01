@@ -83,12 +83,15 @@ export function ensureStarted(): void {
 export function start(token: string): void {
   app.needsToken = false;
   app.lastError = "";
+  // Retire any previous connection; its late callbacks must not clobber the new one.
+  app.conn?.close();
   const proto = location.protocol === "https:" ? "wss" : "ws";
   const c = new Connection({
     url: `${proto}://${location.host}/ws`,
     token,
     client: "dextui-web",
     onPhase: (p, detail) => {
+      if (app.conn !== c) return; // stale connection
       app.phase = p;
       app.phaseDetail = detail ?? "";
       if (p === "failed") {
@@ -106,6 +109,7 @@ export function start(token: string): void {
       }
     },
     onSessionList: (sessions) => {
+      if (app.conn !== c) return; // stale connection
       app.sessions = sessions;
       // A session we haven't seen before appeared after we asked for one: switch to it.
       if (wantNewSession) {
@@ -117,11 +121,14 @@ export function start(token: string): void {
       }
       for (const s of sessions) knownIds.add(s.id);
       if (!app.activeId && sessions.length > 0) {
-        const firstLive = sessions.find((s) => s.status === "live") ?? sessions[0];
+        // Auto-activate a live session only: waking a cold one would spawn an
+        // agent process the user never asked for. Cold sessions open on click.
+        const firstLive = sessions.find((s) => s.status === "live");
         if (firstLive) activate(firstLive.id);
       }
     },
     onControlError: (code, message) => {
+      if (app.conn !== c) return; // stale connection
       app.lastError = `${code}: ${message}`;
       pushToast("err", `${code}: ${message}`);
     },

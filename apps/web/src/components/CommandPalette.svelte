@@ -13,6 +13,18 @@
   let cursor = $state(0);
   let inputEl: HTMLInputElement | undefined = $state();
 
+  // store.state is a plain (non-reactive) object: subscribe so turn/approval
+  // actions (Stop, Once/Always/Deny) refresh while the palette is open.
+  let tick = $state(0);
+  $effect(() => {
+    const c = connection();
+    if (!c || !app.activeId) return;
+    const s = c.session(app.activeId);
+    return s.subscribe(() => {
+      tick++;
+    });
+  });
+
   interface Action {
     slug: string;
     label: string;
@@ -22,6 +34,7 @@
   }
 
   const actions = $derived.by<Action[]>(() => {
+    void tick;
     const c = connection();
     const out: Action[] = [
       { slug: "session.new", label: "New session", hint: "switches to it", group: "Session", run: newSession },

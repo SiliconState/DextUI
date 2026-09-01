@@ -6,7 +6,6 @@
   let { pending, sessionId }: { pending: PendingPermission; sessionId: string } = $props();
 
   let note = $state("");
-  let showInput = $state(false);
 
   const riskStyle: Record<string, string> = {
     low: "border-ok/40 text-ok",

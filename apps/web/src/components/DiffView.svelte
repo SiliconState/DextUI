@@ -16,27 +16,33 @@
 
   const files = $derived.by<File[]>(() => {
     const out: File[] = [];
-    let cur: File | null = null;
+    let cur = -1; // index into out; -1 = no bucket yet
     const push = (header: string): File => {
-      cur = { header, rows: [], add: 0, del: 0 };
-      out.push(cur);
-      return cur;
+      const f: File = { header, rows: [], add: 0, del: 0 };
+      out.push(f);
+      cur = out.length - 1;
+      return f;
     };
+    // Function call (not a captured let read): sidesteps TS closure narrowing.
+    const current = (): File | undefined => out[cur];
     for (const line of text.split("\n")) {
       if (line.startsWith("diff --git")) {
         const m = /^diff --git a\/(\S+) b\/\S+$/.exec(line);
-        push(m ? m[1] : line);
+        push(m?.[1] ?? line);
         continue;
       }
       if (line.startsWith("--- ") || line.startsWith("+++ ")) {
-        if (!cur || cur.rows.length === 0) {
+        const f0 = current();
+        if (!f0) {
           const m = /^[+++-]{3} (?:a\/)?(\S+)/.exec(line);
-          if (m && (!cur || cur.header === "changes")) push(m[1]);
+          push(m?.[1] ?? "changes");
+        } else if (f0.rows.length === 0 && f0.header === "changes") {
+          const m = /^[+++-]{3} (?:a\/)?(\S+)/.exec(line);
+          if (m?.[1]) f0.header = m[1];
         }
         continue;
       }
-      if (!cur) push("changes");
-      const f = cur as File;
+      const f = current() ?? push("changes");
       if (line.startsWith("@@")) f.rows.push({ kind: "hunk", text: line });
       else if (line.startsWith("+")) {
         f.rows.push({ kind: "add", text: line });

@@ -33,7 +33,7 @@
     for (const b of view.blocks) {
       if (b.kind === "tool") tool++;
       else if (b.kind === "thinking") thinking++;
-      else if (b.kind === "marker" && (b.level === "warn" || b.level === "err" || b.level === "error")) warn++;
+      else if (b.kind === "marker" && (b.level === "warn" || b.level === "error")) warn++;
     }
     return { tool, thinking, warn };
   });
@@ -48,7 +48,7 @@
         if (filter === "tool") return b.kind === "tool";
         if (filter === "text") return b.kind === "text" || b.kind === "user";
         if (filter === "thinking") return b.kind === "thinking";
-        return b.kind === "marker" && (b.level === "warn" || b.level === "err" || b.level === "error");
+        return b.kind === "marker" && (b.level === "warn" || b.level === "error");
       }),
   );
 
@@ -78,13 +78,14 @@
     if (container) container.scrollTop = container.scrollHeight;
   }
 
-  const filters: Array<{ id: typeof filter; label: string; n?: number }> = [
+  // Derived, not a plain const: chip counts must follow the live block list.
+  const filters = $derived.by((): Array<{ id: typeof filter; label: string; n?: number }> => [
     { id: "all", label: "All", n: view.blocks.length },
     { id: "text", label: "Text" },
     { id: "tool", label: "Tools", n: counts.tool },
     { id: "thinking", label: "Thinking", n: counts.thinking },
     { id: "warn", label: "Flags", n: counts.warn },
-  ];
+  ]);
 </script>
 
 <div

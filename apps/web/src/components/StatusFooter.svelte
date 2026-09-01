@@ -29,7 +29,12 @@
     };
   });
 
-  const ctxPct = $derived(Math.min(100, Math.round(((view.contextChars ?? 0) / 200_000) * 100)));
+  // Prefer the provider-reported context window (tokens → ~4 chars/token); fall
+  // back to a 200k-char heuristic when diagnostics haven't arrived yet.
+  const ctxWindowChars = $derived(
+    view.diagnostics?.context_window ? view.diagnostics.context_window * 4 : 200_000,
+  );
+  const ctxPct = $derived(Math.min(100, Math.round(((view.contextChars ?? 0) / ctxWindowChars) * 100)));
 </script>
 
 <div

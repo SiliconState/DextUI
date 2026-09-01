@@ -24,7 +24,7 @@ function argValue(name, fallback) {
 const PORT = Number(argValue("port", process.env.MOCK_PORT ?? 8787));
 const TOKEN = argValue("token", process.env.MOCK_TOKEN ?? "dev-token");
 const APPROVAL_TIMEOUT_MS = Number(argValue("approval-timeout-ms", process.env.MOCK_APPROVAL_TIMEOUT_MS ?? 120000));
-const STATIC_DIR = argValue("static", path.join(repoRoot, "apps", "web", "dist"));
+const STATIC_DIR = path.resolve(argValue("static", path.join(repoRoot, "apps", "web", "dist")));
 const CAPABILITIES = [
   "approvals",
   "steering",
@@ -107,13 +107,14 @@ function scheduleList() {
       event: "session.list",
       data: { sessions: [...sessions.values()].map(metaOf) },
     });
-    for (const c of clients) c.send(msg);
+    for (const c of clients) if (c.phase === "live") c.send(msg);
   }, 60);
 }
 
 function publish(env) {
   const line = JSON.stringify(env);
-  for (const c of clients) if (c.subs.has(env.session)) c.send(line);
+  // Never leak session data to sockets that haven't completed hello yet.
+  for (const c of clients) if (c.phase === "live" && c.subs.has(env.session)) c.send(line);
   scheduleList();
 }
 
@@ -231,6 +232,14 @@ function applyDeny(s) {
   }
 }
 
+/** Auto-deny every dangling approval (interrupt / session close). */
+function flushPending(s) {
+  for (const rid of [...s.pending.keys()]) {
+    s.pending.delete(rid);
+    publish(journalData(s, "permission.timeout", { request_id: rid }));
+  }
+}
+
 function resolveApproval(client, s, requestId, choice) {
   const p = s.pending.get(requestId);
   if (!p) {
@@ -309,9 +318,11 @@ function handleCommand(client, frame) {
           return;
         }
         if (s.status === "cold") {
-          publish(journalData(s, "session.state", { status: "starting" }));
           s.status = "starting";
+          publish(journalData(s, "session.state", { status: "starting" }));
           setTimeout(() => {
+            // The session may have been closed (back to cold) while starting.
+            if (s.status !== "starting") return;
             s.status = "live";
             publish(journalData(s, "session.state", { status: "live" }));
           }, 250);
@@ -366,7 +377,9 @@ function handleCommand(client, frame) {
       s.working = false;
       s.plan = null;
       s.status = "cold";
-      scheduleList();
+      flushPending(s);
+      // Subscribers track status from events, not the list — tell them.
+      publish(journalData(s, "session.state", { status: "cold" }));
       return;
     }
 
@@ -423,6 +436,8 @@ function handleCommand(client, frame) {
         s.plan = null;
         publish(journalData(s, "interrupted"));
       }
+      // A dead turn must not leave approval cards hanging.
+      flushPending(s);
       return;
     }
 
@@ -531,8 +546,9 @@ const server = http.createServer((req, res) => {
   }
   // static PWA
   const rel = pathName === "/" ? "index.html" : pathName.slice(1);
-  const file = path.join(STATIC_DIR, rel);
-  if (!file.startsWith(STATIC_DIR) || !fs.existsSync(file) || !fs.statSync(file).isFile()) {
+  const file = path.resolve(STATIC_DIR, rel);
+  // startsWith needs the separator: "/x/dist-evil" starts with "/x/dist".
+  if (!file.startsWith(STATIC_DIR + path.sep) || !fs.existsSync(file) || !fs.statSync(file).isFile()) {
     res.writeHead(404, { "content-type": "text/plain" });
     res.end("not found (build apps/web to serve the PWA)");
     return;
@@ -568,7 +584,8 @@ server.on("upgrade", (req, socket, head) => {
     send: (text) => socket.write(encodeFrame(OP_TEXT, Buffer.from(text, "utf8"))),
     close: (code) => {
       try {
-        socket.end(encodeFrame(0x8, Buffer.from([0, code & 0xff])));
+        // Close status code is a big-endian u16 (RFC 6455 §5.5.1).
+        socket.end(encodeFrame(0x8, Buffer.from([(code >> 8) & 0xff, code & 0xff])));
       } catch {
         /* already gone */
       }

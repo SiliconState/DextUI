@@ -116,6 +116,8 @@ export class SessionStore {
           approvalProfile: s.meta.approval_profile,
           working: false,
           compacting: false,
+          failed: false,
+          turnStartedAt: undefined,
         });
         return;
       }
@@ -133,6 +135,7 @@ export class SessionStore {
         return;
       case "turn_end": {
         const t = d as TurnEndEvent;
+        this.sealOpenBlocks();
         this.bump({
           working: false,
           failed: t.failed,
@@ -142,6 +145,7 @@ export class SessionStore {
         return;
       }
       case "interrupted":
+        this.sealOpenBlocks();
         this.bump({ working: false, turnStartedAt: undefined });
         this.pushBlock({ kind: "marker", level: "warn", text: "Interrupted." });
         return;
@@ -338,6 +342,13 @@ export class SessionStore {
         // http_retry, external_telemetry, runtime_control*, login_input_mode,
         // thinking_effort_changed, reasoning_mode_changed: surfaced later in the inspector.
         return;
+    }
+  }
+
+  /** End of turn (or interrupt): no streaming block may stay open. */
+  private sealOpenBlocks(): void {
+    for (const b of this.state.blocks) {
+      if ((b.kind === "text" || b.kind === "thinking") && !b.complete) b.complete = true;
     }
   }
 
