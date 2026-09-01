@@ -1,0 +1,13 @@
+{
+  "name": "@dextui/agentlinkd",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Real AgentLink v1 host: bridges dext one-shot processes to the DextUI web client.",
+  "bin": {
+    "agentlinkd": "./src/server.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

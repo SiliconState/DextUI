@@ -12,6 +12,7 @@
     "typecheck": "npm run typecheck -w @dextui/protocol && npm run typecheck -w @dextui/client && npm run typecheck -w @dextui/web",
     "dev": "npm run dev -w @dextui/web",
     "mock": "node packages/mock-server/src/server.mjs",
+    "serve": "node packages/agentlinkd/src/server.mjs",
     "smoke": "node packages/mock-server/scripts/smoke.mjs"
   },
   "devDependencies": {

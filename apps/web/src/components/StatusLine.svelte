@@ -100,8 +100,8 @@
   {/if}
   <span class="sl-right">
     <button class="act" data-agent-id="finder.open" onclick={() => (app.paletteOpen = true)} title="finder (⌘K)">⌘k</button>
-    <button class="act" data-agent-id="theme.toggle" onclick={toggleTheme} title="toggle theme">
-      {app.theme === "dark" ? "light" : "dark"}
+    <button class="act" data-agent-id="theme.toggle" onclick={toggleTheme} title="cycle theme: dark → light → system">
+      theme:{app.theme}
     </button>
     <button class="act" data-agent-id="pair.reset" onclick={rePair} title="clear token and re-pair">re-pair</button>
   </span>

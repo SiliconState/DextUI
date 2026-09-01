@@ -37,9 +37,23 @@
   // menuIdx can outlive a shrinking list (typing narrows matches); clamp before use.
   const menuCur = $derived(slashList.length === 0 ? 0 : Math.min(menuIdx, slashList.length - 1));
   const live = $derived(view.status === "live");
-  const canSend = $derived(text.trim().length > 0 && app.phase === "live" && app.activeId !== "" && live);
+  // Real hosts may not support mid-turn steering; honor the hello capability.
+  const canSteer = $derived(app.conn?.hasCap("steering") ?? false);
+  const canSend = $derived(
+    text.trim().length > 0 &&
+      app.phase === "live" &&
+      app.activeId !== "" &&
+      live &&
+      (!view.working || canSteer),
+  );
   const placeholder = $derived(
-    !live ? "waking session…" : view.working ? "steer the agent mid-turn…" : "type a request…   / commands",
+    !live
+      ? "waking session…"
+      : view.working
+        ? canSteer
+          ? "steer the agent mid-turn…"
+          : "turn running… (^c to stop)"
+        : "type a request…   / commands",
   );
   const rows = $derived(Math.min(8, 1 + (text.match(/\n/g)?.length ?? 0)));
 
@@ -66,7 +80,7 @@
     const sid = app.activeId;
     const t = text;
     if (t.trim().startsWith("/")) c.slash(sid, t.trim());
-    else if (view.working) c.steer(sid, t);
+    else if (view.working && canSteer) c.steer(sid, t);
     else c.prompt(sid, t);
     localStorage.removeItem(`dextui.draft.${sid}`);
     text = "";
@@ -144,12 +158,12 @@
       {/if}
       <button
         class="act accent"
-        data-agent-id={view.working ? "composer.steer" : "composer.send"}
+        data-agent-id={view.working && canSteer ? "composer.steer" : "composer.send"}
         data-state={canSend ? "ready" : "disabled"}
         onclick={send}
         disabled={!canSend}
       >
-        [⏎] {view.working ? "steer" : "send"}
+        [⏎] {view.working && canSteer ? "steer" : "send"}
       </button>
     </span>
   </div>

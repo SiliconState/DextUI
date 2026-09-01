@@ -39,7 +39,7 @@
     const c = connection();
     const out: Action[] = [
       { slug: "session.new", label: "new session", hint: "switches to it", group: "sess", run: newSession },
-      { slug: "theme.toggle", label: `theme: ${app.theme === "dark" ? "light" : "dark"}`, group: "app", run: toggleTheme },
+      { slug: "theme.toggle", label: `theme: ${app.theme} → ${app.theme === "dark" ? "light" : app.theme === "light" ? "system" : "dark"}`, group: "app", run: toggleTheme },
       { slug: "pair.reset", label: "re-pair with agent host", hint: "clears token", group: "app", run: rePair },
     ];
     if (c && app.activeId) {

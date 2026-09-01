@@ -3,7 +3,7 @@
 import { Connection, type ConnPhase } from "@dextui/client";
 import type { SessionMeta } from "@dextui/protocol";
 
-export type Theme = "dark" | "light";
+export type Theme = "dark" | "light" | "system";
 export interface Toast {
   id: number;
   kind: "info" | "ok" | "warn" | "err";
@@ -44,12 +44,20 @@ export function dismissToast(id: number): void {
   if (i >= 0) app.toasts.splice(i, 1);
 }
 
-function applyTheme(t: Theme): void {
-  document.documentElement.dataset.theme = t;
+const sysDark = matchMedia("(prefers-color-scheme: dark)");
+
+function resolveTheme(t: Theme): "dark" | "light" {
+  if (t === "system") return sysDark.matches ? "dark" : "light";
+  return t;
 }
 
+function applyTheme(t: Theme): void {
+  document.documentElement.dataset.theme = resolveTheme(t);
+}
+
+/** dark → light → system → dark */
 export function toggleTheme(): void {
-  app.theme = app.theme === "dark" ? "light" : "dark";
+  app.theme = app.theme === "dark" ? "light" : app.theme === "light" ? "system" : "dark";
   localStorage.setItem("dextui.theme", app.theme);
   applyTheme(app.theme);
 }
@@ -71,10 +79,14 @@ export function rePair(): void {
 export function ensureStarted(): void {
   if (started) return;
   started = true;
-  const stored = (localStorage.getItem("dextui.theme") as Theme | null) ?? null;
-  const theme = stored ?? (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
+  const stored = localStorage.getItem("dextui.theme");
+  const theme: Theme = stored === "dark" || stored === "light" || stored === "system" ? stored : "system";
   app.theme = theme;
   applyTheme(theme);
+  // Follow OS scheme changes live while in system mode.
+  sysDark.addEventListener("change", () => {
+    if (app.theme === "system") applyTheme("system");
+  });
   const token = localStorage.getItem("dextui.token");
   if (token) start(token);
   else app.needsToken = true;
