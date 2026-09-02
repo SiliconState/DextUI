@@ -12,7 +12,7 @@ Design rules:
 ## Transport
 
 - WebSocket at `/ws` (primary, bidirectional — approvals require it).
-- REST on the same origin: `GET /health`, `GET /sessions`, `GET /sessions/:id/todos`, `GET /__agent`. The host also serves the PWA statically from `/`, so API and app share an origin and there is no CORS surface. The app shell and static assets are **unauthenticated** (they contain no data); every data endpoint and the WebSocket require the pairing token.
+- REST on the same origin: `GET /health`, `GET /sessions`, `GET /sessions/:id`, `GET /sessions/:id/todos`, `GET /__agent`. The host also serves the PWA statically from `/`, so API and app share an origin and there is no CORS surface. The app shell and static assets are **unauthenticated** (they contain no data); every data endpoint and the WebSocket require the pairing token.
 - SSE fallback (`GET /sessions/:id/stream?since_seq=N`) is reserved for read-only tailing; not required for conformance v1.
 
 ## Envelope
@@ -48,7 +48,7 @@ Commands are fire-and-forget; effects arrive as events. Only two commands have d
 
 | event | data | meaning |
 |---|---|---|
-| `hello_ok` | `{server, version, protocol, capabilities[], sessions[], model_catalog?, effort_options?}` | auth accepted; includes session list and optional host controls |
+| `hello_ok` | `{server, version, protocol, instance?, capabilities[], sessions[], model_catalog?, effort_options?, commands?}` | auth accepted; includes session list and optional host controls |
 | `hello_fail` | `{reason}` | auth or version rejected; socket closes |
 | `session.list` | `{sessions[]}` | pushed whenever the list changes |
 | `pong` | `{}` | reply to `ping` |
@@ -57,6 +57,10 @@ Commands are fire-and-forget; effects arrive as events. Only two commands have d
 `SessionMeta`: `{id, title, cwd, agent:{name,version}, model?, provider?, thinking_effort?, model_locked?, approval_profile?, status:"cold"|"starting"|"live", created_at, updated_at, last_seq, unread, pending_permissions}`. `title` is host-derived from the first prompt (60 chars); `session.rename` overrides.
 
 `model_catalog` is grouped as `[{provider, label?, models[]}]`; `effort_options` contains host-supported values such as `off|minimal|low|medium|high|xhigh|max`. Clients expose these controls only when the matching capability is advertised.
+
+`instance` is a random string fixed for the lifetime of the host process. A client that reconnects and sees a **different** `instance` must treat every local session projection as stale: drop its stores and resubscribe without `since_seq` (a restarted host may reuse session ids and even the same tail `seq`). The same `instance` means seq-resume is safe. Hosts that omit `instance` are treated as restarted on every reconnect.
+
+`commands` is the list of slash commands the host itself handles, `[{cmd, desc}]`, and drives the client's `/` completion menu. When absent, clients may fall back to deriving a list from `slash.*` capabilities.
 
 ## Data plane (sequenced, journaled)
 
@@ -131,7 +135,7 @@ Tag and payload are byte-identical to dext's `stream-json` output (unit variants
 
 ## Flows
 
-**Connect / resume.** `hello` → `hello_ok` (session list). For each open session: `session.subscribe {since_seq: lastSeq}` → host replays the gap from its journal, or sends a fresh `session.snapshot` if the journal no longer reaches that seq. After replay, live tail.
+**Connect / resume.** `hello` → `hello_ok` (session list, `instance`). For each open session: `session.subscribe {since_seq: lastSeq}` → host replays the gap from its journal, or sends a fresh `session.snapshot` if the journal no longer reaches that seq. After replay, live tail. If `hello_ok.instance` differs from the previous connection's, the client discards its projections and subscribes without `since_seq`.
 
 **Turn.** `prompt.submit` → `user_message`, `turn_start`, deltas/blocks/tool events, `usage_update`(s), `turn_end`. `working` is true between `turn_start` and `turn_end`/`interrupted`.
 
@@ -149,8 +153,13 @@ Advertised in `hello_ok`: `approvals`, `steering`, `interrupt`, `slash`, `multi_
 
 ## Agent surface
 
-- `GET /__agent` (auth): bounded (<4 KiB) scene digest — per session: id, title, status, working, pending permission ids/tools/summaries, last event age. Plus `actions[]`: the currently valid commands in machine form. An agent can drive the whole system from this plus the event stream, without parsing a single pixel.
+- `GET /__agent` (auth): bounded (<4 KiB) scene digest, shape `AgentDigest` in `packages/protocol`:
+  `{server, instance?, now, capabilities[], sessions[], actions[], sessions_omitted?}`. Each session entry is `{id, title, status, working, model?, cwd?, last_seq, last_event_age_ms?, pending:[{request_id, tool, summary}]}`; `actions[]` lists the commands that are valid **right now** in machine form, e.g. `{cmd:"prompt.submit", session}`, `{cmd:"interrupt", session}`, `{cmd:"permission.respond", session, request_id}`, `{cmd:"session.open", session}` (cold), `{cmd:"session.open", note:"new session"}`. Hosts drop the oldest sessions to stay under the cap and report the count in `sessions_omitted`. An agent can drive the whole system from this plus the event stream, without parsing a single pixel.
 - Every interactive DOM element in the reference client carries a stable `data-agent-id` (e.g. `approval.<request_id>.once`, `composer.send`, `session.<id>.open`) and regions carry `data-state`, so browser-automation packs can act deterministically.
+
+## Todos
+
+`GET /sessions/:id/todos` (auth; advertised by `todos_read`) returns `TodosResponse`: `{session, source:"session"|"project"|"none", path?, updated_at?, items:[{text, status}]}`. `status` is `pending|in_progress|completed`. The list is read from dext's own todo files — the session-scoped `DEXT.todo.json` when the host can map the session to its dext state directory, else the project-level `<cwd>/DEXT.todo.json`, else `source:"none"` with an empty list. Parsing mirrors dext's TUI reader: items with empty `text` are dropped, unknown statuses become `pending`, and oversized or malformed files yield `none`. Clients refresh on `turn_end`; there is no push event.
 
 ## Conformance
 
