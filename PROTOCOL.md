@@ -12,7 +12,7 @@ Design rules:
 ## Transport
 
 - WebSocket at `/ws` (primary, bidirectional — approvals require it).
-- REST on the same origin: `GET /health`, `GET /sessions`, `GET /sessions/:id`, `GET /sessions/:id/todos`, `GET /__agent`. The host also serves the PWA statically from `/`, so API and app share an origin and there is no CORS surface. The app shell and static assets are **unauthenticated** (they contain no data); every data endpoint and the WebSocket require the pairing token.
+- REST on the same origin: `GET /health`, `GET /sessions`, `GET /sessions/:id`, `GET /sessions/:id/todos`, `GET /sessions/:id/file`, `GET /__agent`. The host also serves the PWA statically from `/`, so API and app share an origin and there is no CORS surface. The app shell and static assets are **unauthenticated** (they contain no data); every data endpoint and the WebSocket require the pairing token.
 - SSE fallback (`GET /sessions/:id/stream?since_seq=N`) is reserved for read-only tailing; not required for conformance v1.
 
 ## Envelope
@@ -128,8 +128,8 @@ Tool cards are keyed by `call_id`, and `name`/`summary` are **sticky**: an event
 | `session.rename` | `{id, title}` | |
 | `session.configure` | `{id, provider?, model?, thinking_effort?}` | idle-only. Model requires provider+model and may be fresh-session-only; effort applies to the next turn. Success emits `session.configured`; rejection emits control `error` |
 | `session.close` | `{id}` | stop the child; durable state remains, session goes `cold` |
-| `prompt.submit` | `{session, text}` | new turn; host journals `user_message` then the turn stream |
-| `steering.inject` | `{session, text}` | mid-turn input (dext steering) |
+| `prompt.submit` | `{session, text}` | new turn; host journals `user_message` then the turn stream. Sent while a turn runs on a queueing host → treated as steering (queued for the turn boundary) |
+| `steering.inject` | `{session, text}` | mid-turn input. Hosts with a live steering channel inject in-stream; queueing hosts (agentlinkd) ack with a `steering_received` journal event and deliver the text automatically as the next turn's prompt |
 | `interrupt` | `{session}` | soft cancel → `interrupted`; hard kill is `session.close` |
 | `permission.respond` | `{session, request_id, choice:"once"|"always"|"deny", note?}` | resolves one pending request |
 | `slash` | `{session, raw}` | forwarded verbatim into dext's slash handler; output returns as `slash`/`structured_slash` events |
@@ -151,7 +151,7 @@ Tool cards are keyed by `call_id`, and `name`/`summary` are **sticky**: an event
 
 ## Capabilities
 
-Advertised in `hello_ok`: `approvals`, `steering`, `interrupt`, `slash`, `multi_session`, `usage`, `thinking`, `model_select`, `effort_select`, `todos_read`, `checkpoints`, `seats`, `packs`, `push`. A host without `approvals` never sends `permission.request`; a client without approval UI must not subscribe to sessions that require them. Model/effort controls require both their capability and option data. Extensions are namespaced: `x-<host>.<thing>`.
+Advertised in `hello_ok`: `approvals`, `steering`, `interrupt`, `slash`, `multi_session`, `usage`, `thinking`, `model_select`, `effort_select`, `todos_read`, `files_read`, `checkpoints`, `seats`, `packs`, `push`. A host without `approvals` never sends `permission.request`; a client without approval UI must not subscribe to sessions that require them. Model/effort controls require both their capability and option data. Extensions are namespaced: `x-<host>.<thing>`.
 
 ## Agent surface
 
@@ -162,6 +162,10 @@ Advertised in `hello_ok`: `approvals`, `steering`, `interrupt`, `slash`, `multi_
 ## Todos
 
 `GET /sessions/:id/todos` (auth; advertised by `todos_read`) returns `TodosResponse`: `{session, source:"session"|"project"|"none", path?, updated_at?, items:[{text, status}]}`. `status` is `pending|in_progress|completed`. The list is read from dext's own todo files — the session-scoped `DEXT.todo.json` when the host can map the session to its dext state directory, else the project-level `<cwd>/DEXT.todo.json`, else `source:"none"` with an empty list. Parsing mirrors dext's TUI reader: items with empty `text` are dropped, unknown statuses become `pending`, and oversized or malformed files yield `none`. Clients refresh on `turn_end`; there is no push event.
+
+## Session files
+
+`GET /sessions/:id/file?p=<relative-path>` (auth; advertised by `files_read`) serves an image the session's turn produced from its working tree: png/jpg/jpeg/gif/webp/svg only, ≤20 MiB, `Cache-Control: private, no-store`, served with `nosniff` and a sandboxing CSP (SVG can carry scripts when navigated directly). The path is resolved against the session `cwd` and confined with `realpath` on both sides — symlink escapes, traversal, non-images, and oversized files return `404`. Read-only by design: it exists so clients can render `![alt](path)` output inline.
 
 ## Conformance
 

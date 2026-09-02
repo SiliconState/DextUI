@@ -191,8 +191,9 @@ function usage(inTok, outTok) {
 
 function echoPlan(text) {
   // Rich-rendering demo: prompt mentioning markdown/table/demo returns real
-  // structured markdown so the web client's table/list/link rendering is
-  // verifiable end-to-end against a live stream.
+  // structured markdown plus live ```chart fences, so the web client's
+  // table/list/link/chart rendering is verifiable end-to-end against a live
+  // stream.
   if (/\b(markdown|table|demo)\b/i.test(text)) return demoPlan();
   return [
     { event: "turn_start", delay: 5 },
@@ -245,6 +246,22 @@ Why it matters:
 
 \`\`\`rust
 fn demo() -> &'static str { "code fences stay monospace" }
+\`\`\`
+
+## Charts, not ASCII
+
+A \`\`\`chart fence carrying a JSON spec renders as a real SVG — bar · hbar · line · spark · donut:
+
+\`\`\`chart
+{"type":"bar","title":"Build minutes by task","labels":["lint","test","bundle"],"values":[42,118,63],"unit":"m"}
+\`\`\`
+
+\`\`\`chart
+{"type":"donut","title":"Where the tokens went","labels":["tool output","reasoning","answer"],"values":[52,31,17]}
+\`\`\`
+
+\`\`\`chart
+{"type":"spark","values":[3,7,6,11,9,14,12,18]}
 \`\`\`
 
 Done.`;
@@ -606,7 +623,7 @@ function handleCommand(client, frame) {
         sendError(client, "not_running", "no turn in flight to steer");
         return;
       }
-      publish(journalData(s, "steering_received", { messages: 1, preview: String(frame.text ?? "").slice(0, 80) }));
+      publish(journalData(s, "steering_received", { messages: [String(frame.text ?? "")], preview: String(frame.text ?? "").slice(0, 80) }));
       return;
     }
 

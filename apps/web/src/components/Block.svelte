@@ -7,7 +7,7 @@
   import Markdown from "./Markdown.svelte";
   import Diff from "./Diff.svelte";
 
-  let { block, onInspect }: { block: Block; onInspect?: (b: Block) => void } = $props();
+  let { block, onInspect, sessionId = "" }: { block: Block; onInspect?: (b: Block) => void; sessionId?: string } = $props();
 
   function looksLikeDiff(t: string): boolean {
     return /^[-+]{3} |^@@ |^diff --git /m.test(t);
@@ -51,7 +51,7 @@
   </div>
 {:else if block.kind === "text"}
   <div class="b-text" data-agent-id="block.text">
-    <Markdown src={block.text} />
+    <Markdown src={block.text} {sessionId} />
     {#if !block.complete}<span class="blink cursor">▊</span>{/if}
     <button class="act hover-act" data-agent-id="block.text.copy" onclick={() => copyText(block.text, "copied")}>copy</button>
   </div>

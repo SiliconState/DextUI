@@ -67,6 +67,8 @@ const EFFORT_OPTIONS = ["off", "minimal", "low", "medium", "high", "xhigh", "max
 const EFFORTS = new Set(EFFORT_OPTIONS);
 const MAX_PROMPT_CHARS = 1_000_000;
 const MAX_STDOUT_BUFFER = 16 * 1024 * 1024;
+const STEERING_MAX_MESSAGES = 10;
+const STEERING_MAX_CHARS = 100_000;
 
 if (!Number.isInteger(PORT) || PORT < 1 || PORT > 65535) throw new Error(`invalid --port '${PORT}'`);
 if (!TOKEN) throw new Error("pairing token must not be empty");
@@ -187,6 +189,9 @@ if (DEFAULT_MODEL.provider && DEFAULT_MODEL.model) {
 const CAPABILITIES = [
   "multi_session",
   "interrupt",
+  // Queue-next-turn steering: input sent mid-turn is acked immediately and
+  // delivered as the next turn's prompt (one-shot dext has no live stdin).
+  "steering",
   "usage",
   "thinking",
   "effort_select",
@@ -195,6 +200,7 @@ const CAPABILITIES = [
   "slash.help",
   "slash.approval",
   "todos_read",
+  "files_read",
 ];
 
 // Host-handled slash commands, advertised in hello_ok so the composer's
@@ -234,6 +240,7 @@ function makeSession({ cwd, approval }) {
     seq: 0,
     journal: [],
     pending: new Map(), // always empty: approvals live in dext's own policy
+    steeringQueue: [],
     turns: 0,
     child: null,
     killed: false,
@@ -286,6 +293,7 @@ function indexEntryOf(s) {
     thinkingEffort: s.thinkingEffort,
     modelLocked: s.modelLocked,
     seat: s.seat,
+    ...(s.steeringQueue.length > 0 ? { steeringQueue: [...s.steeringQueue] } : {}),
     turns: s.turns,
     createdAt: s.createdAt,
     updatedAt: tail?.ts ?? s.createdAt,
@@ -412,6 +420,9 @@ function restoreSessions() {
       thinkingEffort: EFFORTS.has(e.thinkingEffort) ? e.thinkingEffort : "medium",
       modelLocked: !!e.modelLocked,
       seat: typeof e.seat === "string" && e.seat ? e.seat : `dextui-${crypto.randomBytes(4).toString("hex")}`,
+      steeringQueue: Array.isArray(e.steeringQueue)
+        ? e.steeringQueue.filter((t) => typeof t === "string").slice(0, STEERING_MAX_MESSAGES)
+        : [],
       status: "cold",
       working: false,
       turnStartedAt: null,
@@ -637,6 +648,18 @@ function runTurn(s, prompt) {
       }));
       publish(journalData(s, "turn_end", turnEndData));
     }
+    // Turn boundary: queued steering auto-starts the next turn — the user
+    // never has to stop the session to be heard. Skipped when the session was
+    // closed or the turn was interrupted; the queue survives for the next
+    // prompt instead.
+    if (sawTurnEnd && s.status === "live" && !s.killed && s.steeringQueue.length > 0) {
+      const text = s.steeringQueue.join("\n\n");
+      s.steeringQueue = [];
+      persistIndex();
+      publish(journalData(s, "user_message", { text }));
+      runTurn(s, text);
+      return;
+    }
     persistIndex();
     scheduleList();
   };
@@ -697,6 +720,19 @@ function killChild(s, interrupted = true) {
   }, 5000);
 }
 
+// Mid-turn steering: one-shot dext children have no live stdin, so input that
+// arrives while a turn runs is queued here and delivered automatically as the
+// next turn's prompt at the turn boundary. Journaled as steering_received so
+// every subscribed client sees the ack immediately.
+function queueSteering(s, text) {
+  const total = s.steeringQueue.reduce((n, t) => n + t.length, 0) + text.length;
+  if (s.steeringQueue.length >= STEERING_MAX_MESSAGES || total > STEERING_MAX_CHARS) return false;
+  s.steeringQueue.push(text);
+  persistIndex();
+  publish(journalData(s, "steering_received", { messages: [text], preview: text.slice(0, 80) }));
+  return true;
+}
+
 /** Wake a cold session: starting -> live, journaled so reconnecting clients
  *  see the same transition. The dext seat is durable; waking needs no child. */
 function wakeSession(s) {
@@ -725,8 +761,10 @@ const HOST_HELP = [
   "  /approval <profile>   set this session's dext approval profile",
   `                        (${[...APPROVALS].join(" | ")}) — applies from the next turn`,
   "",
-  "everything else runs inside dext itself. steering and interactive",
-  "approvals need the upstream dext bridge and are not yet available.",
+  "steering: input sent while a turn runs is queued and delivered",
+  "automatically as the next turn — no stopping required (^c keeps it queued).",
+  "interactive approvals still need the upstream dext bridge; dext's",
+  "--approval profile governs tool policy.",
 ].join("\n");
 
 function handleSlash(client, s, raw) {
@@ -935,21 +973,51 @@ function handleCommand(client, frame) {
         return;
       }
       if (s.working) {
-        sendError(client, "busy", "a turn is already running; interrupt it first");
+        // A prompt sent mid-turn is steering: queue it for the turn boundary.
+        if (!queueSteering(s, frame.text)) {
+          sendError(client, "busy", "steering queue is full (10 messages / 100k chars); interrupt or wait");
+        }
         return;
       }
-      if (s.status === "cold") wakeSession(s);
-      publish(journalData(s, "user_message", { text: frame.text }));
-      if (s.title === "New session") {
-        s.title = frame.text.slice(0, 60);
+      let text = frame.text;
+      if (s.steeringQueue.length > 0) {
+        // Queued steering that missed its boundary (interrupt/crash/restart)
+        // rides with the next real prompt instead of being lost.
+        text = [...s.steeringQueue, frame.text].join("\n\n");
+        s.steeringQueue = [];
         persistIndex();
       }
-      runTurn(s, frame.text);
+      if (s.status === "cold") wakeSession(s);
+      publish(journalData(s, "user_message", { text }));
+      if (s.title === "New session") {
+        s.title = text.slice(0, 60);
+        persistIndex();
+      }
+      runTurn(s, text);
       return;
     }
 
     case "steering.inject": {
-      sendError(client, "unsupported", "steering needs the upstream dext bridge (one-shot turns have no live stdin)");
+      const s = sessions.get(frame.session);
+      if (!s) {
+        sendError(client, "no_session", `unknown session ${frame.session}`);
+        return;
+      }
+      if (typeof frame.text !== "string" || !frame.text.trim()) {
+        sendError(client, "bad_request", "text required");
+        return;
+      }
+      if (frame.text.length > MAX_PROMPT_CHARS) {
+        sendError(client, "bad_request", `text exceeds ${MAX_PROMPT_CHARS} characters`);
+        return;
+      }
+      if (!s.working && s.steeringQueue.length === 0) {
+        sendError(client, "not_working", "no turn in flight; send a prompt instead");
+        return;
+      }
+      if (!queueSteering(s, frame.text.trim())) {
+        sendError(client, "busy", "steering queue is full (10 messages / 100k chars); interrupt or wait");
+      }
       return;
     }
 
@@ -1168,6 +1236,39 @@ function todosFor(s) {
   return { session: s.id, source: "none", items: [] };
 }
 
+// ---------- session files (GET /sessions/:id/file?p=rel) ----------
+
+const FILE_MAX_BYTES = 20 * 1024 * 1024;
+const FILE_MIME = {
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".gif": "image/gif",
+  ".webp": "image/webp",
+  ".svg": "image/svg+xml",
+};
+
+// Resolve a session-relative path to a servable image. Confined to the
+// session's cwd with realpath on both sides, so a symlink (in or out of the
+// tree) cannot escape it; size-capped and MIME-allowlisted. Read-only:
+// this exists so the UI can show charts/images a turn produced.
+function sessionFile(s, rel) {
+  if (typeof rel !== "string" || !rel || rel.length > 1024 || rel.includes("\0")) return null;
+  try {
+    const resolved = path.resolve(s.cwd, rel);
+    if (!resolved.startsWith(s.cwd + path.sep)) return null;
+    const real = fs.realpathSync(resolved);
+    if (!real.startsWith(fs.realpathSync(s.cwd) + path.sep)) return null;
+    const st = fs.statSync(real);
+    if (!st.isFile() || st.size === 0 || st.size > FILE_MAX_BYTES) return null;
+    const mime = FILE_MIME[path.extname(real).toLowerCase()];
+    if (!mime) return null;
+    return { real, mime };
+  } catch {
+    return null;
+  }
+}
+
 const server = http.createServer((req, res) => {
   const pathName = new URL(req.url, "http://localhost").pathname;
   if (pathName === "/health") {
@@ -1202,6 +1303,25 @@ const server = http.createServer((req, res) => {
     if (parts.length === 3 && parts[2] === "todos") {
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify(todosFor(s)));
+      return;
+    }
+    if (parts.length === 3 && parts[2] === "file") {
+      const hit = sessionFile(s, new URL(req.url, "http://localhost").searchParams.get("p") ?? "");
+      if (!hit) {
+        res.writeHead(404, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "no_file" }));
+        return;
+      }
+      // no-store: the workspace file can change between turns. SVG gets a
+      // sandboxing CSP because browsers execute scripts when SVG is navigated
+      // directly; inline <img> use is unaffected.
+      res.writeHead(200, {
+        "content-type": hit.mime,
+        "cache-control": "private, no-store",
+        "x-content-type-options": "nosniff",
+        "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; sandbox",
+      });
+      fs.createReadStream(hit.real).pipe(res);
       return;
     }
     res.writeHead(404, { "content-type": "application/json" });

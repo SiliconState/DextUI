@@ -3,6 +3,7 @@
 
 import { spawn } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import url from "node:url";
 
@@ -108,7 +109,9 @@ try {
       a.hello.data.effort_options?.includes("xhigh") &&
       a.hello.data.capabilities?.includes("model_select") &&
       a.hello.data.capabilities?.includes("effort_select") &&
-      a.hello.data.capabilities?.includes("todos_read"),
+      a.hello.data.capabilities?.includes("todos_read") &&
+      a.hello.data.capabilities?.includes("files_read") &&
+      a.hello.data.capabilities?.includes("steering"),
   );
   a.send({ v: 1, cmd: "session.open" });
   const list = await a.waitFor((e) => e.event === "session.list" && e.data.sessions.length === 1, 3000, "session list");
@@ -189,11 +192,27 @@ try {
   // turn_end is published only after the child closes, so immediate next send
   // must be accepted (not a false busy); fake dext exposes --resume in output.
   a.send({ v: 1, cmd: "prompt.submit", session: sid, text: "two" });
+  await a.waitFor((e) => e.session === sid && e.event === "turn_start" && e.seq > end1.seq, 3000, "turn 2 start");
+  // Mid-turn input: steering.inject and a bare prompt.submit both queue; the
+  // host acks instantly and auto-runs them as one prompt at the boundary.
+  a.send({ v: 1, cmd: "steering.inject", session: sid, text: "steer: sent while busy" });
+  a.send({ v: 1, cmd: "prompt.submit", session: sid, text: "queued while busy" });
+  const ackS = await a.waitFor((e) => e.session === sid && e.event === "steering_received", 3000, "steering ack");
+  ok("mid-turn steering accepted and journaled", Array.isArray(ackS.data.messages) && ackS.data.preview.includes("steer:"));
   const end2 = await a.waitFor((e) => e.session === sid && e.event === "turn_end" && e.seq > end1.seq, 5000, "turn 2 end");
   const resumed = a.events.find((e) => e.session === sid && e.event === "text_block_complete" && e.seq < end2.seq && String(e.data).includes("two"));
   ok("second turn accepted immediately", !!end2);
   ok("second turn uses seat resume", String(resumed?.data).includes("[resumed]"));
   ok("resume keeps model and applies new effort", String(resumed?.data).includes("[fake-b/beta; effort=xhigh]"));
+  // Queued messages deliver as one prompt — no stop, no manual resend.
+  const autoMsg = await a.waitFor(
+    (e) => e.session === sid && e.event === "user_message" && e.seq > end2.seq && String(e.data.text).includes("steer: sent while busy"),
+    5000,
+    "auto-delivered steering",
+  );
+  ok("queued input joins one next-turn prompt", autoMsg.data.text.includes("queued while busy"));
+  const end3 = await a.waitFor((e) => e.session === sid && e.event === "turn_end" && e.seq > autoMsg.seq, 8000, "auto turn end");
+  ok("auto-delivered turn completes without user action", end3.seq > autoMsg.seq);
 
   // Snapshot after completion carries projection metadata as well as blocks.
   const c = await openClient("C");
@@ -262,6 +281,44 @@ try {
   fs.rmSync(todoPath);
   todos = await (await fetch(`${base}/sessions/${sid}/todos`, { headers: H })).json();
   ok("todos fall back to none after delete", todos.source === "none" && todos.items.length === 0);
+
+  // ---------- session files: images a turn wrote, cwd-confined ----------
+
+  const fileDir = path.join(cwd, `dextui-smoke-${process.pid}`);
+  fs.mkdirSync(fileDir, { recursive: true });
+  const png1x1 = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+    "base64",
+  );
+  fs.writeFileSync(path.join(fileDir, "chart-check.png"), png1x1);
+  fs.writeFileSync(path.join(fileDir, "notes.txt"), "not an image");
+  const outside = path.join(os.tmpdir(), `dextui-smoke-escape-${process.pid}.png`);
+  fs.writeFileSync(outside, png1x1);
+  fs.symlinkSync(outside, path.join(fileDir, "trap.png"));
+  const fileRes = await fetch(
+    `${base}/sessions/${sid}/file?p=${encodeURIComponent(`${path.basename(fileDir)}/chart-check.png`)}`,
+    { headers: H },
+  );
+  ok(
+    "session file serves a workspace image",
+    fileRes.status === 200 &&
+      fileRes.headers.get("content-type") === "image/png" &&
+      Buffer.compare(Buffer.from(await fileRes.arrayBuffer()), png1x1) === 0,
+  );
+  const trapRes = await fetch(
+    `${base}/sessions/${sid}/file?p=${encodeURIComponent(`${path.basename(fileDir)}/trap.png`)}`,
+    { headers: H },
+  );
+  ok("symlink escape rejected", trapRes.status === 404);
+  const mimeRes = await fetch(
+    `${base}/sessions/${sid}/file?p=${encodeURIComponent(`${path.basename(fileDir)}/notes.txt`)}`,
+    { headers: H },
+  );
+  ok("non-image MIME rejected", mimeRes.status === 404);
+  const travRes = await fetch(`${base}/sessions/${sid}/file?p=${encodeURIComponent("../../../etc/passwd")}`, { headers: H });
+  ok("path traversal rejected", travRes.status === 404);
+  fs.rmSync(fileDir, { recursive: true, force: true });
+  fs.rmSync(outside, { force: true });
 
   // ---------- restart: durable journals restore the session cold ----------
 

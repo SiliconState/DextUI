@@ -57,7 +57,7 @@
         </div>
       {:else}
         {#each view.blocks as block (block.id)}
-          <Block {block} {onInspect} />
+          <Block {block} {onInspect} sessionId={view.id} />
         {/each}
         {#if view.working}
           <p class="sb-working" data-agent-id="transcript.working" aria-live="polite">

@@ -76,7 +76,7 @@ Designed from the driver's seat: what makes a *driving* agent excellent cheaply?
 PROTOCOL.md            AgentLink v1 wire contract (the keystone)
 UPSTREAM.md            dext bridge-mode PR spec
 packages/protocol      TS types + envelope helpers (zero deps)
-packages/client        connection + per-session state machine + seq resume (zero deps)
+packages/client        connection + per-session state machine + seq resume + chart renderer (zero deps)
   test/                node:test suites: fold equivalence, store contract, reconnect
 packages/mock-server   zero-dep Node WS/HTTP reference host; replays real fixtures
   fixtures/            recordings of real dext stream-json runs
@@ -88,7 +88,7 @@ apps/web               Svelte 5 PWA, hand-rolled terminal design system (the ref
 ## Milestones
 
 - **M0:** protocol, docs, fixtures, TS protocol/client, zero-dep mock with synthetic approvals, Svelte PWA (sessions, transcript, approvals, composer, queue, status), smoke test.
-- **M1 (done, Node not Rust):** `agentlinkd` one-shot bridge around stock `dext --output stream-json` with seat resume, on-disk journals, cold/wake, model/effort controls, `/__agent` digest, todos; PWA wired to real dext. The upstream `dext bridge` PR (UPSTREAM.md) remains the path to steering and interactive approvals on the real host.
+- **M1 (done, Node not Rust):** `agentlinkd` one-shot bridge around stock `dext --output stream-json` with seat resume, on-disk journals, cold/wake, model/effort controls, `/__agent` digest, todos, chart/image rendering (```chart fences + `files_read`), and queue-next-turn steering; PWA wired to real dext. The upstream `dext bridge` PR (UPSTREAM.md) remains the path to live in-stream steering and interactive approvals on the real host.
 - **M2:** mobile loop — QR pairing, `--lan`, push on `permission.request`/`turn_end`, swipeable queue, haptics.
 - **M3:** depth — checkpoints/undo timeline, review mode, seats switcher, pack browser, usage dashboard; Tauri desktop.
 - **M4:** agent layer — `/__agent` hardening, MCP supervision surface, save-as-rule/save-as-pack accretion, fixture-driven visual regression via browser packs; Tauri mobile / PWABuilder store packaging.

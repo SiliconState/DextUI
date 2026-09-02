@@ -57,6 +57,8 @@ answers `markdown table demo` with a rich-markdown turn.
 - **Multi-session** index with status glyphs and pending badges; desktop sidebar can be minimized/restored (`Ctrl/Cmd+B`) and persists, while narrow screens use an off-canvas drawer; `Ctrl+[` / `Ctrl+]` cycles sessions
 - **Global action queue**: every pending approval across all sessions in one rail (oldest first) with in-place `a`/`s`/`d`, a status-line badge, finder actions, and a document-title counter for background tabs
 - **Todo panel**: reads dext's own todo files per session through the host (`todos_read`-gated) — source badge, path, `○ ◐ ●` status glyphs; refreshes on activation and `turn_end`
+- **Real charts and images**: a ` ```chart ` fence carrying a JSON spec (`bar`, `hbar`, `line`, `spark`, `donut`) renders as a theme-aware SVG; `![alt](path)` images a turn wrote under the session cwd render inline through the host's authenticated `files_read` endpoint. Remote URLs stay links — the app never fetches model-chosen hosts
+- **Steering without stopping**: input sent while a turn runs queues on the host and auto-runs as the next turn at the boundary — `steering_received` markers acknowledge immediately, `^c` keeps the queue for the next prompt
 - **Desktop notifications** (opt-in): approval requests, turn completion with usage/cost, failures — only while the tab is hidden, deduped across reconnect replays
 - **Keyboard-first approvals** (mock/upstream): `a` / `s` / `d`, note, diff preview — local dock or the global queue
 - **Composer ergonomics**: per-session prompt history (shell semantics: `↑` from the first line, edit forks the draft, `[↑n]` recall marker), per-session drafts, host-driven `/` completion with legacy capability fallback, hero-typing spawns a seeded session
@@ -85,8 +87,7 @@ DextUI is designed to be drivable by other agents, not just humans:
 ## Real-host limits (until the upstream dext bridge lands)
 
 - **Model changes after history exists require a new UI session** — resumed dext seats restore their persisted model. DextUI rejects the change instead of mutating dext's global provider defaults or pretending it applied. Effort remains configurable between turns.
-- **No mid-turn steering** — one-shot children have no live stdin; the composer
-  disables send while a turn runs (capability-gated).
+- **Queued steering, not live injection** — one-shot children have no live stdin, so mid-turn input queues on the host and delivers automatically as the next turn's prompt at the turn boundary (the composer stays enabled; interrupting keeps the queue). True in-stream steering needs the upstream dext bridge.
 - **No interactive approvals** — tool policy is dext's own `--approval` profile;
   change per session with `/approval <profile>`.
 - **Journals persist under `--state-dir`** — a host restart restores the session

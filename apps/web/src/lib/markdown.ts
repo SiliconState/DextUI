@@ -2,13 +2,20 @@
 // typed tokens, the renderer emits real DOM elements — no HTML strings, no
 // injection surface. Web-native structure (true tables, lists, headings,
 // links) instead of terminal box-drawing that shreds when lines wrap.
+// Two web-only extensions a terminal cannot afford:
+//   ```chart fences  → real SVG charts (packages/client charts.ts)
+//   ![alt](path)     → images a turn wrote to the session cwd, served by the
+//                      host's authenticated /sessions/:id/file endpoint
+
+import { parseChartSpec, renderChartSVG } from "@dextui/client";
 
 export type Inline =
   | { t: "text"; s: string }
   | { t: "code"; s: string }
   | { t: "bold"; s: string }
   | { t: "italic"; s: string }
-  | { t: "link"; s: string; href: string };
+  | { t: "link"; s: string; href: string }
+  | { t: "image"; s: string; href: string };
 
 export interface ListItem {
   inline: Inline[];
@@ -19,6 +26,7 @@ export type MdBlock =
   | { kind: "heading"; level: number; inline: Inline[] }
   | { kind: "para"; inline: Inline[] }
   | { kind: "code"; text: string; lang: string }
+  | { kind: "chart"; svg: string }
   | { kind: "list"; ordered: boolean; items: ListItem[] }
   | { kind: "table"; align: ("l" | "c" | "r")[]; head: Inline[][]; rows: Inline[][][] }
   | { kind: "quote"; inline: Inline[] }
@@ -32,15 +40,16 @@ const LIST_ITEM = /^(\s*)([-*+]|\d+[.)])\s+(.*)$/;
 export function parseInline(s: string): Inline[] {
   const out: Inline[] = [];
   const re =
-    /`([^`]+)`|\*\*([^*]+)\*\*|\[([^\]]{1,200})\]\((https?:\/\/[^\s)]+)\)|\*([^*\s][^*]*)\*/g;
+    /`([^`]+)`|\*\*([^*]+)\*\*|!\[([^\]]{0,200})\]\(([^)\s]+)\)|\[([^\]]{1,200})\]\((https?:\/\/[^\s)]+)\)|\*([^*\s][^*]*)\*/g;
   let last = 0;
   let m: RegExpExecArray | null;
   while ((m = re.exec(s)) !== null) {
     if (m.index > last) out.push({ t: "text", s: s.slice(last, m.index) });
     if (m[1] !== undefined) out.push({ t: "code", s: m[1] });
     else if (m[2] !== undefined) out.push({ t: "bold", s: m[2] });
-    else if (m[3] !== undefined && m[4] !== undefined) out.push({ t: "link", s: m[3], href: m[4] });
-    else out.push({ t: "italic", s: m[5] ?? "" });
+    else if (m[3] !== undefined && m[4] !== undefined) out.push({ t: "image", s: m[3], href: m[4] });
+    else if (m[5] !== undefined && m[6] !== undefined) out.push({ t: "link", s: m[5], href: m[6] });
+    else out.push({ t: "italic", s: m[7] ?? "" });
     last = re.lastIndex;
   }
   if (last < s.length) out.push({ t: "text", s: s.slice(last) });
@@ -84,7 +93,8 @@ export function parseMarkdown(src: string): MdBlock[] {
   while (i < lines.length) {
     const line = lines[i] ?? "";
 
-    // fenced code
+    // fenced code — ```chart fences carrying a valid JSON spec become real
+    // charts; anything else (including an invalid chart spec) stays a code block.
     const fence = /^```\s*(\S*)\s*$/.exec(line);
     if (fence) {
       const buf: string[] = [];
@@ -94,6 +104,14 @@ export function parseMarkdown(src: string): MdBlock[] {
         i++;
       }
       i++; // closing fence (or EOF)
+      const lang = (fence[1] ?? "").toLowerCase();
+      if (lang === "chart") {
+        const spec = parseChartSpec(buf.join("\n"));
+        if (spec) {
+          out.push({ kind: "chart", svg: renderChartSVG(spec) });
+          continue;
+        }
+      }
       out.push({ kind: "code", text: buf.join("\n"), lang: fence[1] ?? "" });
       continue;
     }

@@ -54,7 +54,7 @@
     if (view.status === "exited") return "session closed — ⌘n for a new one";
     if (!live) return "waking session…";
     if (view.working) {
-      return canSteer ? "steer the agent mid-turn… (^c to stop)" : "turn running… (^c to stop)";
+      return canSteer ? "type to queue — delivers as the next turn… (^c to stop)" : "turn running… (^c to stop)";
     }
     const parts = ["type a request…"];
     if (commands.length > 0) parts.push("/ commands");
