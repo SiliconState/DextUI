@@ -126,27 +126,32 @@
         app.shortcutsOpen = true;
         return;
       }
-      // Hero typing: a printable key with no active session spawns one,
-      // seeded with that character; Composer consumes the stash on mount.
-      if (!app.activeId && e.key.length === 1 && e.key.trim()) {
-        app.pendingDraft = e.key;
-        newSession();
-        return;
-      }
+      // Approvals: a/s/d act on the globally oldest pending request, whether
+      // or not a session is active. With only count-only rows, jump there
+      // instead of ever responding blind.
       const choice =
         e.key === "a" ? "once" : e.key === "s" ? "always" : e.key === "d" ? "deny" : null;
-      if (!choice) return;
-      const target = queue.entries[0];
-      if (target) {
-        // Activate first so the full card (diff + note) is visible, then act.
-        if (target.sessionId !== app.activeId) activate(target.sessionId);
-        respondGlobal(target.sessionId, target.pending.request_id, choice);
-        return;
+      if (choice) {
+        const target = queue.entries[0];
+        if (target) {
+          // Activate first so the full card (diff + note) is visible, then act.
+          if (target.sessionId !== app.activeId) activate(target.sessionId);
+          respondGlobal(target.sessionId, target.pending.request_id, choice);
+          return;
+        }
+        const count = queue.counts[0];
+        if (count) {
+          activate(count.id);
+          return;
+        }
       }
-      // No full data anywhere: jump to the first count-only session instead
-      // of ever responding to a count blind.
-      const count = queue.counts[0];
-      if (count) activate(count.id);
+      // Hero typing: a printable key with no active session spawns one, seeded
+      // with everything typed while it is being created (Composer consumes the
+      // stash on mount). Only while the host can actually open a session.
+      if (!app.activeId && app.phase === "live" && e.key.length === 1 && e.key.trim()) {
+        app.pendingDraft += e.key;
+        newSession();
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);

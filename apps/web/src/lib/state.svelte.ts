@@ -63,6 +63,10 @@ export const queue = $state({ entries: [] as QueueEntry[], counts: [] as QueueCo
 
 /** Sessions subscribed to only because they had pending approvals. */
 const autoSubscribed = new Set<string>();
+/** Auto-subscribed sessions whose first post-subscribe envelope has not
+ *  arrived yet. Until it does, the local store is empty (no pending, not
+ *  working) and must not be mistaken for "went quiet" by the detach mirror. */
+const hydrating = new Set<string>();
 
 export function queueTotal(): number {
   return queue.entries.length + queue.counts.reduce((n, s) => n + s.count, 0);
@@ -93,8 +97,9 @@ function rebuildQueue(): void {
   queue.entries = entries;
   // Detach mirror: an auto-subscribed session that went quiet and is not the
   // active one drops off the live tail again (same policy as activate()).
+  // Sessions still waiting for their snapshot/replay are left alone.
   for (const id of [...autoSubscribed]) {
-    if (id === app.activeId) continue;
+    if (id === app.activeId || hydrating.has(id)) continue;
     const st = c.session(id).state;
     if (st.pending.size === 0 && !st.working) {
       c.unsubscribe(id);
@@ -199,6 +204,7 @@ export function start(token: string): void {
   queue.entries = [];
   queue.counts = [];
   autoSubscribed.clear();
+  hydrating.clear();
   const proto = location.protocol === "https:" ? "wss" : "ws";
   const c = new Connection({
     url: `${proto}://${location.host}/ws`,
@@ -206,6 +212,7 @@ export function start(token: string): void {
     client: "dextui-web",
     onPhase: (p, detail) => {
       if (app.conn !== c) return; // stale connection
+      const wasLive = app.phase === "live";
       app.phase = p;
       app.phaseDetail = detail ?? "";
       if (p === "failed") {
@@ -216,17 +223,23 @@ export function start(token: string): void {
         queue.entries = [];
         queue.counts = [];
         autoSubscribed.clear();
+        hydrating.clear();
         app.lastError = detail ?? "authentication failed";
         pushToast("err", `Connection failed: ${app.lastError}`);
         app.needsToken = true;
-        localStorage.removeItem("dextui.token");
+        // A lockout says nothing about the token; keep it so a reload retries
+        // without re-pairing. Only an actual rejection clears it.
+        if (detail !== "rate_limited") localStorage.removeItem("dextui.token");
       }
       if (p === "reconnecting") {
         if (wantNewSession) {
           wantNewSession = false;
           newSessionBaseline.clear();
+          app.pendingDraft = "";
         }
-        pushToast("warn", "Connection lost — reconnecting…");
+        // Both the socket close and every retry publish "reconnecting"; toast
+        // once per outage, on the way down from live.
+        if (wasLive) pushToast("warn", "Connection lost — reconnecting…");
       }
       if (p === "live") {
         // Snapshot capabilities into reactive state: conn.capabilities is a
@@ -248,6 +261,7 @@ export function start(token: string): void {
       queue.entries = [];
       queue.counts = [];
       autoSubscribed.clear();
+      hydrating.clear();
       pushToast("warn", "Agent host restarted — transcripts resynced");
     },
     onSeqGap: (sessionId, expected, got) => {
@@ -283,6 +297,7 @@ export function start(token: string): void {
       for (const s of sessions) {
         if (s.pending_permissions > 0 && !c.subscribed.has(s.id)) {
           autoSubscribed.add(s.id);
+          hydrating.add(s.id);
           c.subscribe(s.id);
         }
       }
@@ -290,16 +305,19 @@ export function start(token: string): void {
     },
     onControlError: (code, message) => {
       if (app.conn !== c) return; // stale connection
-      // A failed session.open must not leave the new-session latch armed.
+      // A failed session.open must not leave the new-session latch armed, nor
+      // the hero-typing seed waiting to land in an unrelated session.
       if (wantNewSession) {
         wantNewSession = false;
         newSessionBaseline.clear();
+        app.pendingDraft = "";
       }
       app.lastError = `${code}: ${message}`;
       pushToast("err", `${code}: ${message}`);
     },
     onEvent: (env: Envelope, store) => {
       if (app.conn !== c) return; // stale connection
+      hydrating.delete(store.state.id); // the tail is real from here on
       switch (env.event) {
         case "permission.request":
         case "permission.resolved":
@@ -326,6 +344,7 @@ export function activate(id: string): void {
   const prev = app.activeId;
   app.activeId = id;
   autoSubscribed.delete(id); // user-driven from here on
+  hydrating.delete(id);
   if (!c) return;
   if (prev && prev !== id && c.subscribed.has(prev)) {
     const ps = c.session(prev).state;

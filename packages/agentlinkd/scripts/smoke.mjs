@@ -343,6 +343,42 @@ try {
     `${Buffer.byteLength(cappedText)}B omitted=${capped.sessions_omitted}`,
   );
 
+  // ---------- restart mid-turn: an unterminated turn is journaled as failed ----------
+
+  server.kill("SIGTERM");
+  await waitExit(server);
+  const journalPath = path.join(stateDir, "journals", `${sid}.jsonl`);
+  const injectedBase = JSON.parse(fs.readFileSync(journalPath, "utf8").trim().split("\n").at(-1)).seq;
+  const inject = [
+    { event: "user_message", data: { text: "lost prompt" } },
+    { event: "turn_start" },
+    { event: "text_delta", data: "half-written" },
+  ].map((e, i) => JSON.stringify({ v: 1, session: sid, seq: injectedBase + 1 + i, ts: Date.now(), ...e }));
+  fs.appendFileSync(journalPath, `${inject.join("\n")}\n`);
+  server = spawnHost();
+  ok("host healthy after mid-turn restart", await waitHealthy());
+  const m = await openClient("M");
+  const lostMeta = m.hello.data.sessions.find((x) => x.id === sid);
+  ok(
+    "unfinished turn terminated on restore (+error +turn_end)",
+    lostMeta?.status === "cold" && lostMeta?.last_seq === injectedBase + 5,
+    `last_seq=${lostMeta?.last_seq} expected ${injectedBase + 5}`,
+  );
+  m.send({ v: 1, cmd: "session.subscribe", id: sid });
+  const lostSnap = await m.waitFor((e) => e.session === sid && e.event === "session.snapshot", 3000, "mid-turn snapshot");
+  const [sealedText, lostMarker] = lostSnap.data.blocks.slice(-2);
+  ok(
+    "restored snapshot: text sealed, error marker, failed:true, not working",
+    lostSnap.data.working === false &&
+      lostSnap.data.failed === true &&
+      sealedText?.kind === "text" &&
+      sealedText?.text === "half-written" &&
+      sealedText?.complete === true &&
+      lostMarker?.kind === "marker" &&
+      lostMarker?.level === "error",
+    JSON.stringify(lostSnap.data.blocks.slice(-2)),
+  );
+
   // ---------- auth: wrong token, then rate limiting (last: locks auth) ----------
 
   const wrong = await badHello("definitely-not-the-token");

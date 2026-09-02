@@ -51,9 +51,14 @@ export function fold(journal) {
   let openText = null;
   let openThinking = null;
 
+  // End of turn (or interrupt): no streaming block may stay open. Seal every
+  // incomplete text/thinking block, not just the current pointers — a stream
+  // that moved on without a *_block_complete leaves orphans behind, and the
+  // client's sealOpenBlocks() closes those too (parity).
   const sealOpen = () => {
-    if (openText) openText.complete = true;
-    if (openThinking) openThinking.complete = true;
+    for (const b of blocks) {
+      if ((b.kind === "text" || b.kind === "thinking") && b.complete === false) b.complete = true;
+    }
     openText = null;
     openThinking = null;
   };

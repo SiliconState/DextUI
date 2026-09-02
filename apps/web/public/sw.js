@@ -20,10 +20,16 @@ self.addEventListener("activate", (event) => {
   );
 });
 
+// Live host surfaces are never cached: authenticated JSON that must not be
+// replayed offline as if it were fresh. Only the app shell and assets go
+// through the cache.
+const HOST_API = (p) => p === "/ws" || p === "/health" || p === "/__agent" || p === "/sessions" || p.startsWith("/sessions/");
+
 self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") return;
   const url = new URL(event.request.url);
   if (url.origin !== self.location.origin) return;
+  if (event.request.cache === "no-store" || HOST_API(url.pathname)) return;
   event.respondWith(
     (async () => {
       const cache = await caches.open(CACHE);

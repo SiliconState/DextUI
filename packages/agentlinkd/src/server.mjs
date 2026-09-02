@@ -369,6 +369,22 @@ function restoreJournal(s) {
   }
 }
 
+// A host that died mid-turn leaves the last turn unterminated: the snapshot
+// fold would render a streaming block forever with failed:false, and the
+// client only heals it on the next turn_end. Terminate it in the journal so
+// every consumer sees one consistent story.
+function terminateUnfinishedTurn(s) {
+  let open = false;
+  for (const env of s.journal) {
+    if (env.event === "user_message" || env.event === "turn_start") open = true;
+    else if (env.event === "turn_end" || env.event === "interrupted") open = false;
+  }
+  if (!open) return;
+  journalData(s, "error", "turn lost: agentlinkd restarted while dext was running");
+  journalData(s, "turn_end", { usage: zeroUsage(), failed: true });
+  console.error(`agentlinkd: ${s.id} had an unfinished turn at restart; journaled as failed`);
+}
+
 // Boot: load sessions.json, bring every session back cold, replay journals,
 // and continue sessionCounter from the highest numeric id.
 function restoreSessions() {
@@ -410,6 +426,7 @@ function restoreSessions() {
     };
     sessions.set(s.id, s);
     restoreJournal(s);
+    terminateUnfinishedTurn(s);
     s.indexEntry = JSON.stringify(indexEntryOf(s));
     const n = Number(s.id.slice(5));
     if (Number.isInteger(n) && n > sessionCounter) sessionCounter = n;
@@ -628,6 +645,7 @@ function runTurn(s, prompt) {
     buf += chunk.toString("utf8");
     if (buf.length > MAX_STDOUT_BUFFER) {
       errTail = `dext emitted more than ${MAX_STDOUT_BUFFER} bytes without a newline`;
+      buf = ""; // never hand the oversized fragment to finalize's handleLine
       killChild(s, false);
       return;
     }

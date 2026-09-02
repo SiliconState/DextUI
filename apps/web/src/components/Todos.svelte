@@ -72,9 +72,17 @@
   }
 
   // Activation refresh (also refires once the capability arrives from hello).
+  // A session switch drops the previous list at once rather than showing it
+  // under the new session's name until the fetch lands.
+  let shownSid = "";
   $effect(() => {
     const sid = view.id;
     void supported;
+    if (sid !== shownSid) {
+      shownSid = sid;
+      data = null;
+      failed = false;
+    }
     if (sid && supported) schedule(sid, 0);
   });
 

@@ -2,7 +2,7 @@
   // Inline ❯ prompt — the composer is a terminal input line, not a chat box.
   import type { SessionStore } from "@dextui/client";
   import type { HostCommand } from "@dextui/protocol";
-  import { tick } from "svelte";
+  import { tick, untrack } from "svelte";
   import { app, connection, newSession, stepSession } from "../lib/state.svelte";
   import { useSession } from "../lib/useSession.svelte";
 
@@ -68,12 +68,14 @@
   $effect(() => {
     const sid = app.activeId;
     if (!sid) return;
-    text = localStorage.getItem(`dextui.draft.${sid}`) ?? "";
+    // The stash is consumed, not tracked: a reactive read of it (or of `text`)
+    // here would re-run this effect on the next keystroke and reset history.
+    const seed = untrack(() => app.pendingDraft);
+    text = (localStorage.getItem(`dextui.draft.${sid}`) ?? "") + seed;
     hist = loadHistory(sid);
     histIdx = 0;
     stash = "";
-    if (app.pendingDraft) {
-      text = text ? text + app.pendingDraft : app.pendingDraft;
+    if (seed) {
       app.pendingDraft = "";
       requestAnimationFrame(() => inputEl?.focus());
     }
