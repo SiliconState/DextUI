@@ -16,7 +16,7 @@ Two hosts speak the same AgentLink v1 protocol:
 |---|---|
 | `packages/protocol` | AgentLink v1 types + envelope helpers (`@dextui/protocol`) |
 | `packages/client` | Framework-free `Connection` + `SessionStore` (WS, seq-resume, reconnect) |
-| `packages/agentlinkd` | Real host: dext one-shot bridge with seat-based session resume |
+| `packages/agentlinkd` | Real host: dext one-shot bridge, seat resume, on-disk journals (`--state-dir`) |
 | `packages/mock-server` | Fixture-replay mock host — no API key needed |
 | `apps/web` | Svelte 5 PWA, hand-rolled terminal design system (no CSS framework) |
 
@@ -54,9 +54,14 @@ answers `markdown table demo` with a rich-markdown turn.
 - **Real markdown rendering**: GFM tables, nested lists, headings, blockquotes,
   fences, safe links — real DOM elements, escaped by construction; pre-drawn
   box-art passes through verbatim in x-scrolling `<pre>`
-- **Multi-session** index with status glyphs and pending badges; desktop sidebar can be minimized/restored (`Ctrl/Cmd+B`) and persists, while narrow screens use an off-canvas drawer
-- **Keyboard-first approvals** (mock/upstream): `a` / `s` / `d`, note, diff preview
-- **Finder** (`⌘K`/`Ctrl+K`): fzf-style — sessions, approvals, theme, stop, re-pair
+- **Multi-session** index with status glyphs and pending badges; desktop sidebar can be minimized/restored (`Ctrl/Cmd+B`) and persists, while narrow screens use an off-canvas drawer; `Ctrl+[` / `Ctrl+]` cycles sessions
+- **Global action queue**: every pending approval across all sessions in one rail (oldest first) with in-place `a`/`s`/`d`, a status-line badge, finder actions, and a document-title counter for background tabs
+- **Todo panel**: reads dext's own todo files per session through the host (`todos_read`-gated) — source badge, path, `○ ◐ ●` status glyphs; refreshes on activation and `turn_end`
+- **Desktop notifications** (opt-in): approval requests, turn completion with usage/cost, failures — only while the tab is hidden, deduped across reconnect replays
+- **Keyboard-first approvals** (mock/upstream): `a` / `s` / `d`, note, diff preview — local dock or the global queue
+- **Composer ergonomics**: per-session prompt history (shell semantics: `↑` from the first line, edit forks the draft, `[↑n]` recall marker), per-session drafts, host-driven `/` completion with legacy capability fallback, hero-typing spawns a seeded session
+- **Finder** (`⌘K`/`Ctrl+K`): fzf-style — approvals first, then sessions, theme, stop, re-pair
+- **Shortcuts overlay** (`?`): every binding in one dialog; overlays (finder, inspector, drawers) trap focus and restore it on close
 - **Responsive working surface**: chat/history stay left-anchored and use the available main pane; the composer keeps its full-window prompt behavior; document height is fixed to the viewport and only scrollback scrolls
 - **Status line** in dext's TUI idiom: `● cwd | title │ model │ effort │ approval │ Ctx [██████░░░░] │ ↑↓ $`
 - **Per-session model + reasoning controls**: native web selectors populated from dext's configured provider catalog. Choose a provider/model before a fresh session's first turn; model then locks to the durable seat. Reasoning effort (`off` through `max`) remains changeable between turns and is reapplied after resume.
@@ -91,13 +96,28 @@ DextUI is designed to be drivable by other agents, not just humans:
 See [UPSTREAM.md](./UPSTREAM.md) for the planned `dext serve` native bridge
 (NdjsonSink, PermissionRequested round-trip, steering channel).
 
+## Verification
+
+```bash
+npm test                 # node:test — fold equivalence vs mock fold(), store
+                         # contract, connection lifecycle (48 checks)
+npm run smoke           # mock host end-to-end (31 checks)
+npm run smoke:agentlinkd # real-host surface with a fake dext (35 checks:
+                         # restart/restore, seq replay, cold wake + auto-wake,
+                         # todos, auth lockout + 429, digest 4 KiB cap)
+```
+
+`npm run typecheck` and `npm run build` cover protocol → client → web.
+
 ## Protocol
 
 See [PROTOCOL.md](./PROTOCOL.md) for the AgentLink v1 wire format
-(WS `/ws` primary, REST for health/session lists, hello capability negotiation).
+(WS `/ws` primary, REST for health/session lists/todos/agent digest, hello
+capability negotiation).
 
 ## Screenshots
 
 [`docs/screenshots/`](./docs/screenshots) — `real.png` / `real-light.png` are live
 dext turns through `agentlinkd`; `model-controls.png` shows the model lock + editable effort state; the rest are mock-host captures (approval flow,
-markdown table result, finder, desktop, mobile).
+markdown table result, finder, desktop, mobile). The newer panels (action
+queue, todos, shortcuts overlay) are not yet captured.
