@@ -101,7 +101,7 @@ See [UPSTREAM.md](./UPSTREAM.md) for the planned `dext serve` native bridge
 
 ```bash
 npm test                 # node:test — fold equivalence vs mock fold(), store
-                         # contract, connection lifecycle, chart spec (60 checks)
+                         # contract, connection lifecycle, chart spec + math (71 checks)
 npm run smoke           # mock host end-to-end (31 checks)
 npm run smoke:agentlinkd # real-host surface with a fake dext (50 checks:
                          # restart/restore, seq replay, cold wake + auto-wake,
