@@ -210,6 +210,46 @@ export interface SessionStateEvent {
   detail?: string;
 }
 
+// ---------- REST surfaces ----------
+
+/** One dext todo item (`DEXT.todo.json` element shape, byte-compatible with dext's TUI reader). */
+export interface TodoItem {
+  text: string;
+  status: "pending" | "in_progress" | "completed";
+}
+
+/** `GET /sessions/:id/todos` (requires `todos_read`). */
+export interface TodosResponse {
+  session: string;
+  /** Where the list came from: the session's own file, the project-level file, or nothing. */
+  source: "session" | "project" | "none";
+  path?: string;
+  updated_at?: number;
+  items: TodoItem[];
+}
+
+/** `GET /__agent`: bounded scene digest for supervising agents (<4 KiB target). */
+export interface AgentDigest {
+  server: string;
+  instance?: string;
+  now: number;
+  capabilities: string[];
+  sessions: {
+    id: string;
+    title: string;
+    status: SessionStatus;
+    working: boolean;
+    model?: string;
+    cwd?: string;
+    last_seq: number;
+    /** ms since the last journaled event, if any. */
+    last_event_age_ms?: number;
+    pending: { request_id: string; tool: string; summary: string }[];
+  }[];
+  /** Commands that are valid right now, in machine form (cmd + minimal payload). */
+  actions: { cmd: string; session?: string; request_id?: string; note?: string }[];
+}
+
 // ---------- event maps (documentation + exhaustiveness) ----------
 
 /** dext AgentEvent pass-through (byte-identical to stream-json). */

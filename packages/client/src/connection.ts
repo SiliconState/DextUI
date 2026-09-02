@@ -25,6 +25,8 @@ export interface ConnectionOpts {
   onSeqGap?: (sessionId: string, expected: number, got: number) => void;
   /** The host process changed between connections; all session stores were reset. */
   onHostRestart?: (instance: string) => void;
+  /** Every data-plane envelope, after it has been folded into its store. */
+  onEvent?: (env: Envelope, store: SessionStore) => void;
 }
 
 const RECONNECT_BASE_MS = 500;
@@ -219,6 +221,7 @@ export class Connection {
       }
       if (env.event === "session.snapshot") this.resyncPending.delete(sessionId);
       store.apply(env);
+      this.opts.onEvent?.(env, store);
       return;
     }
     switch (env.event) {
