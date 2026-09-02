@@ -1,7 +1,7 @@
 // App-level reactive state bridging the framework-free Connection into Svelte 5 runes.
 
 import { Connection, type ConnPhase } from "@dextui/client";
-import type { ModelGroup, SessionMeta, ThinkingEffort } from "@dextui/protocol";
+import type { HostCommand, ModelGroup, SessionMeta, ThinkingEffort } from "@dextui/protocol";
 
 export type Theme = "dark" | "light" | "system";
 export interface Toast {
@@ -21,7 +21,12 @@ export const app = $state({
   caps: [] as string[],
   modelCatalog: [] as ModelGroup[],
   effortOptions: [] as ThinkingEffort[],
+  commands: [] as HostCommand[],
+  /** Bumps whenever the host process identity changes (stores were reset). */
+  hostEpoch: 0,
   paletteOpen: false,
+  /** Raw envelope tail drawer for the active session. */
+  eventsOpen: false,
   sidebarCollapsed: false,
   theme: "dark" as Theme,
   toasts: [] as Toast[],
@@ -29,7 +34,6 @@ export const app = $state({
 
 let started = false;
 let everLive = false;
-let reconcileAfterReconnect = false;
 let wantNewSession = false;
 let newSessionBaseline = new Set<string>();
 let toastSeq = 0;
@@ -127,6 +131,7 @@ export function start(token: string): void {
         app.caps = [];
         app.modelCatalog = [];
         app.effortOptions = [];
+        app.commands = [];
         app.lastError = detail ?? "authentication failed";
         pushToast("err", `Connection failed: ${app.lastError}`);
         app.needsToken = true;
@@ -145,12 +150,22 @@ export function start(token: string): void {
         app.caps = [...c.capabilities];
         app.modelCatalog = c.modelCatalog.map((g) => ({ ...g, models: [...g.models] }));
         app.effortOptions = [...c.effortOptions];
-        reconcileAfterReconnect = everLive;
+        app.commands = c.commands.map((x) => ({ ...x }));
         if (everLive) pushToast("ok", "Reconnected");
-        // hello_ok's session list is delivered immediately after this callback;
-        // reconcile ids there before resubscribing (host may have restarted).
         everLive = true;
+        // The Connection re-attaches every subscribed tail itself (seq-resume on
+        // the same host instance, fresh snapshot after a host restart).
       }
+    },
+    onHostRestart: () => {
+      if (app.conn !== c) return;
+      // Stores were dropped; force every `c.session(id)` lookup to re-resolve.
+      app.hostEpoch++;
+      pushToast("warn", "Agent host restarted — transcripts resynced");
+    },
+    onSeqGap: (sessionId, expected, got) => {
+      if (app.conn !== c) return;
+      pushToast("warn", `Resyncing ${sessionId} (seq ${expected}→${got})`);
     },
     onSessionList: (sessions) => {
       if (app.conn !== c) return; // stale connection
@@ -160,12 +175,6 @@ export function start(token: string): void {
       // stores survive. Drop the stale selection; a reused id will be reset by
       // the next snapshot rather than displaying the old host's transcript.
       if (app.activeId && !ids.has(app.activeId)) app.activeId = "";
-      if (reconcileAfterReconnect) {
-        reconcileAfterReconnect = false;
-        // Force a snapshot: a restarted host can reuse sess_001 and even the
-        // same tail seq, which must replace (not resume) the old transcript.
-        if (app.activeId) c.subscribe(app.activeId, true);
-      }
       if (wantNewSession) {
         const fresh = sessions.find((s) => !newSessionBaseline.has(s.id));
         if (fresh) {
@@ -197,13 +206,21 @@ export function start(token: string): void {
   localStorage.setItem("dextui.token", token);
 }
 
+/** Make `id` the active session: wake it if cold, attach (resuming by seq when
+ *  the local store already holds this host's history), and detach the previous
+ *  session unless it still needs a live tail (working or awaiting approval). */
 export function activate(id: string): void {
-  app.activeId = id;
   const c = app.conn;
+  const prev = app.activeId;
+  app.activeId = id;
   if (!c) return;
+  if (prev && prev !== id && c.subscribed.has(prev)) {
+    const ps = c.session(prev).state;
+    if (!ps.working && ps.pending.size === 0) c.unsubscribe(prev);
+  }
   const meta = app.sessions.find((s) => s.id === id);
   if (meta && meta.status === "cold") c.openSession({ id });
-  c.subscribe(id, true);
+  c.subscribe(id);
 }
 
 export function newSession(): void {

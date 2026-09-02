@@ -5,25 +5,16 @@
   import type { ThinkingEffort } from "@dextui/protocol";
   import { app, toggleTheme, rePair, toggleSidebar } from "../lib/state.svelte";
   import { fmtTokens, fmtElapsed } from "../lib/markdown";
+  import { useSession } from "../lib/useSession.svelte";
 
   let { store, onToggleIndex }: { store: SessionStore; onToggleIndex?: () => void } = $props();
 
-  let tick = $state(0);
-  $effect(() => {
-    const unsub = store.subscribe(() => {
-      tick++;
-    });
-    return () => {
-      unsub();
-    };
-  });
-  const view = $derived.by(() => {
-    void tick;
-    return { ...store.state };
-  });
+  const sess = useSession(() => store);
+  const view = $derived(sess.view ?? store.state);
 
   let now = $state(Date.now());
   $effect(() => {
+    if (!view.working) return;
     const t = setInterval(() => {
       now = Date.now();
     }, 1000);
@@ -159,6 +150,10 @@
   {#if view.compacting}
     <span class="sep">│</span>
     <span class="st-magenta">compacting…</span>
+  {/if}
+  {#if view.retry}
+    <span class="sep">│</span>
+    <span class="st-yellow pulse" data-agent-id="status.retry" title={view.retry.reason}>retry #{view.retry.attempt} in {view.retry.wait_secs}s</span>
   {/if}
   {#if view.failed}
     <span class="sep">│</span>

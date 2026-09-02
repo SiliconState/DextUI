@@ -1,7 +1,9 @@
 <script lang="ts">
   // Inline ❯ prompt — the composer is a terminal input line, not a chat box.
   import type { SessionStore } from "@dextui/client";
+  import type { HostCommand } from "@dextui/protocol";
   import { app, connection } from "../lib/state.svelte";
+  import { useSession } from "../lib/useSession.svelte";
 
   let { store }: { store: SessionStore } = $props();
 
@@ -9,7 +11,8 @@
   let menuIdx = $state(0);
   let inputEl: HTMLTextAreaElement | undefined = $state();
 
-  const ALL_COMMANDS = [
+  // Fallback for hosts that predate hello_ok.commands: derive from slash.* caps.
+  const LEGACY_COMMANDS: (HostCommand & { cap: string })[] = [
     { cmd: "/approval", desc: "set dext approval profile", cap: "slash.approval" },
     { cmd: "/compact", desc: "compact session context", cap: "slash.compact" },
     { cmd: "/model", desc: "show or switch model", cap: "slash.model" },
@@ -17,21 +20,12 @@
     { cmd: "/help", desc: "list host commands", cap: "slash.help" },
   ];
 
-  let tick = $state(0);
-  $effect(() => {
-    const unsub = store.subscribe(() => {
-      tick++;
-    });
-    return () => {
-      unsub();
-    };
-  });
-  const view = $derived.by(() => {
-    void tick;
-    return { ...store.state };
-  });
+  const sess = useSession(() => store);
+  const view = $derived(sess.view ?? store.state);
 
-  const commands = $derived(ALL_COMMANDS.filter((c) => app.caps.includes(c.cap)));
+  const commands = $derived<HostCommand[]>(
+    app.commands.length > 0 ? app.commands : LEGACY_COMMANDS.filter((c) => app.caps.includes(c.cap)),
+  );
   const slashOpen = $derived(text.startsWith("/") && !text.includes(" "));
   const slashList = $derived(
     slashOpen ? commands.filter((c) => c.cmd.startsWith(text.trim().toLowerCase())) : [],

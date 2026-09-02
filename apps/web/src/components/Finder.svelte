@@ -9,21 +9,18 @@
     copyText,
     rePair,
   } from "../lib/state.svelte";
+  import { useSession } from "../lib/useSession.svelte";
 
   let query = $state("");
   let cursor = $state(0);
   let inputEl: HTMLInputElement | undefined = $state();
 
-  // store.state is a plain (non-reactive) object: subscribe so turn/approval
-  // actions (stop, once/always/deny) refresh while the finder is open.
-  let tick = $state(0);
-  $effect(() => {
+  // Reactive view of the active session so turn/approval actions (stop,
+  // once/always/deny) refresh while the finder is open.
+  const sess = useSession(() => {
+    void app.hostEpoch;
     const c = connection();
-    if (!c || !app.activeId) return;
-    const s = c.session(app.activeId);
-    return s.subscribe(() => {
-      tick++;
-    });
+    return c && app.activeId ? c.session(app.activeId) : null;
   });
 
   interface Action {
@@ -35,22 +32,27 @@
   }
 
   const actions = $derived.by<Action[]>(() => {
-    void tick;
-    const c = connection();
+    const view = sess.view;
     const out: Action[] = [
       { slug: "session.new", label: "new session", hint: "switches to it", group: "sess", run: newSession },
       { slug: "theme.toggle", label: `theme: ${app.theme} → ${app.theme === "dark" ? "light" : app.theme === "light" ? "system" : "dark"}`, group: "app", run: toggleTheme },
       { slug: "pair.reset", label: "re-pair with agent host", hint: "clears token", group: "app", run: rePair },
     ];
-    if (c && app.activeId) {
+    if (view) {
       out.push({
         slug: "session.copyid",
         label: "copy session id",
         group: "sess",
         run: () => copyText(app.activeId, "session id"),
       });
-      const store = c.session(app.activeId);
-      if (store.state.working) {
+      out.push({
+        slug: "session.events",
+        label: "show raw events",
+        hint: `${view.recent.length}`,
+        group: "sess",
+        run: () => (app.eventsOpen = true),
+      });
+      if (view.working) {
         out.push({
           slug: "turn.stop",
           label: "stop the running turn",
@@ -59,7 +61,7 @@
           run: () => connection()?.interrupt(app.activeId),
         });
       }
-      for (const p of store.state.pending.values()) {
+      for (const p of view.pending.values()) {
         const short = p.summary ? ` — ${p.summary.slice(0, 40)}` : "";
         out.push({
           slug: `approve.${p.request_id}.once`,

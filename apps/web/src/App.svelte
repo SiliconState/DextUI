@@ -1,6 +1,7 @@
 <script lang="ts">
   import { app, start, connection, newSession, toggleSidebar } from "./lib/state.svelte";
-  import type { Block } from "@dextui/protocol";
+  import { useSession } from "./lib/useSession.svelte";
+  import type { ViewBlock } from "@dextui/client";
   import SessionIndex from "./components/SessionIndex.svelte";
   import Scrollback from "./components/Scrollback.svelte";
   import Approval from "./components/Approval.svelte";
@@ -10,31 +11,18 @@
   import Toasts from "./components/Toasts.svelte";
 
   let tokenInput = $state("");
-  let inspect: Block | null = $state(null);
+  let inspect: ViewBlock | null = $state(null);
   let indexOpen = $state(false);
 
   const activeStore = $derived.by(() => {
+    void app.hostEpoch; // stores are re-created after a host restart
     const c = connection();
     if (!c || !app.activeId) return null;
     return c.session(app.activeId);
   });
 
-  let tick = $state(0);
-  $effect(() => {
-    if (!activeStore) return;
-    const unsub = activeStore.subscribe(() => {
-      tick++;
-    });
-    return () => {
-      unsub();
-    };
-  });
-
-  const view = $derived.by(() => {
-    void tick;
-    // Re-boxed per tick: Svelte 5 deriveds skip propagation on reference equality.
-    return activeStore ? { ...activeStore.state } : null;
-  });
+  const sess = useSession(() => activeStore);
+  const view = $derived(sess.view);
   const pendingList = $derived(view ? [...view.pending.values()] : []);
 
   function connectSubmit(e: SubmitEvent) {
@@ -68,10 +56,11 @@
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         if (inspect) inspect = null;
+        else if (app.eventsOpen) app.eventsOpen = false;
         else if (indexOpen) indexOpen = false;
         return;
       }
-      if (app.paletteOpen || inspect) return;
+      if (app.paletteOpen || inspect || app.eventsOpen) return;
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "b") {
         e.preventDefault();
         toggleNavigation();
@@ -188,6 +177,17 @@
       </span>
     </div>
     <pre class="insp-body" data-agent-id="drawer.block.json">{JSON.stringify(inspect, null, 2)}</pre>
+  </div>
+{:else if app.eventsOpen && view}
+  <div class="insp" data-agent-id="drawer.events" data-state="open">
+    <div class="insp-head">
+      <span class="st-magenta">events</span>
+      <span class="dim">last {view.recent.length} envelopes · seq {view.lastSeq}</span>
+      <span class="insp-acts">
+        <button class="act" data-agent-id="drawer.events.close" onclick={() => (app.eventsOpen = false)}>esc</button>
+      </span>
+    </div>
+    <pre class="insp-body" data-agent-id="drawer.events.json">{view.recent.map((e) => JSON.stringify(e)).join("\n")}</pre>
   </div>
 {/if}
 

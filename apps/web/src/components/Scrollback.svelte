@@ -1,38 +1,23 @@
 <script lang="ts">
   // Scrollback: one stream, like a terminal. No filter chips, no cards.
   // Web-native where it matters: scroll pinning + jump-to-latest.
-  import type { SessionStore } from "@dextui/client";
-  import type { Block as BlockT } from "@dextui/protocol";
+  import type { SessionStore, ViewBlock } from "@dextui/client";
   import Block from "./Block.svelte";
   import { fmtElapsed } from "../lib/markdown";
+  import { useSession } from "../lib/useSession.svelte";
 
-  let { store, onInspect }: { store: SessionStore; onInspect?: (b: BlockT) => void } = $props();
+  let { store, onInspect }: { store: SessionStore; onInspect?: (b: ViewBlock) => void } = $props();
 
-  let tick = $state(0);
   let container: HTMLDivElement | undefined = $state();
   let pinned = $state(true);
 
-  $effect(() => {
-    const unsub = store.subscribe(() => {
-      tick++;
-    });
-    return () => {
-      unsub();
-    };
-  });
-
-  const view = $derived.by(() => {
-    void tick;
-    // Re-boxed per tick: Svelte 5 deriveds skip propagation on reference equality.
-    return { ...store.state };
-  });
-
-  // Copy each block: keyed each-items only re-render when their reference
-  // changes, and the store mutates blocks in place (preview -> running -> ok).
-  const shown = $derived(view.blocks.map((b) => ({ ...b })));
+  const sess = useSession(() => store);
+  // Non-null while mounted: App only renders Scrollback with a store.
+  const view = $derived(sess.view ?? store.state);
 
   let now = $state(Date.now());
   $effect(() => {
+    if (!view.working) return;
     const t = setInterval(() => {
       now = Date.now();
     }, 1000);
@@ -47,7 +32,8 @@
   }
 
   $effect(() => {
-    void tick;
+    void view.blocks;
+    void view.working;
     if (pinned && container) container.scrollTop = container.scrollHeight;
   });
 
@@ -70,7 +56,7 @@
           <p class="faint">journal events replay here on connect · / commands · ⌘k finder</p>
         </div>
       {:else}
-        {#each shown as block, i (i)}
+        {#each view.blocks as block (block.id)}
           <Block {block} {onInspect} />
         {/each}
         {#if view.working}

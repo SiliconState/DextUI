@@ -6,6 +6,7 @@ import {
   isSessionRouted,
   PROTOCOL_VERSION,
   type Envelope,
+  type HostCommand,
   type ModelGroup,
   type SessionMeta,
   type ThinkingEffort,
@@ -22,6 +23,8 @@ export interface ConnectionOpts {
   onSessionList?: (sessions: SessionMeta[]) => void;
   onControlError?: (code: string, message: string) => void;
   onSeqGap?: (sessionId: string, expected: number, got: number) => void;
+  /** The host process changed between connections; all session stores were reset. */
+  onHostRestart?: (instance: string) => void;
 }
 
 const RECONNECT_BASE_MS = 500;
@@ -33,7 +36,12 @@ export class Connection {
   capabilities: string[] = [];
   modelCatalog: ModelGroup[] = [];
   effortOptions: ThinkingEffort[] = [];
+  commands: HostCommand[] = [];
+  /** Host process identity from the last hello_ok (undefined for legacy hosts). */
+  instance?: string;
   sessions = new Map<string, SessionStore>();
+  /** Sessions this client wants a live tail for; re-attached after every reconnect. */
+  subscribed = new Set<string>();
   private ws?: WebSocket;
   private opts: ConnectionOpts;
   private attempt = 0;
@@ -42,6 +50,7 @@ export class Connection {
   private reconnectTimer?: ReturnType<typeof setTimeout>;
   private resyncPending = new Set<string>();
   private controlListeners = new Set<(e: Envelope) => void>();
+  private everLive = false;
 
   constructor(opts: ConnectionOpts) {
     this.opts = opts;
@@ -125,12 +134,18 @@ export class Connection {
     this.sendRaw(cmd("session.open", { ...opts }));
   }
 
+  /**
+   * Attach to a session's live tail. Resumes by seq when the store already
+   * holds history from this host instance; `fresh` forces a snapshot.
+   */
   subscribe(id: string, fresh = false): void {
     const s = this.session(id);
+    this.subscribed.add(id);
     this.sendRaw(cmd("session.subscribe", { id, since_seq: fresh ? undefined : s.state.lastSeq || undefined }));
   }
 
   unsubscribe(id: string): void {
+    this.subscribed.delete(id);
     this.sendRaw(cmd("session.unsubscribe", { id }));
   }
 
@@ -211,16 +226,41 @@ export class Connection {
         const d = env.data as {
           capabilities: string[];
           sessions: SessionMeta[];
+          instance?: string;
           model_catalog?: ModelGroup[];
           effort_options?: ThinkingEffort[];
+          commands?: HostCommand[];
         };
         this.capabilities = d.capabilities;
         this.modelCatalog = d.model_catalog ?? [];
         this.effortOptions = d.effort_options ?? [];
+        this.commands = d.commands ?? [];
         this.attempt = 0;
+        // A different host process may reuse session ids and even tail seqs;
+        // resuming by seq would splice the old transcript onto the new one.
+        // Legacy hosts (no instance) are treated as restarted on every reconnect.
+        const restarted = this.instance !== undefined && d.instance !== this.instance;
+        const legacyReconnect = d.instance === undefined && this.everLive;
+        this.instance = d.instance;
+        if (restarted || legacyReconnect) {
+          this.sessions.clear();
+          this.resyncPending.clear();
+          this.opts.onHostRestart?.(d.instance ?? "");
+        }
+        this.everLive = true;
         this.setPhase("live");
         this.startPing();
         this.opts.onSessionList?.(d.sessions);
+        // Re-attach every wanted tail. Sessions the host no longer lists are
+        // dropped rather than producing a no_session error per reconnect.
+        const known = new Set(d.sessions.map((s) => s.id));
+        for (const id of [...this.subscribed]) {
+          if (!known.has(id)) {
+            this.subscribed.delete(id);
+            continue;
+          }
+          this.subscribe(id, restarted || legacyReconnect);
+        }
         break;
       }
       case "hello_fail": {

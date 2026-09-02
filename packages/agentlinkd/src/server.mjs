@@ -136,6 +136,17 @@ const CAPABILITIES = [
   "slash.approval",
 ];
 
+// Host-handled slash commands, advertised in hello_ok so the composer's
+// completion menu is driven by the host rather than a client-side guess.
+const COMMANDS = [
+  { cmd: "/help", desc: "list host commands" },
+  { cmd: "/approval", desc: `set dext approval profile (${[...APPROVALS].join("|")}) — next turn` },
+];
+
+// Random per process: lets clients tell a reconnect to the same host (resume
+// by seq) from a reconnect to a restarted one (resync from snapshot).
+const INSTANCE = crypto.randomBytes(8).toString("hex");
+
 // ---------- state ----------
 
 let sessionCounter = 0;
@@ -493,10 +504,12 @@ function handleCommand(client, frame) {
       server: "agentlinkd",
       version: "0.1.0",
       protocol: 1,
+      instance: INSTANCE,
       capabilities: CAPABILITIES,
       sessions: [...sessions.values()].map(metaOf),
       model_catalog: MODEL_CATALOG,
       effort_options: EFFORT_OPTIONS,
+      commands: COMMANDS,
     });
     return;
   }

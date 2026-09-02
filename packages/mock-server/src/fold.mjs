@@ -115,7 +115,7 @@ export function fold(journal) {
         mergeTool(d, { status: "preview" });
         break;
       case "tool_call_start":
-        mergeTool(d, { status: "running" });
+        mergeTool(d, { status: "running", name: d.name, summary: d.summary ?? "" });
         break;
       case "tool_output_delta": {
         const i = toolIndex.get(d.call_id);
@@ -126,7 +126,7 @@ export function fold(journal) {
         break;
       }
       case "tool_call_result":
-        mergeTool(d, { status: d.ok ? "ok" : "failed", content: d.content });
+        mergeTool(d, { status: d.ok ? "ok" : "failed", content: d.content, name: d.name, summary: d.summary ?? "" });
         break;
       case "tool_batch_start":
         blocks.push({ kind: "marker", level: "note", text: `Batch: ${(d.labels ?? []).join(" · ")}` });
@@ -167,7 +167,13 @@ export function fold(journal) {
       case "permission.resolved": {
         const request = pendingRequests.get(d.request_id);
         pendingRequests.delete(d.request_id);
-        if (request) blocks.push({ kind: "marker", level: d.choice === "deny" ? "warn" : "info", text: `${request.tool}: ${d.choice}` });
+        if (request) {
+          blocks.push({
+            kind: "marker",
+            level: d.choice === "deny" ? "warn" : "info",
+            text: `${request.tool}: ${d.choice}`,
+          });
+        }
         break;
       }
       case "permission.timeout": {
@@ -185,6 +191,37 @@ export function fold(journal) {
         break;
       case "steering_received":
         blocks.push({ kind: "marker", level: "note", text: `Steering: ${d.preview}` });
+        break;
+      // Events the client store also surfaces as markers (parity is asserted by
+      // the fold-equivalence test); keep the wording byte-identical.
+      case "http_retry":
+        blocks.push({ kind: "marker", level: "warn", text: `Provider retry #${d.attempt} in ${d.wait_secs}s: ${d.reason}` });
+        break;
+      case "reasoning_mode_changed":
+        blocks.push({ kind: "marker", level: "note", text: `Reasoning mode → ${d.mode}` });
+        break;
+      case "runtime_control":
+        blocks.push({ kind: "marker", level: "info", text: `Runtime control: ${String(d)}` });
+        break;
+      case "runtime_control_applied": {
+        const parts = [];
+        if (d.model_changed) parts.push("model");
+        if (d.effort_changed) parts.push("effort");
+        if (d.mode_changed) parts.push("mode");
+        if (d.stream_aborted) parts.push("stream aborted");
+        blocks.push({
+          kind: "marker",
+          level: d.stream_aborted ? "warn" : "note",
+          text: `Runtime control applied (${d.commands} command${d.commands === 1 ? "" : "s"})${parts.length ? `: ${parts.join(", ")}` : ""}`,
+        });
+        break;
+      }
+      case "login_input_mode":
+        blocks.push({
+          kind: "marker",
+          level: "warn",
+          text: `Login required${d?.provider ? ` for ${d.provider}` : ""} — complete it in the dext TUI.`,
+        });
         break;
       default:
         break;

@@ -2,7 +2,7 @@
   // Transcript blocks: terminal chrome (❯, status glyphs, rails) around
   // web-native content (real markdown, scrollable raw output). Structure rails
   // are CSS borders, never literal glyphs — glyph gutters shred when lines wrap.
-  import type { Block } from "@dextui/protocol";
+  import type { ViewBlock as Block } from "@dextui/client";
   import { copyText } from "../lib/state.svelte";
   import Markdown from "./Markdown.svelte";
   import Diff from "./Diff.svelte";

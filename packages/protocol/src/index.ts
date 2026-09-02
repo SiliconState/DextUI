@@ -137,6 +137,12 @@ export interface SessionMeta {
   pending_permissions: number;
 }
 
+/** Host-advertised slash command (composer completion is host-driven). */
+export interface HostCommand {
+  cmd: string;
+  desc: string;
+}
+
 export interface SessionConfiguredEvent {
   provider?: string;
   model?: string;
@@ -267,8 +273,14 @@ export interface ControlEventMap {
     protocol: number;
     capabilities: string[];
     sessions: SessionMeta[];
+    /** Random per host process. A changed value on reconnect means the host
+     *  restarted: journals may have been rebuilt, so clients resync from
+     *  snapshots instead of resuming by seq. */
+    instance?: string;
     model_catalog?: ModelGroup[];
     effort_options?: ThinkingEffort[];
+    /** Slash commands the host handles; absent → client derives from `slash.*` caps. */
+    commands?: HostCommand[];
   };
   hello_fail: { reason: string };
   "session.list": { sessions: SessionMeta[] };

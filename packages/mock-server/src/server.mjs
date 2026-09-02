@@ -6,6 +6,7 @@ import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
 import url from "node:url";
+import crypto from "node:crypto";
 import { acceptKey, FrameParser, encodeFrame, OP_PONG, OP_TEXT } from "./ws.mjs";
 import { loadFixture, withApprovalPause } from "./replay.mjs";
 import { fold, foldMeta } from "./fold.mjs";
@@ -47,6 +48,19 @@ const CAPABILITIES = [
   "effort_select",
   "todos_read",
 ];
+
+// Host-driven composer completion (mirrors the slash.* caps above).
+const COMMANDS = [
+  { cmd: "/help", desc: "list host commands" },
+  { cmd: "/approval", desc: "set dext approval profile" },
+  { cmd: "/compact", desc: "compact session context" },
+  { cmd: "/model", desc: "show or switch model" },
+  { cmd: "/todos", desc: "show the todo list" },
+];
+
+// Random per process so clients detect a restarted host and resync from a
+// snapshot instead of splicing a stale seq-resume onto a rebuilt journal.
+const INSTANCE = crypto.randomBytes(8).toString("hex");
 
 // ---------- state ----------
 
@@ -416,10 +430,12 @@ function handleCommand(client, frame) {
       server: "agentlink-mock",
       version: "0.1.0",
       protocol: 1,
+      instance: INSTANCE,
       capabilities: CAPABILITIES,
       sessions: [...sessions.values()].map(metaOf),
       model_catalog: MOCK_MODEL_CATALOG,
       effort_options: EFFORT_OPTIONS,
+      commands: COMMANDS,
     });
     return;
   }

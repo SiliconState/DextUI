@@ -1,13 +1,20 @@
 // Per-session projection: folds the sequenced AgentLink event stream into blocks.
 // Framework-free; the web app wraps this in a Svelte store.
+//
+// Rendering contract: `state.blocks` is replaced (new array) whenever any block
+// changes, and a changed block is replaced by a new object with the same `id`.
+// Unchanged blocks keep their reference, so keyed renderers re-render only the
+// block that moved. Deltas therefore cost O(1) object work, not O(n).
 
 import type {
   Block,
   CompactEndEvent,
   Envelope,
   HistoryContextUpdatedEvent,
+  HttpRetryEvent,
   PermissionRequestEvent,
   PermissionResolvedEvent,
+  RuntimeControlAppliedEvent,
   RuntimeViewEvent,
   SessionConfiguredEvent,
   SessionMeta,
@@ -26,7 +33,12 @@ import type {
 export interface PendingPermission extends PermissionRequestEvent {
   resolved?: { choice: string; by: string };
   timedOut?: boolean;
+  /** Client receive time, for queue ordering across sessions. */
+  received_at: number;
 }
+
+/** A projected block plus a client-stable identity for keyed rendering. */
+export type ViewBlock = Block & { id: number };
 
 export interface SessionState {
   id: string;
@@ -34,7 +46,7 @@ export interface SessionState {
   cwd: string;
   status: SessionMeta["status"];
   lastSeq: number;
-  blocks: Block[];
+  blocks: ViewBlock[];
   toolIndex: Map<string, number>;
   pending: Map<string, PendingPermission>;
   working: boolean;
@@ -42,21 +54,32 @@ export interface SessionState {
   model?: string;
   provider?: string;
   thinkingEffort?: ThinkingEffort;
+  reasoningMode?: string;
   modelLocked: boolean;
   approvalProfile?: string;
   turnUsage?: UsageUpdateEvent["turn"];
   sessionUsage?: UsageUpdateEvent["session"];
   contextChars?: number;
   diagnostics?: TurnDiagnosticsEvent;
+  telemetry?: Record<string, number>;
+  /** Last provider retry seen during the current turn; cleared on turn_end. */
+  retry?: HttpRetryEvent;
   compacting: boolean;
   failed: boolean;
+  /** Bounded raw envelope tail for the inspector (deltas excluded). */
+  recent: Envelope[];
 }
 
 export type Listener = () => void;
 
+const RECENT_CAP = 100;
+const TAIL_CAP = 4000;
+const DELTA_EVENTS = new Set(["text_delta", "thinking_delta", "tool_output_delta"]);
+
 export class SessionStore {
   state: SessionState;
   private listeners = new Set<Listener>();
+  private nextBlockId = 1;
 
   constructor(id: string) {
     this.state = {
@@ -72,6 +95,7 @@ export class SessionStore {
       compacting: false,
       failed: false,
       modelLocked: false,
+      recent: [],
     };
   }
 
@@ -89,30 +113,69 @@ export class SessionStore {
     this.emit();
   }
 
+  private stamp(b: Block): ViewBlock {
+    return { ...b, id: this.nextBlockId++ } as ViewBlock;
+  }
+
   private pushBlock(b: Block): void {
-    this.state.blocks.push(b);
+    this.state.blocks = [...this.state.blocks, this.stamp(b)];
     this.emit();
   }
 
-  private openBlock(kind: "text" | "thinking"): Extract<Block, { kind: typeof kind }> | undefined {
-    const last = this.state.blocks[this.state.blocks.length - 1];
-    if (last && last.kind === kind && !last.complete) return last as never;
-    return undefined;
+  /** Replace block `i` with `next` (keeping its id); new array, one new object. */
+  private replaceBlock(i: number, next: Block): void {
+    const prev = this.state.blocks[i];
+    if (!prev) return;
+    const blocks = this.state.blocks.slice();
+    blocks[i] = { ...next, id: prev.id } as ViewBlock;
+    this.state.blocks = blocks;
+    this.emit();
+  }
+
+  private lastOpen(kind: "text" | "thinking"): number {
+    const i = this.state.blocks.length - 1;
+    const last = this.state.blocks[i];
+    return last && last.kind === kind && !last.complete ? i : -1;
+  }
+
+  private appendStream(kind: "text" | "thinking", delta: string): void {
+    const i = this.lastOpen(kind);
+    if (i < 0) {
+      this.pushBlock({ kind, text: delta, complete: false });
+      return;
+    }
+    const open = this.state.blocks[i] as Extract<ViewBlock, { kind: "text" | "thinking" }>;
+    this.replaceBlock(i, { kind, text: open.text + delta, complete: false });
+  }
+
+  private completeStream(kind: "text" | "thinking", full: string): void {
+    const i = this.lastOpen(kind);
+    if (i < 0) this.pushBlock({ kind, text: full, complete: true });
+    else this.replaceBlock(i, { kind, text: full, complete: true });
+  }
+
+  private remember(e: Envelope): void {
+    if (DELTA_EVENTS.has(e.event)) return;
+    const recent = this.state.recent.length >= RECENT_CAP ? this.state.recent.slice(1) : this.state.recent.slice();
+    recent.push(e);
+    this.state.recent = recent;
   }
 
   apply(e: Envelope): void {
     if (typeof e.seq === "number") this.state.lastSeq = e.seq;
+    this.remember(e);
     const d = e.data as never;
     switch (e.event) {
       // --- snapshots and state ---
       case "session.snapshot": {
         const s = d as SnapshotEvent;
-        this.state.blocks = s.blocks;
+        this.state.blocks = s.blocks.map((b) => this.stamp(b));
         this.state.toolIndex = new Map();
-        s.blocks.forEach((b, i) => {
+        this.state.blocks.forEach((b, i) => {
           if (b.kind === "tool") this.state.toolIndex.set(b.call_id, i);
         });
-        this.state.pending = new Map(s.pending_permissions.map((p) => [p.request_id, { ...p }]));
+        const now = e.ts ?? Date.now();
+        this.state.pending = new Map(s.pending_permissions.map((p) => [p.request_id, { ...p, received_at: now }]));
         this.bump({
           title: s.meta.title,
           cwd: s.meta.cwd,
@@ -131,6 +194,7 @@ export class SessionStore {
           sessionUsage: s.session_usage,
           contextChars: s.context_chars,
           diagnostics: s.diagnostics,
+          retry: undefined,
         });
         return;
       }
@@ -155,7 +219,7 @@ export class SessionStore {
         this.pushBlock({ kind: "user", text: (d as { text: string }).text });
         return;
       case "turn_start":
-        this.bump({ working: true, failed: false, turnStartedAt: e.ts });
+        this.bump({ working: true, failed: false, turnStartedAt: e.ts, retry: undefined });
         return;
       case "turn_end": {
         const t = d as TurnEndEvent;
@@ -165,99 +229,52 @@ export class SessionStore {
           failed: t.failed,
           turnStartedAt: undefined,
           sessionUsage: t.usage,
+          retry: undefined,
         });
         return;
       }
       case "interrupted":
         this.sealOpenBlocks();
-        this.bump({ working: false, turnStartedAt: undefined });
+        this.bump({ working: false, turnStartedAt: undefined, retry: undefined });
         this.pushBlock({ kind: "marker", level: "warn", text: "Interrupted." });
         return;
       // --- text / thinking ---
-      case "text_delta": {
-        const open = this.openBlock("text");
-        if (open) {
-          open.text += d as string;
-          this.emit();
-        } else {
-          this.pushBlock({ kind: "text", text: d as string, complete: false });
-        }
+      case "text_delta":
+        this.appendStream("text", d as string);
         return;
-      }
-      case "text_block_complete": {
-        const open = this.openBlock("text");
-        if (open) {
-          open.text = d as string;
-          open.complete = true;
-          this.emit();
-        } else {
-          this.pushBlock({ kind: "text", text: d as string, complete: true });
-        }
+      case "text_block_complete":
+        this.completeStream("text", d as string);
         return;
-      }
-      case "thinking_delta": {
-        const open = this.openBlock("thinking");
-        if (open) {
-          open.text += d as string;
-          this.emit();
-        } else {
-          this.pushBlock({ kind: "thinking", text: d as string, complete: false });
-        }
+      case "thinking_delta":
+        this.appendStream("thinking", d as string);
         return;
-      }
-      case "thinking_block_complete": {
-        const open = this.openBlock("thinking");
-        if (open) {
-          open.text = d as string;
-          open.complete = true;
-          this.emit();
-        } else {
-          this.pushBlock({ kind: "thinking", text: d as string, complete: true });
-        }
+      case "thinking_block_complete":
+        this.completeStream("thinking", d as string);
         return;
-      }
       // --- tools ---
       case "tool_call_preview": {
         const t = d as ToolRef;
-        this.pushBlock({ kind: "tool", call_id: t.call_id, name: t.name, summary: t.summary, status: "preview" });
-        // Register so a later tool_call_start/result merges into this block
-        // instead of pushing a duplicate card.
-        this.state.toolIndex.set(t.call_id, this.state.blocks.length - 1);
+        this.mergeTool(t.call_id, { status: "preview" }, t);
         return;
       }
       case "tool_call_start": {
         const t = d as ToolRef;
-        this.mergeTool(t.call_id, {
-          kind: "tool",
-          call_id: t.call_id,
-          name: t.name,
-          summary: t.summary,
-          status: "running",
-        });
+        this.mergeTool(t.call_id, { status: "running" }, t);
         return;
       }
       case "tool_output_delta": {
         const o = d as ToolOutputDeltaEvent;
         const i = this.state.toolIndex.get(o.call_id);
-        if (i !== undefined) {
-          const b = this.state.blocks[i];
-          if (b && b.kind === "tool") {
-            b.output_tail = ((b.output_tail ?? "") + o.text).slice(-4000);
-            this.emit();
-          }
+        if (i === undefined) return;
+        const b = this.state.blocks[i];
+        if (b && b.kind === "tool") {
+          this.replaceBlock(i, { ...b, output_tail: ((b.output_tail ?? "") + o.text).slice(-TAIL_CAP) });
         }
         return;
       }
       case "tool_call_result": {
         const t = d as ToolResultEvent;
-        this.mergeTool(t.call_id, {
-          kind: "tool",
-          call_id: t.call_id,
-          name: t.name,
-          summary: t.summary,
-          status: t.ok ? "ok" : "failed",
-          content: t.content,
-        });
+        this.mergeTool(t.call_id, { status: t.ok ? "ok" : "failed", content: t.content }, t);
         return;
       }
       case "tool_batch_start": {
@@ -273,7 +290,8 @@ export class SessionStore {
       // --- permissions ---
       case "permission.request": {
         const p = d as PermissionRequestEvent;
-        this.state.pending.set(p.request_id, { ...p });
+        this.state.pending = new Map(this.state.pending);
+        this.state.pending.set(p.request_id, { ...p, received_at: e.ts ?? Date.now() });
         this.emit();
         return;
       }
@@ -282,6 +300,7 @@ export class SessionStore {
         const p = this.state.pending.get(r.request_id);
         if (p) {
           p.resolved = { choice: r.choice, by: r.by };
+          this.state.pending = new Map(this.state.pending);
           this.state.pending.delete(r.request_id);
           this.pushBlock({
             kind: "marker",
@@ -297,6 +316,7 @@ export class SessionStore {
         const p = this.state.pending.get(t.request_id);
         if (p) {
           p.timedOut = true;
+          this.state.pending = new Map(this.state.pending);
           this.state.pending.delete(t.request_id);
           this.pushBlock({ kind: "marker", level: "warn", text: `${p.tool}: approval timed out (denied)` });
         }
@@ -322,9 +342,50 @@ export class SessionStore {
       case "thinking_effort_changed":
         this.bump({ thinkingEffort: (d as { effort: ThinkingEffort }).effort });
         return;
+      case "reasoning_mode_changed": {
+        const mode = (d as { mode: string }).mode;
+        this.bump({ reasoningMode: mode });
+        this.pushBlock({ kind: "marker", level: "note", text: `Reasoning mode → ${mode}` });
+        return;
+      }
       case "approval_profile_changed":
         this.bump({ approvalProfile: (d as { profile: string }).profile });
         return;
+      case "http_retry": {
+        const r = d as HttpRetryEvent;
+        this.bump({ retry: r });
+        this.pushBlock({ kind: "marker", level: "warn", text: `Provider retry #${r.attempt} in ${r.wait_secs}s: ${r.reason}` });
+        return;
+      }
+      case "external_telemetry":
+        this.bump({ telemetry: (d as { telemetry: Record<string, number> }).telemetry });
+        return;
+      case "runtime_control":
+        this.pushBlock({ kind: "marker", level: "info", text: `Runtime control: ${String(d)}` });
+        return;
+      case "runtime_control_applied": {
+        const a = d as RuntimeControlAppliedEvent;
+        const parts: string[] = [];
+        if (a.model_changed) parts.push("model");
+        if (a.effort_changed) parts.push("effort");
+        if (a.mode_changed) parts.push("mode");
+        if (a.stream_aborted) parts.push("stream aborted");
+        this.pushBlock({
+          kind: "marker",
+          level: a.stream_aborted ? "warn" : "note",
+          text: `Runtime control applied (${a.commands} command${a.commands === 1 ? "" : "s"})${parts.length ? `: ${parts.join(", ")}` : ""}`,
+        });
+        return;
+      }
+      case "login_input_mode": {
+        const l = d as { provider?: string | null };
+        this.pushBlock({
+          kind: "marker",
+          level: "warn",
+          text: `Login required${l?.provider ? ` for ${l.provider}` : ""} — complete it in the dext TUI.`,
+        });
+        return;
+      }
       case "compact_start":
         this.bump({ compacting: true });
         return;
@@ -368,30 +429,46 @@ export class SessionStore {
         return;
       }
       default:
-        // http_retry, external_telemetry, runtime_control*, login_input_mode,
-        // thinking_effort_changed, reasoning_mode_changed: surfaced later in the inspector.
+        // Unknown/extension events (x-*) are kept in `recent` for the inspector.
+        this.emit();
         return;
     }
   }
 
   /** End of turn (or interrupt): no streaming block may stay open. */
   private sealOpenBlocks(): void {
-    for (const b of this.state.blocks) {
-      if ((b.kind === "text" || b.kind === "thinking") && !b.complete) b.complete = true;
-    }
+    let blocks: ViewBlock[] | undefined;
+    this.state.blocks.forEach((b, i) => {
+      if ((b.kind === "text" || b.kind === "thinking") && !b.complete) {
+        blocks ??= this.state.blocks.slice();
+        blocks[i] = { ...b, complete: true };
+      }
+    });
+    if (blocks) this.state.blocks = blocks;
   }
 
-  private mergeTool(callId: string, next: Extract<Block, { kind: "tool" }>): void {
+  /** Merge a tool lifecycle patch into the card keyed by call_id (create on first sight). */
+  private mergeTool(
+    callId: string,
+    patch: Partial<Extract<Block, { kind: "tool" }>>,
+    ref: ToolRef,
+  ): void {
     const i = this.state.toolIndex.get(callId);
     if (i === undefined) {
       this.state.toolIndex.set(callId, this.state.blocks.length);
-      this.pushBlock(next);
+      this.pushBlock({
+        kind: "tool",
+        call_id: callId,
+        name: ref.name,
+        summary: ref.summary ?? "",
+        status: "preview",
+        ...patch,
+      });
       return;
     }
     const prev = this.state.blocks[i];
     if (prev && prev.kind === "tool") {
-      Object.assign(prev, next, { output_tail: prev.output_tail ?? next.output_tail });
-      this.emit();
+      this.replaceBlock(i, { ...prev, name: ref.name, summary: ref.summary ?? prev.summary, ...patch });
     }
   }
 }
