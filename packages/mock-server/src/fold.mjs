@@ -59,16 +59,23 @@ export function fold(journal) {
   };
 
   const mergeTool = (d, patch) => {
+    // name/summary are sticky: an event that omits them (or sends "") never
+    // clears what an earlier event set — tool_call_preview often carries the
+    // only summary, and later start/result events may omit it entirely.
+    const summary = d.summary || "";
     let i = toolIndex.get(d.call_id);
     if (i === undefined) {
       i = blocks.push({
         kind: "tool",
         call_id: d.call_id,
         name: d.name,
-        summary: d.summary ?? "",
+        summary,
         status: "preview",
       }) - 1;
       toolIndex.set(d.call_id, i);
+    } else {
+      if (summary) blocks[i].summary = summary;
+      if (d.name) blocks[i].name = d.name;
     }
     Object.assign(blocks[i], patch);
   };
@@ -115,7 +122,7 @@ export function fold(journal) {
         mergeTool(d, { status: "preview" });
         break;
       case "tool_call_start":
-        mergeTool(d, { status: "running", name: d.name, summary: d.summary ?? "" });
+        mergeTool(d, { status: "running" });
         break;
       case "tool_output_delta": {
         const i = toolIndex.get(d.call_id);
@@ -126,7 +133,7 @@ export function fold(journal) {
         break;
       }
       case "tool_call_result":
-        mergeTool(d, { status: d.ok ? "ok" : "failed", content: d.content, name: d.name, summary: d.summary ?? "" });
+        mergeTool(d, { status: d.ok ? "ok" : "failed", content: d.content });
         break;
       case "tool_batch_start":
         blocks.push({ kind: "marker", level: "note", text: `Batch: ${(d.labels ?? []).join(" · ")}` });

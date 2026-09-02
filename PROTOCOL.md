@@ -79,6 +79,8 @@ Tag and payload are byte-identical to dext's `stream-json` output (unit variants
 | `tool_call_start` | `{call_id, name, summary}` | executing |
 | `tool_output_delta` | `{call_id, name, stream, text}` | live stdout/stderr tail |
 | `tool_call_result` | `{call_id, name, ok, preview, content}` | terminal; content is host-capped |
+
+Tool cards are keyed by `call_id`, and `name`/`summary` are **sticky**: an event that omits either field (or sends an empty string) never clears what an earlier event set — `tool_call_preview` frequently carries the only summary, and the later `tool_call_start`/`tool_call_result` may omit it.
 | `tool_batch_start` | `{batch_id, call_ids[], labels[]}` | parallel group opened |
 | `tool_batch_end` | `{batch_id, call_ids[], labels[], failed}` | group closed |
 | `usage_update` | `{turn:Usage, session:Usage}` | `Usage = {input, output, cache_create, cache_read, cost_usd}` |

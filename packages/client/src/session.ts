@@ -460,7 +460,7 @@ export class SessionStore {
         kind: "tool",
         call_id: callId,
         name: ref.name,
-        summary: ref.summary ?? "",
+        summary: ref.summary || "",
         status: "preview",
         ...patch,
       });
@@ -468,7 +468,9 @@ export class SessionStore {
     }
     const prev = this.state.blocks[i];
     if (prev && prev.kind === "tool") {
-      this.replaceBlock(i, { ...prev, name: ref.name, summary: ref.summary ?? prev.summary, ...patch });
+      // Sticky name/summary: an event that omits them (or sends "") never clears
+      // what an earlier event set — tool_call_preview often carries the only summary.
+      this.replaceBlock(i, { ...prev, name: ref.name || prev.name, summary: ref.summary || prev.summary || "", ...patch });
     }
   }
 }
