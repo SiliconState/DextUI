@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { app, start, connection, newSession } from "./lib/state.svelte";
+  import { app, start, connection, newSession, toggleSidebar } from "./lib/state.svelte";
   import type { Block } from "@dextui/protocol";
   import SessionIndex from "./components/SessionIndex.svelte";
   import Scrollback from "./components/Scrollback.svelte";
@@ -48,7 +48,22 @@
     if (c && app.activeId) c.respond(app.activeId, requestId, choice);
   }
 
-  // Keyboard-first approvals: a=once, s=always, d=deny; esc closes overlays.
+  function toggleNavigation() {
+    if (matchMedia("(max-width: 900px)").matches) indexOpen = !indexOpen;
+    else toggleSidebar();
+  }
+
+  // Never carry an open off-canvas drawer across the desktop breakpoint.
+  $effect(() => {
+    const mobile = matchMedia("(max-width: 900px)");
+    const onChange = () => {
+      indexOpen = false;
+    };
+    mobile.addEventListener("change", onChange);
+    return () => mobile.removeEventListener("change", onChange);
+  });
+
+  // Keyboard-first approvals: a=once, s=always, d=deny; Ctrl/Cmd+B toggles navigation.
   $effect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
@@ -56,7 +71,12 @@
         else if (indexOpen) indexOpen = false;
         return;
       }
-      if (app.paletteOpen) return;
+      if (app.paletteOpen || inspect) return;
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "b") {
+        e.preventDefault();
+        toggleNavigation();
+        return;
+      }
       // Modified combos belong to the browser/app (Ctrl+A select-all, Ctrl+S save…).
       if (e.ctrlKey || e.metaKey || e.altKey) return;
       const t = e.target as HTMLElement | null;
@@ -95,9 +115,9 @@
     </form>
   </div>
 {:else}
-  <div class="shell" data-state={app.phase} data-agent-id="app.root">
+  <div class="shell" class:rail-collapsed={app.sidebarCollapsed} data-state={app.phase} data-agent-id="app.root">
     <aside class="index" data-state={indexOpen ? "open" : "closed"} data-agent-id="session.rail.wrap">
-      <SessionIndex onPick={() => (indexOpen = false)} />
+      <SessionIndex onPick={() => (indexOpen = false)} onCollapse={toggleSidebar} onClose={() => (indexOpen = false)} />
     </aside>
     {#if indexOpen}
       <div class="index-scrim" onclick={() => (indexOpen = false)} onkeydown={() => {}} role="presentation"></div>
@@ -142,10 +162,13 @@
 
     <div class="statusline">
       {#if activeStore}
-        <StatusLine store={activeStore} onToggleIndex={() => (indexOpen = !indexOpen)} />
+        <StatusLine store={activeStore} onToggleIndex={toggleNavigation} />
       {:else}
         <div class="sl-min" data-agent-id="status.phase" data-state={app.phase}>
-          <button class="act idx-toggle" data-agent-id="index.toggle" onclick={() => (indexOpen = !indexOpen)}>[≡]</button>
+          <button class="act idx-toggle" data-agent-id="index.toggle" onclick={toggleNavigation}>[≡]</button>
+          {#if app.sidebarCollapsed}
+            <button class="act rail-restore-min" data-agent-id="sidebar.restore" onclick={toggleSidebar}>[› sessions]</button>
+          {/if}
           <span class={app.phase === "live" ? "st-green" : app.phase === "failed" ? "st-red" : "st-yellow pulse"}>●</span>
           <span class="dim">{app.phase}{app.phaseDetail ? ` · ${app.phaseDetail}` : ""}</span>
           <span class="faint sl-min-right">⌘k finder</span>
@@ -243,12 +266,18 @@
   .sl-min-right {
     margin-left: auto;
   }
+  .rail-restore-min {
+    color: var(--cyan);
+  }
   .idx-toggle {
     display: none;
   }
   @media (max-width: 900px) {
     .idx-toggle {
       display: inline;
+    }
+    .rail-restore-min {
+      display: none;
     }
   }
   .insp {

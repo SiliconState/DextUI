@@ -22,6 +22,7 @@ export const app = $state({
   modelCatalog: [] as ModelGroup[],
   effortOptions: [] as ThinkingEffort[],
   paletteOpen: false,
+  sidebarCollapsed: false,
   theme: "dark" as Theme,
   toasts: [] as Toast[],
 });
@@ -81,6 +82,11 @@ export async function copyText(text: string, what = "Copied"): Promise<void> {
   }
 }
 
+export function toggleSidebar(): void {
+  app.sidebarCollapsed = !app.sidebarCollapsed;
+  localStorage.setItem("dextui.sidebarCollapsed", app.sidebarCollapsed ? "1" : "0");
+}
+
 export function rePair(): void {
   localStorage.removeItem("dextui.token");
   location.reload();
@@ -92,6 +98,7 @@ export function ensureStarted(): void {
   const stored = localStorage.getItem("dextui.theme");
   const theme: Theme = stored === "dark" || stored === "light" || stored === "system" ? stored : "system";
   app.theme = theme;
+  app.sidebarCollapsed = localStorage.getItem("dextui.sidebarCollapsed") === "1";
   applyTheme(theme);
   // Follow OS scheme changes live while in system mode.
   sysDark.addEventListener("change", () => {

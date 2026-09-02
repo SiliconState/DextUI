@@ -53,10 +53,10 @@ answers `markdown table demo` with a rich-markdown turn.
 - **Real markdown rendering**: GFM tables, nested lists, headings, blockquotes,
   fences, safe links — real DOM elements, escaped by construction; pre-drawn
   box-art passes through verbatim in x-scrolling `<pre>`
-- **Multi-session** index with status glyphs and pending badges
+- **Multi-session** index with status glyphs and pending badges; desktop sidebar can be minimized/restored (`Ctrl/Cmd+B`) and persists, while narrow screens use an off-canvas drawer
 - **Keyboard-first approvals** (mock/upstream): `a` / `s` / `d`, note, diff preview
 - **Finder** (`⌘K`/`Ctrl+K`): fzf-style — sessions, approvals, theme, stop, re-pair
-- **Terminal composer**: `❯` prompt line, slash menu with tab completion, per-session drafts
+- **Responsive working surface**: chat/history stay left-anchored and use the available main pane; the composer keeps its full-window prompt behavior; document height is fixed to the viewport and only scrollback scrolls
 - **Status line** in dext's TUI idiom: `● cwd | title │ model │ effort │ approval │ Ctx [██████░░░░] │ ↑↓ $`
 - **Per-session model + reasoning controls**: native web selectors populated from dext's configured provider catalog. Choose a provider/model before a fresh session's first turn; model then locks to the durable seat. Reasoning effort (`off` through `max`) remains changeable between turns and is reapplied after resume.
 - **Themes**: dark / light / system (follows OS live), persisted

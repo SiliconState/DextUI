@@ -3,7 +3,7 @@
   //   ● ~/cwd | session │ model │ approval:ask │ Ctx [██████░░░░] 42% │ ↑12k ↓3k $0.04
   import type { SessionStore } from "@dextui/client";
   import type { ThinkingEffort } from "@dextui/protocol";
-  import { app, toggleTheme, rePair } from "../lib/state.svelte";
+  import { app, toggleTheme, rePair, toggleSidebar } from "../lib/state.svelte";
   import { fmtTokens, fmtElapsed } from "../lib/markdown";
 
   let { store, onToggleIndex }: { store: SessionStore; onToggleIndex?: () => void } = $props();
@@ -85,6 +85,9 @@
 <div class="sl" data-agent-id="status.hud" data-state={view.working ? "working" : "idle"}>
   {#if onToggleIndex}
     <button class="act idx-toggle" data-agent-id="index.toggle" onclick={onToggleIndex}>[≡]</button>
+  {/if}
+  {#if app.sidebarCollapsed}
+    <button class="act rail-restore" data-agent-id="sidebar.restore" onclick={toggleSidebar} title="Show sessions (Ctrl/Cmd+B)">[› sessions]</button>
   {/if}
   <span class={`dot ${dotClass}`} data-agent-id="status.phase" data-state={app.phase}>●</span>
   <span class="st-green truncate">{view.cwd || "dextui"}</span>
@@ -257,9 +260,15 @@
   .idx-toggle {
     display: none;
   }
-  @media (max-width: 820px) {
+  .rail-restore {
+    color: var(--cyan);
+  }
+  @media (max-width: 900px) {
     .idx-toggle {
       display: inline;
+    }
+    .rail-restore {
+      display: none;
     }
     .truncate {
       max-width: 90px;

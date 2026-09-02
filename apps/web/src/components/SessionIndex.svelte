@@ -3,7 +3,11 @@
   // Status glyphs mirror the TUI: ● live · ● starting (pulse) · ○ cold · ● exited.
   import { app, activate, newSession } from "../lib/state.svelte";
 
-  let { onPick }: { onPick?: () => void } = $props();
+  let {
+    onPick,
+    onCollapse,
+    onClose,
+  }: { onPick?: () => void; onCollapse?: () => void; onClose?: () => void } = $props();
 
   let query = $state("");
 
@@ -30,6 +34,8 @@
     <span class="faint">sessions</span>
     <span class="faint">{filtered.length}</span>
     <button class="act accent" data-agent-id="session.new" onclick={newSession}>+ new</button>
+    <button class="act rail-min" data-agent-id="sidebar.collapse" onclick={onCollapse} title="Minimize sessions (Ctrl/Cmd+B)">[‹]</button>
+    <button class="act rail-close" data-agent-id="sidebar.close" onclick={onClose} title="Close sessions">[×]</button>
   </div>
   <input
     bind:value={query}
@@ -80,8 +86,19 @@
     padding: 8px 10px 4px;
     border-bottom: 1px solid var(--line);
   }
-  .idx-head .act {
+  .idx-head [data-agent-id="session.new"] {
     margin-left: auto;
+  }
+  .rail-close {
+    display: none;
+  }
+  @media (max-width: 900px) {
+    .rail-min {
+      display: none;
+    }
+    .rail-close {
+      display: inline;
+    }
   }
   .idx-search {
     padding: 6px 10px;

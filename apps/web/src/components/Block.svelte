@@ -132,8 +132,7 @@
     user-select: none;
   }
   .b-user {
-    width: min(100%, var(--content-readable));
-    margin-inline: auto;
+    width: 100%;
     display: flex;
     gap: 8px;
     align-items: baseline;
@@ -144,8 +143,7 @@
   }
   .b-text {
     position: relative;
-    width: min(100%, var(--content-readable));
-    margin-inline: auto;
+    width: 100%;
   }
   .cursor {
     color: var(--green);
@@ -165,8 +163,7 @@
     visibility: visible;
   }
   .b-think {
-    width: min(100%, var(--content-readable));
-    margin-inline: auto;
+    width: 100%;
   }
   .b-think.live {
     background: var(--bg1);
@@ -253,11 +250,10 @@
     display: none;
   }
   .view-body {
-    width: min(100%, var(--content-readable));
+    width: 100%;
   }
   .b-marker {
-    width: min(100%, var(--content-readable));
-    margin-inline: auto;
+    width: 100%;
     white-space: pre-wrap;
   }
   .b-slash {

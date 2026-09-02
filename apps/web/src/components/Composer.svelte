@@ -126,7 +126,7 @@
   }
 </script>
 
-<div class="c-root content-axis" data-agent-id="composer.root">
+<div class="c-root" data-agent-id="composer.root">
   {#if slashOpen && slashList.length > 0}
     <div class="c-menu" data-agent-id="composer.menu" data-state="open">
       {#each slashList as c, i (c.cmd)}
@@ -177,7 +177,7 @@
 <style>
   .c-root {
     position: relative;
-    padding-block: clamp(0.35rem, 0.8vh, 0.6rem);
+    padding: 4px 10px 6px;
   }
   .c-row {
     display: flex;
@@ -212,8 +212,8 @@
   .c-menu {
     position: absolute;
     bottom: 100%;
-    left: var(--page-gutter);
-    right: var(--page-gutter);
+    left: 10px;
+    right: 10px;
     margin-bottom: 2px;
     border: 1px solid var(--line);
     background: var(--bg1);
