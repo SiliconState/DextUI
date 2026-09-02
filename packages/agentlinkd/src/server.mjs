@@ -5,13 +5,22 @@
 //
 //   node packages/agentlinkd/src/server.mjs \
 //     [--port=8788] [--token=SECRET] [--dext=/path/to/dext] \
-//     [--cwd=/work/dir] [--approval=auto-read] [--static=apps/web/dist]
+//     [--cwd=/work/dir] [--approval=auto-read] [--static=apps/web/dist] \
+//     [--state-dir=~/.dextui/agentlinkd]
 //
 // Every prompt becomes one dext child:
 //   turn 1:  dext -p --output stream-json --cd CWD --approval P --seat SEAT
 //   turn 2+: dext -p --output stream-json --cd CWD --approval P --seat SEAT --resume
 // The child's ndjson events are journaled and fanned out verbatim; the client
 // already speaks this dialect byte-for-byte (fixtures are recordings of it).
+//
+// Durable state lives under --state-dir (default $HOME/.dextui/agentlinkd, env
+// AGENTLINKD_STATE_DIR), created 0700 with symlink rejection throughout: each
+// session's envelopes append to journals/<id>.jsonl (0600) and the index
+// sessions.json is rewritten atomically, so a host restart restores the list.
+// Restored sessions come back "cold" — no child, not working; session.open or
+// prompt.submit wakes them through starting -> live, and session.close returns
+// them to cold because the durable session is the dext seat, not the child.
 
 import http from "node:http";
 import fs from "node:fs";
@@ -47,6 +56,12 @@ const DEXT_BIN = resolveDext();
 const DEFAULT_CWD = path.resolve(argValue("cwd", process.cwd()));
 const DEFAULT_APPROVAL = argValue("approval", process.env.DEXT_APPROVAL ?? "auto-read");
 const STATIC_DIR = path.resolve(argValue("static", path.join(repoRoot, "apps", "web", "dist")));
+const STATE_DIR = path.resolve(
+  argValue("state-dir", process.env.AGENTLINKD_STATE_DIR ?? path.join(process.env.HOME ?? "", ".dextui", "agentlinkd")),
+);
+const JOURNALS_DIR = path.join(STATE_DIR, "journals");
+const INDEX_PATH = path.join(STATE_DIR, "sessions.json");
+const JOURNAL_TRUNCATE_BYTES = 64 * 1024 * 1024;
 const APPROVALS = new Set(["auto-read", "auto-write", "never", "always"]);
 const EFFORT_OPTIONS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 const EFFORTS = new Set(EFFORT_OPTIONS);
@@ -58,6 +73,51 @@ if (!TOKEN) throw new Error("pairing token must not be empty");
 if (!APPROVALS.has(DEFAULT_APPROVAL)) throw new Error(`invalid --approval '${DEFAULT_APPROVAL}'`);
 if (!fs.existsSync(DEFAULT_CWD) || !fs.statSync(DEFAULT_CWD).isDirectory()) {
   throw new Error(`--cwd is not a directory: ${DEFAULT_CWD}`);
+}
+
+// ---------- auth: constant-time compare + failure limiter ----------
+
+// sha256 both sides so timingSafeEqual always sees equal-length buffers.
+const TOKEN_DIGEST = crypto.createHash("sha256").update(TOKEN, "utf8").digest();
+const AUTH_FAILURE_LIMIT = 5;
+const AUTH_WINDOW_MS = 60_000;
+const AUTH_LOCKOUT_MS = 30_000;
+let authFailures = [];
+let authLockedUntil = 0;
+let authLockLogged = false;
+
+function tokenEquals(presented) {
+  const digest = crypto.createHash("sha256").update(String(presented ?? ""), "utf8").digest();
+  return crypto.timingSafeEqual(digest, TOKEN_DIGEST);
+}
+
+function authLocked() {
+  const now = Date.now();
+  if (authLockedUntil > now) return true;
+  if (authLockedUntil !== 0) {
+    authLockedUntil = 0;
+    authLockLogged = false;
+  }
+  authFailures = authFailures.filter((t) => now - t < AUTH_WINDOW_MS);
+  return false;
+}
+
+function noteAuthFailure() {
+  const now = Date.now();
+  authFailures = authFailures.filter((t) => now - t < AUTH_WINDOW_MS);
+  authFailures.push(now);
+  // Global limiter: single-operator host, one counter. Engaging clears the
+  // window so the lockout expiry starts from a clean slate.
+  if (authFailures.length >= AUTH_FAILURE_LIMIT && authLockedUntil <= now) {
+    authLockedUntil = now + AUTH_LOCKOUT_MS;
+    authFailures = [];
+    if (!authLockLogged) {
+      authLockLogged = true;
+      console.error(
+        `agentlinkd: ${AUTH_FAILURE_LIMIT} auth failures in ${AUTH_WINDOW_MS / 1000}s; rejecting auth attempts for ${AUTH_LOCKOUT_MS / 1000}s`,
+      );
+    }
+  }
 }
 
 function dextOutput(args) {
@@ -134,6 +194,7 @@ const CAPABILITIES = [
   "slash",
   "slash.help",
   "slash.approval",
+  "todos_read",
 ];
 
 // Host-handled slash commands, advertised in hello_ok so the composer's
@@ -176,9 +237,184 @@ function makeSession({ cwd, approval }) {
     turns: 0,
     child: null,
     killed: false,
+    indexEntry: null,
   };
   sessions.set(id, s);
+  persistIndex();
   return s;
+}
+
+// ---------- durable state (--state-dir) ----------
+
+// Fail closed on symlinks anywhere under the state dir: a swapped link would
+// redirect private journal/index writes outside the operator's 0700 tree.
+function lstatChecked(p, what) {
+  let st;
+  try {
+    st = fs.lstatSync(p);
+  } catch (err) {
+    if (err.code === "ENOENT") return null;
+    throw err;
+  }
+  if (st.isSymbolicLink()) throw new Error(`${what} is a symlink, refusing: ${p}`);
+  return st;
+}
+
+function journalFile(s) {
+  return path.join(JOURNALS_DIR, `${s.id}.jsonl`);
+}
+
+function appendJournalLine(s, env) {
+  try {
+    lstatChecked(journalFile(s), "journal file");
+    fs.appendFileSync(journalFile(s), `${JSON.stringify(env)}\n`, { mode: 0o600 });
+  } catch (err) {
+    // The live stream stays authoritative; durability degrades loudly, not silently.
+    console.error(`agentlinkd: journal append failed for ${s.id}: ${err.message}`);
+  }
+}
+
+function indexEntryOf(s) {
+  const tail = s.journal[s.journal.length - 1];
+  return {
+    id: s.id,
+    title: s.title,
+    cwd: s.cwd,
+    approval: s.approval,
+    provider: s.provider,
+    model: s.model,
+    thinkingEffort: s.thinkingEffort,
+    modelLocked: s.modelLocked,
+    seat: s.seat,
+    turns: s.turns,
+    createdAt: s.createdAt,
+    updatedAt: tail?.ts ?? s.createdAt,
+  };
+}
+
+// Rewrites sessions.json only when one of its fields actually changed; the
+// tmp+rename swap keeps readers from ever seeing a torn index.
+function persistIndex() {
+  let dirty = false;
+  for (const s of sessions.values()) {
+    const entry = JSON.stringify(indexEntryOf(s));
+    if (s.indexEntry !== entry) {
+      s.indexEntry = entry;
+      dirty = true;
+    }
+  }
+  if (!dirty) return;
+  try {
+    lstatChecked(INDEX_PATH, "session index");
+    const tmp = `${INDEX_PATH}.tmp`;
+    fs.writeFileSync(tmp, `${JSON.stringify([...sessions.values()].map(indexEntryOf), null, 2)}\n`, { mode: 0o600 });
+    fs.renameSync(tmp, INDEX_PATH);
+  } catch (err) {
+    console.error(`agentlinkd: session index write failed: ${err.message}`);
+  }
+}
+
+function initStateDir() {
+  fs.mkdirSync(STATE_DIR, { recursive: true, mode: 0o700 });
+  const st = lstatChecked(STATE_DIR, "state dir");
+  if (!st?.isDirectory()) throw new Error(`--state-dir is not a directory: ${STATE_DIR}`);
+  fs.mkdirSync(JOURNALS_DIR, { recursive: true, mode: 0o700 });
+  const jst = lstatChecked(JOURNALS_DIR, "journals dir");
+  if (!jst?.isDirectory()) throw new Error(`journals dir is not a directory: ${JOURNALS_DIR}`);
+}
+
+function restoreJournal(s) {
+  const file = journalFile(s);
+  let st;
+  try {
+    st = lstatChecked(file, "journal file");
+  } catch (err) {
+    console.error(`agentlinkd: journal for ${s.id} rejected: ${err.message}`);
+    return;
+  }
+  if (!st?.isFile()) return; // missing file: seq stays 0 with an empty journal
+  let buf = fs.readFileSync(file);
+  if (buf.length > JOURNAL_TRUNCATE_BYTES) {
+    const keep = buf.subarray(buf.length - JOURNAL_TRUNCATE_BYTES);
+    const nl = keep.indexOf("\n");
+    const trimmed = nl >= 0 ? keep.subarray(nl + 1) : Buffer.alloc(0);
+    const tmp = `${file}.tmp`;
+    fs.writeFileSync(tmp, trimmed, { mode: 0o600 });
+    fs.renameSync(tmp, file);
+    console.error(
+      `agentlinkd: journal for ${s.id} exceeded ${JOURNAL_TRUNCATE_BYTES} bytes; truncated to the last ${JOURNAL_TRUNCATE_BYTES} bytes at a line boundary`,
+    );
+    buf = trimmed;
+  }
+  if (buf.length > 0 && buf[buf.length - 1] !== 0x0a) {
+    // Torn final line: fence it off so the next append cannot merge into it.
+    try {
+      fs.appendFileSync(file, "\n", { mode: 0o600 });
+    } catch {
+      /* read-only media; parsing below already skips the partial line */
+    }
+  }
+  for (const line of buf.toString("utf8").split("\n")) {
+    const t = line.trim();
+    if (!t) continue;
+    let env;
+    try {
+      env = JSON.parse(t);
+    } catch {
+      continue; // skip malformed lines
+    }
+    if (!env || typeof env !== "object" || typeof env.event !== "string" || !Number.isInteger(env.seq)) continue;
+    s.journal.push(env);
+    if (env.seq > s.seq) s.seq = env.seq;
+  }
+}
+
+// Boot: load sessions.json, bring every session back cold, replay journals,
+// and continue sessionCounter from the highest numeric id.
+function restoreSessions() {
+  let entries = [];
+  const st = lstatChecked(INDEX_PATH, "session index");
+  if (st?.isFile()) {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(INDEX_PATH, "utf8"));
+      if (Array.isArray(parsed)) entries = parsed;
+      else console.error("agentlinkd: sessions.json is not an array; starting with no restored sessions");
+    } catch (err) {
+      console.error(`agentlinkd: sessions.json unreadable (${err.message}); starting with no restored sessions`);
+    }
+  }
+  for (const e of entries) {
+    if (!e || typeof e !== "object" || typeof e.id !== "string" || !/^sess_\d+$/.test(e.id)) continue;
+    if (sessions.has(e.id)) continue;
+    const s = {
+      id: e.id,
+      title: typeof e.title === "string" && e.title ? e.title : "New session",
+      cwd: typeof e.cwd === "string" && e.cwd ? e.cwd : DEFAULT_CWD,
+      approval: APPROVALS.has(e.approval) ? e.approval : DEFAULT_APPROVAL,
+      provider: typeof e.provider === "string" ? e.provider : null,
+      model: typeof e.model === "string" ? e.model : null,
+      thinkingEffort: EFFORTS.has(e.thinkingEffort) ? e.thinkingEffort : "medium",
+      modelLocked: !!e.modelLocked,
+      seat: typeof e.seat === "string" && e.seat ? e.seat : `dextui-${crypto.randomBytes(4).toString("hex")}`,
+      status: "cold",
+      working: false,
+      turnStartedAt: null,
+      createdAt: Number.isInteger(e.createdAt) ? e.createdAt : Date.now(),
+      seq: 0,
+      journal: [],
+      pending: new Map(), // always empty: approvals live in dext's own policy
+      turns: Number.isInteger(e.turns) && e.turns >= 0 ? e.turns : 0,
+      child: null,
+      killed: false,
+      indexEntry: null,
+    };
+    sessions.set(s.id, s);
+    restoreJournal(s);
+    s.indexEntry = JSON.stringify(indexEntryOf(s));
+    const n = Number(s.id.slice(5));
+    if (Number.isInteger(n) && n > sessionCounter) sessionCounter = n;
+  }
+  if (sessions.size > 0) console.error(`agentlinkd: restored ${sessions.size} session(s) cold from ${STATE_DIR}`);
 }
 
 // ---------- journal + publish ----------
@@ -187,6 +423,7 @@ function journalData(s, event, data) {
   const env = { v: 1, session: s.id, seq: ++s.seq, ts: Date.now(), event };
   if (data !== undefined) env.data = data;
   s.journal.push(env);
+  appendJournalLine(s, env);
   return env;
 }
 
@@ -203,7 +440,7 @@ function metaOf(s) {
     approval_profile: s.approval,
     status: s.status,
     created_at: s.createdAt,
-    updated_at: Date.now(),
+    updated_at: s.journal.length > 0 ? s.journal[s.journal.length - 1].ts : s.createdAt,
     last_seq: s.seq,
     unread: 0,
     pending_permissions: 0,
@@ -383,6 +620,7 @@ function runTurn(s, prompt) {
       }));
       publish(journalData(s, "turn_end", turnEndData));
     }
+    persistIndex();
     scheduleList();
   };
 
@@ -441,6 +679,16 @@ function killChild(s, interrupted = true) {
   }, 5000);
 }
 
+/** Wake a cold session: starting -> live, journaled so reconnecting clients
+ *  see the same transition. The dext seat is durable; waking needs no child. */
+function wakeSession(s) {
+  publish(journalData(s, "session.state", { status: "starting" }));
+  s.status = "live";
+  publish(journalData(s, "session.state", { status: "live" }));
+  persistIndex();
+  scheduleList();
+}
+
 // ---------- command dispatch ----------
 
 function sendControl(client, event, data) {
@@ -477,6 +725,7 @@ function handleSlash(client, s, raw) {
       return;
     }
     s.approval = profile;
+    persistIndex();
     publish(journalData(s, "approval_profile_changed", { profile }));
     publish(journalData(s, "slash", `approval profile → ${profile} (next turn)`));
     return;
@@ -494,7 +743,13 @@ function handleCommand(client, frame) {
       sendError(client, "not_authenticated", "hello required");
       return;
     }
-    if (frame.token !== TOKEN) {
+    if (authLocked()) {
+      sendControl(client, "hello_fail", { reason: "rate_limited" });
+      client.close(1008);
+      return;
+    }
+    if (!tokenEquals(frame.token)) {
+      noteAuthFailure();
       sendControl(client, "hello_fail", { reason: "invalid token" });
       client.close(1008);
       return;
@@ -531,7 +786,8 @@ function handleCommand(client, frame) {
           sendError(client, "no_session", `unknown session ${frame.id}`);
           return;
         }
-        scheduleList();
+        if (s.status === "cold") wakeSession(s);
+        else scheduleList();
         return;
       }
       const requestedCwd = typeof frame.cwd === "string" ? path.resolve(frame.cwd) : DEFAULT_CWD;
@@ -554,7 +810,10 @@ function handleCommand(client, frame) {
       }
       client.subs.add(s.id);
       const since = frame.since_seq;
-      if (typeof since === "number" && since >= 0 && since <= s.seq) {
+      // Replay only when every envelope after `since` is still retained
+      // (oversized journals are truncated on boot); otherwise resync by snapshot.
+      const firstRetainedSeq = s.journal.length > 0 ? s.journal[0].seq : s.seq + 1;
+      if (typeof since === "number" && since >= 0 && since >= firstRetainedSeq && since <= s.seq) {
         for (const env of s.journal) if (env.seq > since) client.send(JSON.stringify(env));
       } else {
         client.send(JSON.stringify(snapshotEnvelope(s)));
@@ -573,7 +832,7 @@ function handleCommand(client, frame) {
         sendError(client, "no_session", `unknown session ${frame.id}`);
         return;
       }
-      if (s.status !== "live") {
+      if (s.status !== "live" && s.status !== "cold") {
         sendError(client, "not_live", "session is not live");
         return;
       }
@@ -606,6 +865,7 @@ function handleCommand(client, frame) {
         s.model = frame.model;
       }
       if (frame.thinking_effort !== undefined) s.thinkingEffort = frame.thinking_effort;
+      persistIndex();
       publish(journalData(s, "session.configured", {
         provider: s.provider ?? undefined,
         model: s.model ?? undefined,
@@ -622,6 +882,7 @@ function handleCommand(client, frame) {
         return;
       }
       s.title = frame.title.trim().slice(0, 80);
+      persistIndex();
       scheduleList();
       return;
     }
@@ -633,8 +894,11 @@ function handleCommand(client, frame) {
         return;
       }
       killChild(s);
-      s.status = "exited";
-      publish(journalData(s, "session.state", { status: "exited" }));
+      // The dext seat is durable; closing only stops the child. The session
+      // stays resumable, so it goes cold rather than exited.
+      s.status = "cold";
+      publish(journalData(s, "session.state", { status: "cold" }));
+      persistIndex();
       return;
     }
 
@@ -652,16 +916,16 @@ function handleCommand(client, frame) {
         sendError(client, "bad_request", `text exceeds ${MAX_PROMPT_CHARS} characters`);
         return;
       }
-      if (s.status !== "live") {
-        sendError(client, "not_live", "session is closed");
-        return;
-      }
       if (s.working) {
         sendError(client, "busy", "a turn is already running; interrupt it first");
         return;
       }
+      if (s.status === "cold") wakeSession(s);
       publish(journalData(s, "user_message", { text: frame.text }));
-      if (s.title === "New session") s.title = frame.text.slice(0, 60);
+      if (s.title === "New session") {
+        s.title = frame.text.slice(0, 60);
+        persistIndex();
+      }
       runTurn(s, frame.text);
       return;
     }
@@ -716,8 +980,174 @@ const MIME = {
   ".map": "application/json",
 };
 
-function requireAuth(req) {
-  return (req.headers.authorization ?? "") === `Bearer ${TOKEN}`;
+function checkAuth(req, res) {
+  if (authLocked()) {
+    res.writeHead(429, { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: "rate_limited" }));
+    return false;
+  }
+  const header = req.headers.authorization ?? "";
+  const presented = header.startsWith("Bearer ") ? header.slice(7) : header;
+  if (!tokenEquals(presented)) {
+    noteAuthFailure();
+    res.writeHead(401, { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: "unauthorized" }));
+    return false;
+  }
+  return true;
+}
+
+// ---------- agent digest (GET /__agent) ----------
+
+// Bounded AgentDigest: what is true right now plus the machine-form commands
+// that are valid right now. Oldest sessions drop first to stay under 4 KiB.
+function agentDigest() {
+  const now = Date.now();
+  let list = [...sessions.values()].sort(
+    (a, b) => a.createdAt - b.createdAt || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+  );
+  let omitted = 0;
+  let body;
+  for (;;) {
+    body = {
+      server: "agentlinkd",
+      instance: INSTANCE,
+      now,
+      capabilities: CAPABILITIES,
+      sessions: list.map((s) => ({
+        id: s.id,
+        title: s.title.slice(0, 60),
+        status: s.status,
+        working: s.working,
+        model: s.model ?? undefined,
+        cwd: s.cwd,
+        last_seq: s.seq,
+        last_event_age_ms: s.journal.length > 0 ? now - s.journal[s.journal.length - 1].ts : undefined,
+        pending: [], // approvals live in dext's --approval policy, not the host
+      })),
+      actions: [
+        ...list.flatMap((s) => {
+          const acts = [];
+          if (s.working) acts.push({ cmd: "interrupt", session: s.id });
+          else if (s.status === "live" || s.status === "cold") acts.push({ cmd: "prompt.submit", session: s.id });
+          if (s.status === "cold") acts.push({ cmd: "session.open", session: s.id });
+          else if (s.status === "live") acts.push({ cmd: "session.close", session: s.id });
+          return acts;
+        }),
+        { cmd: "session.open", note: "new session" },
+      ],
+    };
+    if (Buffer.byteLength(JSON.stringify(body)) <= 4096 || list.length === 0) break;
+    list = list.slice(1);
+    omitted += 1;
+  }
+  if (omitted > 0) body.sessions_omitted = omitted;
+  return body;
+}
+
+// ---------- todos (GET /sessions/:id/todos) ----------
+
+const TODOS_MAX_BYTES = 1024 * 1024;
+const TODO_STATUSES = new Set(["pending", "in_progress", "completed"]);
+
+// dext session headers (src/session.rs, format v3+) carry "seat":{"id":…}
+// on their first JSON line. Seats are unique per agentlinkd session, so the
+// newest dext session dir whose header seat matches is this session's own
+// state dir — no need to reimplement dext's project_key derivation.
+function findDextSessionDir(s) {
+  const home = process.env.DEXT_HOME ? path.resolve(process.env.DEXT_HOME) : path.join(process.env.HOME ?? "", ".dext");
+  const projects = path.join(home, "projects");
+  let projectDirs;
+  try {
+    projectDirs = fs.readdirSync(projects, { withFileTypes: true });
+  } catch {
+    return null;
+  }
+  let best = null;
+  for (const project of projectDirs) {
+    if (!project.isDirectory()) continue;
+    const sessionsDir = path.join(projects, project.name, "sessions");
+    let sessionDirs;
+    try {
+      sessionDirs = fs.readdirSync(sessionsDir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of sessionDirs) {
+      if (!entry.isDirectory()) continue;
+      const dir = path.join(sessionsDir, entry.name);
+      const headerFile = path.join(dir, "_latest.jsonl");
+      let mtimeMs;
+      try {
+        const fd = fs.openSync(headerFile, "r");
+        try {
+          const cap = Buffer.alloc(64 * 1024);
+          const n = fs.readSync(fd, cap, 0, cap.length, 0);
+          const firstLine = cap.toString("utf8", 0, n).split("\n", 1)[0];
+          const header = JSON.parse(firstLine);
+          if (!header || typeof header !== "object" || header.seat?.id !== s.seat) continue;
+        } finally {
+          fs.closeSync(fd);
+        }
+        mtimeMs = fs.statSync(headerFile).mtimeMs;
+      } catch {
+        continue;
+      }
+      if (!best || mtimeMs > best.mtimeMs) best = { dir, mtimeMs };
+    }
+  }
+  return best?.dir ?? null;
+}
+
+// Parse exactly like dext's TUI reader (src/tui.rs todo_items_from_path):
+// array of objects, text trimmed non-empty, unknown status becomes pending.
+function parseTodoItems(text) {
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(parsed)) return null;
+  const items = [];
+  for (const el of parsed) {
+    if (!el || typeof el !== "object" || typeof el.text !== "string") continue;
+    const t = el.text.trim();
+    if (!t) continue;
+    const status = typeof el.status === "string" && TODO_STATUSES.has(el.status) ? el.status : "pending";
+    items.push({ text: t, status });
+  }
+  return items;
+}
+
+function readTodoFile(file) {
+  let st;
+  try {
+    st = fs.statSync(file);
+  } catch {
+    return null;
+  }
+  if (!st.isFile() || st.size > TODOS_MAX_BYTES) return null;
+  let items;
+  try {
+    items = parseTodoItems(fs.readFileSync(file, "utf8"));
+  } catch {
+    return null;
+  }
+  if (!items) return null;
+  return { path: file, updated_at: Math.round(st.mtimeMs), items };
+}
+
+function todosFor(s) {
+  // (a) this seat's own dext session state dir, (b) the project-level file.
+  const dextDir = findDextSessionDir(s);
+  if (dextDir) {
+    const hit = readTodoFile(path.join(dextDir, "DEXT.todo.json"));
+    if (hit) return { session: s.id, source: "session", ...hit };
+  }
+  const project = readTodoFile(path.join(s.cwd, "DEXT.todo.json"));
+  if (project) return { session: s.id, source: "project", ...project };
+  return { session: s.id, source: "none", items: [] };
 }
 
 const server = http.createServer((req, res) => {
@@ -727,14 +1157,37 @@ const server = http.createServer((req, res) => {
     res.end(JSON.stringify({ ok: true, server: "agentlinkd", protocol: 1, dext: DEXT_BIN }));
     return;
   }
-  if (pathName === "/sessions" || pathName === "/__agent") {
-    if (!requireAuth(req)) {
-      res.writeHead(401, { "content-type": "application/json" });
-      res.end(JSON.stringify({ error: "unauthorized" }));
+  if (pathName === "/sessions" || pathName === "/__agent" || pathName.startsWith("/sessions/")) {
+    if (!checkAuth(req, res)) return;
+    if (pathName === "/sessions") {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ sessions: [...sessions.values()].map(metaOf) }));
       return;
     }
-    res.writeHead(200, { "content-type": "application/json" });
-    res.end(JSON.stringify({ sessions: [...sessions.values()].map(metaOf) }));
+    if (pathName === "/__agent") {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify(agentDigest()));
+      return;
+    }
+    const parts = pathName.split("/").filter(Boolean);
+    const s = sessions.get(parts[1]);
+    if (!s) {
+      res.writeHead(404, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "no_session" }));
+      return;
+    }
+    if (parts.length === 2) {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ session: metaOf(s) }));
+      return;
+    }
+    if (parts.length === 3 && parts[2] === "todos") {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify(todosFor(s)));
+      return;
+    }
+    res.writeHead(404, { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: "no_session" }));
     return;
   }
   const rel = pathName === "/" ? "index.html" : pathName.slice(1);
@@ -813,11 +1266,13 @@ function shutdown() {
     const active = [...sessions.values()].filter((s) => s.child);
     if (active.length === 0) {
       clearInterval(wait);
+      persistIndex();
       process.exit(0);
     }
     if (Date.now() >= deadline) {
       for (const s of active) signalChild(s.child, "SIGKILL");
       clearInterval(wait);
+      persistIndex();
       process.exit(1);
     }
   }, 100);
@@ -825,11 +1280,15 @@ function shutdown() {
 process.once("SIGINT", shutdown);
 process.once("SIGTERM", shutdown);
 
+initStateDir();
+restoreSessions();
+
 server.listen(PORT, "127.0.0.1", () => {
   console.log(`agentlinkd listening on http://127.0.0.1:${PORT}`);
   console.log(`  token:    ${TOKEN}`);
   console.log(`  dext:     ${DEXT_BIN}`);
   console.log(`  cwd:      ${DEFAULT_CWD}`);
+  console.log(`  state:    ${STATE_DIR}`);
   console.log(`  approval: ${DEFAULT_APPROVAL} (per-session: /approval <profile>)`);
   console.log(`  models:   ${MODEL_CATALOG.reduce((n, g) => n + g.models.length, 0)} across ${MODEL_CATALOG.length} provider(s)`);
 });

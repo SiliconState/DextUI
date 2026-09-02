@@ -10,11 +10,13 @@ const here = path.dirname(url.fileURLToPath(import.meta.url));
 const host = path.join(here, "..", "src", "server.mjs");
 const fake = path.join(here, "fake-dext.mjs");
 const cwd = path.join(process.env.HOME, "dextui-workspace");
+const stateDir = path.join(cwd, `state-${process.pid}`);
 const port = 8992;
-const token = "agentlinkd-smoke";
+const token = "smoke-token";
 const base = `http://127.0.0.1:${port}`;
 const wsUrl = `ws://127.0.0.1:${port}/ws`;
 fs.mkdirSync(cwd, { recursive: true, mode: 0o755 });
+fs.rmSync(stateDir, { recursive: true, force: true });
 
 const results = [];
 const ok = (name, cond, detail = "") => {
@@ -60,18 +62,43 @@ async function openClient(name) {
   return c;
 }
 
-const server = spawn(process.execPath, [host, `--port=${port}`, `--token=${token}`, `--dext=${fake}`, `--cwd=${cwd}`], {
-  stdio: ["ignore", "ignore", "inherit"],
-});
-try {
-  let healthy = false;
-  for (let i = 0; i < 40 && !healthy; i++) {
+// Wrong-token hello on a throwaway connection; resolves with the hello_fail.
+async function badHello(tok) {
+  const c = connect();
+  await new Promise((r) => c.ws.addEventListener("open", r));
+  c.send({ v: 1, cmd: "hello", token: tok, protocol: 1 });
+  const fail = await c.waitFor((e) => e.event === "hello_fail", 3000, "hello_fail");
+  try {
+    c.ws.close();
+  } catch {}
+  return fail;
+}
+
+function spawnHost() {
+  return spawn(process.execPath, [host, `--port=${port}`, `--token=${token}`, `--dext=${fake}`, `--cwd=${cwd}`, `--state-dir=${stateDir}`], {
+    stdio: ["ignore", "ignore", "inherit"],
+  });
+}
+
+async function waitHealthy() {
+  for (let i = 0; i < 40; i++) {
     try {
-      healthy = (await fetch(`${base}/health`)).ok;
+      if ((await fetch(`${base}/health`)).ok) return true;
     } catch {}
-    if (!healthy) await sleep(100);
+    await sleep(100);
   }
-  ok("host healthy", healthy);
+  return false;
+}
+
+const waitExit = (child) =>
+  new Promise((resolve) => {
+    if (child.exitCode !== null || child.signalCode !== null) return resolve();
+    child.once("exit", resolve);
+  });
+
+let server = spawnHost();
+try {
+  ok("host healthy", await waitHealthy());
 
   const a = await openClient("A");
   ok(
@@ -80,7 +107,8 @@ try {
       a.hello.data.model_catalog[1]?.models?.includes("beta") &&
       a.hello.data.effort_options?.includes("xhigh") &&
       a.hello.data.capabilities?.includes("model_select") &&
-      a.hello.data.capabilities?.includes("effort_select"),
+      a.hello.data.capabilities?.includes("effort_select") &&
+      a.hello.data.capabilities?.includes("todos_read"),
   );
   a.send({ v: 1, cmd: "session.open" });
   const list = await a.waitFor((e) => e.event === "session.list" && e.data.sessions.length === 1, 3000, "session list");
@@ -180,10 +208,131 @@ try {
       final.data.thinking_effort === "xhigh" &&
       final.data.model_locked === true,
   );
+  const tailSeq = final.data.last_seq;
+
+  // ---------- REST surface: per-session meta, digest, todos ----------
+
+  const H = { authorization: `Bearer ${token}` };
+  const one = await (await fetch(`${base}/sessions/${sid}`, { headers: H })).json();
+  ok(
+    "GET /sessions/:id returns session meta",
+    one.session?.id === sid && one.session?.status === "live" && one.session?.last_seq === tailSeq && one.session?.cwd === cwd,
+  );
+  const missing = await fetch(`${base}/sessions/sess_999`, { headers: H });
+  const missingBody = await missing.json();
+  ok("unknown session id -> JSON 404 no_session", missing.status === 404 && missingBody.error === "no_session");
+
+  const digestRes = await fetch(`${base}/__agent`, { headers: H });
+  const digestText = await digestRes.text();
+  const digest = JSON.parse(digestText);
+  ok(
+    "GET /__agent digest has instance and live actions",
+    typeof digest.instance === "string" &&
+      digest.instance === a.hello.data.instance &&
+      digest.server === "agentlinkd" &&
+      Array.isArray(digest.capabilities) &&
+      digest.actions.some((x) => x.cmd === "prompt.submit" && x.session === sid) &&
+      digest.actions.some((x) => x.cmd === "session.close" && x.session === sid) &&
+      digest.actions.some((x) => x.cmd === "session.open" && x.note === "new session") &&
+      digest.sessions.some((x) => x.id === sid && x.status === "live" && x.working === false && typeof x.last_event_age_ms === "number"),
+  );
+  ok("__agent body capped under 4096 bytes", Buffer.byteLength(digestText) <= 4096, `${Buffer.byteLength(digestText)} bytes`);
+
+  const todoPath = path.join(cwd, "DEXT.todo.json");
+  fs.writeFileSync(
+    todoPath,
+    JSON.stringify([
+      { text: "  write smoke checks  ", status: "in_progress" },
+      { text: "", status: "completed" }, // dropped: empty text
+      { text: "clean the state dir", status: "bogus" }, // unknown status -> pending
+    ]),
+  );
+  let todos = await (await fetch(`${base}/sessions/${sid}/todos`, { headers: H })).json();
+  ok(
+    "todos read from the project file, parsed like dext",
+    todos.session === sid &&
+      todos.source === "project" &&
+      todos.path === todoPath &&
+      todos.items.length === 2 &&
+      todos.items[0].text === "write smoke checks" &&
+      todos.items[0].status === "in_progress" &&
+      todos.items[1].text === "clean the state dir" &&
+      todos.items[1].status === "pending",
+  );
+  fs.rmSync(todoPath);
+  todos = await (await fetch(`${base}/sessions/${sid}/todos`, { headers: H })).json();
+  ok("todos fall back to none after delete", todos.source === "none" && todos.items.length === 0);
+
+  // ---------- restart: durable journals restore the session cold ----------
+
+  server.kill("SIGTERM");
+  await waitExit(server);
+  await sleep(200);
+  server = spawnHost();
+  ok("host healthy after restart", await waitHealthy());
+
+  const r = await openClient("R");
+  const restored = r.hello.data.sessions.find((x) => x.id === sid);
+  ok(
+    "restored session listed cold with same last_seq",
+    r.hello.data.sessions.length === 1 && restored?.status === "cold" && restored?.last_seq === tailSeq && restored?.model === "beta",
+  );
+  r.send({ v: 1, cmd: "session.subscribe", id: sid, since_seq: tailSeq - 2 });
+  await r.waitFor((e) => e.session === sid && e.seq === tailSeq && e.event !== "session.snapshot", 3000, "replay tail");
+  const replay = r.events.filter((e) => e.session === sid && typeof e.seq === "number" && e.event !== "session.snapshot");
+  ok(
+    "subscribe since_seq replays exactly the last two envelopes",
+    replay.length === 2 && replay[0].seq === tailSeq - 1 && replay[1].seq === tailSeq,
+    replay.map((e) => e.seq).join(","),
+  );
+  ok("no snapshot fallback while since_seq is retained", !r.events.some((e) => e.session === sid && e.event === "session.snapshot"));
+
+  r.send({ v: 1, cmd: "session.open", id: sid });
+  const wakeStarting = await r.waitFor((e) => e.session === sid && e.event === "session.state" && e.data?.status === "starting", 3000, "wake starting");
+  const wakeLive = await r.waitFor((e) => e.session === sid && e.event === "session.state" && e.data?.status === "live", 3000, "wake live");
+  ok("cold session wakes starting -> live", wakeStarting.seq === tailSeq + 1 && wakeLive.seq === tailSeq + 2);
+
+  // ---------- close -> cold, prompt auto-wakes ----------
+
+  r.send({ v: 1, cmd: "session.close", id: sid });
+  const closed = await r.waitFor((e) => e.session === sid && e.event === "session.state" && e.data?.status === "cold", 3000, "close cold");
+  ok("session.close sets cold", closed.seq === tailSeq + 3);
+  await sleep(400); // let a dying child (none here) finish before re-waking
+  r.send({ v: 1, cmd: "prompt.submit", session: sid, text: "wake from cold" });
+  const autoStarting = await r.waitFor(
+    (e) => e.session === sid && e.event === "session.state" && e.data?.status === "starting" && e.seq > closed.seq,
+    3000,
+    "auto-wake starting",
+  );
+  const autoLive = await r.waitFor(
+    (e) => e.session === sid && e.event === "session.state" && e.data?.status === "live" && e.seq > closed.seq,
+    3000,
+    "auto-wake live",
+  );
+  const wokenTurn = await r.waitFor(
+    (e) => e.session === sid && e.event === "turn_end" && e.seq > closed.seq,
+    8000,
+    "post-wake turn end",
+  );
+  ok(
+    "prompt.submit auto-wakes and completes a turn",
+    autoStarting.seq < autoLive.seq && autoLive.seq < wokenTurn.seq && String(a.hello.data.instance).length > 0,
+  );
+
+  // ---------- auth: wrong token, then rate limiting (last: locks auth) ----------
+
+  const wrong = await badHello("definitely-not-the-token");
+  ok("wrong token -> hello_fail invalid token", wrong.data.reason === "invalid token");
+  let lastFail = null;
+  for (let i = 0; i < 6; i++) lastFail = await badHello("definitely-not-the-token");
+  ok("rapid auth failures -> rate_limited", lastFail.data.reason === "rate_limited");
+  const lockedRes = await fetch(`${base}/sessions`, { headers: H });
+  ok("REST auth attempts during lockout -> 429", lockedRes.status === 429);
 } catch (err) {
   ok("agentlinkd smoke completed", false, String(err));
 } finally {
   server.kill("SIGTERM");
+  fs.rmSync(stateDir, { recursive: true, force: true });
 }
 
 const failed = results.filter((x) => !x).length;
