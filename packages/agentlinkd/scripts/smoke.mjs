@@ -450,6 +450,10 @@ try {
 } finally {
   server.kill("SIGTERM");
   fs.rmSync(stateDir, { recursive: true, force: true });
+  // File-endpoint fixtures live outside stateDir; clear them even if a
+  // mid-section throw skipped the in-try cleanup.
+  fs.rmSync(path.join(cwd, `dextui-smoke-${process.pid}`), { recursive: true, force: true });
+  fs.rmSync(path.join(os.tmpdir(), `dextui-smoke-escape-${process.pid}.png`), { force: true });
 }
 
 const failed = results.filter((x) => !x).length;

@@ -421,7 +421,9 @@ function restoreSessions() {
       modelLocked: !!e.modelLocked,
       seat: typeof e.seat === "string" && e.seat ? e.seat : `dextui-${crypto.randomBytes(4).toString("hex")}`,
       steeringQueue: Array.isArray(e.steeringQueue)
-        ? e.steeringQueue.filter((t) => typeof t === "string").slice(0, STEERING_MAX_MESSAGES)
+        ? e.steeringQueue
+            .filter((t) => typeof t === "string" && t.length > 0 && t.length <= STEERING_MAX_CHARS)
+            .slice(0, STEERING_MAX_MESSAGES)
         : [],
       status: "cold",
       working: false,
@@ -1321,7 +1323,11 @@ const server = http.createServer((req, res) => {
         "x-content-type-options": "nosniff",
         "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; sandbox",
       });
-      fs.createReadStream(hit.real).pipe(res);
+      // A file vanishing between stat and read must not crash the host:
+      // pipe() does not forward stream errors, so handle them here.
+      const stream = fs.createReadStream(hit.real);
+      stream.on("error", () => res.destroy());
+      stream.pipe(res);
       return;
     }
     res.writeHead(404, { "content-type": "application/json" });

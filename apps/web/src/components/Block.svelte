@@ -120,7 +120,7 @@
       <span class="dim tool-summary">{block.title}</span>
     </div>
     <div class="view-body">
-      <Markdown src={block.markdown} />
+      <Markdown src={block.markdown} sessionId={sessionId} />
     </div>
   </div>
 {/if}
