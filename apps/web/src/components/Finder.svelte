@@ -8,12 +8,14 @@
     toggleTheme,
     copyText,
     rePair,
+    queue,
+    respondGlobal,
   } from "../lib/state.svelte";
   import { useSession } from "../lib/useSession.svelte";
+  import { useDialog } from "../lib/dialog.svelte";
 
   let query = $state("");
   let cursor = $state(0);
-  let inputEl: HTMLInputElement | undefined = $state();
 
   // Reactive view of the active session so turn/approval actions (stop,
   // once/always/deny) refresh while the finder is open.
@@ -22,6 +24,8 @@
     const c = connection();
     return c && app.activeId ? c.session(app.activeId) : null;
   });
+
+  const dlg = useDialog(() => app.paletteOpen);
 
   interface Action {
     slug: string;
@@ -33,11 +37,54 @@
 
   const actions = $derived.by<Action[]>(() => {
     const view = sess.view;
-    const out: Action[] = [
-      { slug: "session.new", label: "new session", hint: "switches to it", group: "sess", run: newSession },
-      { slug: "theme.toggle", label: `theme: ${app.theme} → ${app.theme === "dark" ? "light" : app.theme === "light" ? "system" : "dark"}`, group: "app", run: toggleTheme },
-      { slug: "pair.reset", label: "re-pair with agent host", hint: "clears token", group: "app", run: rePair },
-    ];
+    const out: Action[] = [];
+    // Approvals first — the global queue, oldest first, across every session.
+    for (const e of queue.entries) {
+      const short = e.pending.summary ? ` — ${e.pending.summary.slice(0, 40)}` : "";
+      const respond = (choice: "once" | "always" | "deny") =>
+        respondGlobal(e.sessionId, e.pending.request_id, choice);
+      out.push({
+        slug: `approve.${e.sessionId}.${e.pending.request_id}.once`,
+        label: `approve once: ${e.pending.tool}${short}`,
+        hint: e.sessionTitle,
+        group: "appr",
+        run: () => respond("once"),
+      });
+      out.push({
+        slug: `approve.${e.sessionId}.${e.pending.request_id}.always`,
+        label: `approve always: ${e.pending.tool}${short}`,
+        hint: e.sessionTitle,
+        group: "appr",
+        run: () => respond("always"),
+      });
+      out.push({
+        slug: `approve.${e.sessionId}.${e.pending.request_id}.deny`,
+        label: `deny: ${e.pending.tool}${short}`,
+        hint: e.sessionTitle,
+        group: "appr",
+        run: () => respond("deny"),
+      });
+    }
+    // Count-only sessions: no request ids to act on — jump instead.
+    for (const s of queue.counts) {
+      out.push({
+        slug: `approvals.${s.id}.open`,
+        label: `open approvals: ${s.title}`,
+        hint: `${s.count}`,
+        group: "appr",
+        run: () => activate(s.id),
+      });
+    }
+    if (view?.working) {
+      out.push({
+        slug: "turn.stop",
+        label: "stop the running turn",
+        hint: "^c",
+        group: "turn",
+        run: () => connection()?.interrupt(app.activeId),
+      });
+    }
+    out.push({ slug: "session.new", label: "new session", hint: "⌘n", group: "sess", run: newSession });
     if (view) {
       out.push({
         slug: "session.copyid",
@@ -52,39 +99,6 @@
         group: "sess",
         run: () => (app.eventsOpen = true),
       });
-      if (view.working) {
-        out.push({
-          slug: "turn.stop",
-          label: "stop the running turn",
-          hint: "^c",
-          group: "turn",
-          run: () => connection()?.interrupt(app.activeId),
-        });
-      }
-      for (const p of view.pending.values()) {
-        const short = p.summary ? ` — ${p.summary.slice(0, 40)}` : "";
-        out.push({
-          slug: `approve.${p.request_id}.once`,
-          label: `approve once: ${p.tool}${short}`,
-          hint: "a",
-          group: "appr",
-          run: () => connection()?.respond(app.activeId, p.request_id, "once"),
-        });
-        out.push({
-          slug: `approve.${p.request_id}.always`,
-          label: `approve always: ${p.tool}${short}`,
-          hint: "s",
-          group: "appr",
-          run: () => connection()?.respond(app.activeId, p.request_id, "always"),
-        });
-        out.push({
-          slug: `approve.${p.request_id}.deny`,
-          label: `deny: ${p.tool}${short}`,
-          hint: "d",
-          group: "appr",
-          run: () => connection()?.respond(app.activeId, p.request_id, "deny"),
-        });
-      }
     }
     for (const s of app.sessions) {
       if (s.id === app.activeId) continue;
@@ -96,6 +110,20 @@
         run: () => activate(s.id),
       });
     }
+    out.push({
+      slug: "app.shortcuts",
+      label: "show shortcuts",
+      hint: "?",
+      group: "app",
+      run: () => (app.shortcutsOpen = true),
+    });
+    out.push({
+      slug: "theme.toggle",
+      label: `theme: ${app.theme} → ${app.theme === "dark" ? "light" : app.theme === "light" ? "system" : "dark"}`,
+      group: "app",
+      run: toggleTheme,
+    });
+    out.push({ slug: "pair.reset", label: "re-pair with agent host", hint: "clears token", group: "app", run: rePair });
     return out;
   });
 
@@ -126,7 +154,6 @@
   $effect(() => {
     if (app.paletteOpen) {
       cursor = 0;
-      requestAnimationFrame(() => inputEl?.focus());
     } else {
       query = "";
     }
@@ -145,6 +172,7 @@
   }
 
   function onWindowKey(e: KeyboardEvent) {
+    dlg.onKey(e);
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
       e.preventDefault();
       app.paletteOpen = !app.paletteOpen;
@@ -172,11 +200,19 @@
 
 {#if app.paletteOpen}
   <div class="fz-scrim" data-agent-id="palette.overlay" onclick={close} onkeydown={() => {}} role="presentation"></div>
-  <div class="fz fade-in" data-agent-id="palette.root" data-state="open">
+  <div
+    class="fz fade-in"
+    role="dialog"
+    aria-modal="true"
+    aria-label="finder"
+    tabindex="-1"
+    use:dlg.ref
+    data-agent-id="palette.root"
+    data-state="open"
+  >
     <div class="fz-input-row">
       <span class="st-green">❯</span>
       <input
-        bind:this={inputEl}
         bind:value={query}
         placeholder="command or session…"
         data-agent-id="palette.input"

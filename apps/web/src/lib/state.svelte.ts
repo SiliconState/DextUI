@@ -1,9 +1,11 @@
 // App-level reactive state bridging the framework-free Connection into Svelte 5 runes.
 
-import { Connection, type ConnPhase } from "@dextui/client";
-import type { HostCommand, ModelGroup, SessionMeta, ThinkingEffort } from "@dextui/protocol";
+import { Connection, type ConnPhase, type PendingPermission } from "@dextui/client";
+import type { Envelope, HostCommand, ModelGroup, SessionMeta, ThinkingEffort } from "@dextui/protocol";
+import { notifyEvent } from "./notify";
 
 export type Theme = "dark" | "light" | "system";
+export type NotifyState = "on" | "off" | "blocked";
 export interface Toast {
   id: number;
   kind: "info" | "ok" | "warn" | "err";
@@ -30,7 +32,76 @@ export const app = $state({
   sidebarCollapsed: false,
   theme: "dark" as Theme,
   toasts: [] as Toast[],
+  /** Desktop notifications. "blocked" is derived from the browser permission
+   *  state, never persisted. */
+  notify: "off" as NotifyState,
+  /** Hero-typing stash: the printable key that spawned a fresh session. */
+  pendingDraft: "",
+  shortcutsOpen: false,
 });
+
+// ---------- global action queue ----------
+//
+// Every pending permission across ALL sessions of the current connection:
+// full entries from subscribed stores, count-only rows from SessionMeta for
+// sessions whose snapshot is still in flight (or hosts without the events).
+// Rebuilt from the onEvent tap (permission.request/resolved/timeout,
+// session.snapshot) and onSessionList — never polled.
+
+export interface QueueEntry {
+  sessionId: string;
+  sessionTitle: string;
+  pending: PendingPermission;
+}
+export interface QueueCount {
+  id: string;
+  title: string;
+  count: number;
+}
+
+export const queue = $state({ entries: [] as QueueEntry[], counts: [] as QueueCount[] });
+
+/** Sessions subscribed to only because they had pending approvals. */
+const autoSubscribed = new Set<string>();
+
+export function queueTotal(): number {
+  return queue.entries.length + queue.counts.reduce((n, s) => n + s.count, 0);
+}
+
+function rebuildQueue(): void {
+  const c = app.conn;
+  if (!c) {
+    queue.entries = [];
+    queue.counts = [];
+    return;
+  }
+  const titleOf = (id: string): string =>
+    app.sessions.find((s) => s.id === id)?.title ?? c.session(id).state.title ?? id;
+  const entries: QueueEntry[] = [];
+  for (const id of c.subscribed) {
+    for (const p of c.session(id).state.pending.values()) {
+      entries.push({ sessionId: id, sessionTitle: titleOf(id), pending: p });
+    }
+  }
+  // Oldest first — the same order the global a/s/d keys act on. Count-only
+  // rows cannot be ordered honestly and always sort after real entries.
+  entries.sort((a, b) => a.pending.received_at - b.pending.received_at);
+  const withEntries = new Set(entries.map((e) => e.sessionId));
+  queue.counts = app.sessions
+    .filter((s) => s.pending_permissions > 0 && !withEntries.has(s.id))
+    .map((s) => ({ id: s.id, title: s.title, count: s.pending_permissions }));
+  queue.entries = entries;
+  // Detach mirror: an auto-subscribed session that went quiet and is not the
+  // active one drops off the live tail again (same policy as activate()).
+  for (const id of [...autoSubscribed]) {
+    if (id === app.activeId) continue;
+    const st = c.session(id).state;
+    if (st.pending.size === 0 && !st.working) {
+      c.unsubscribe(id);
+      autoSubscribed.delete(id);
+    }
+  }
+}
 
 let started = false;
 let everLive = false;
@@ -103,6 +174,13 @@ export function ensureStarted(): void {
   const theme: Theme = stored === "dark" || stored === "light" || stored === "system" ? stored : "system";
   app.theme = theme;
   app.sidebarCollapsed = localStorage.getItem("dextui.sidebarCollapsed") === "1";
+  const storedNotify = localStorage.getItem("dextui.notify");
+  app.notify =
+    storedNotify === "1"
+      ? typeof Notification === "undefined" || Notification.permission !== "granted"
+        ? "blocked"
+        : "on"
+      : "off";
   applyTheme(theme);
   // Follow OS scheme changes live while in system mode.
   sysDark.addEventListener("change", () => {
@@ -118,6 +196,9 @@ export function start(token: string): void {
   app.lastError = "";
   // Retire any previous connection; its late callbacks must not clobber the new one.
   app.conn?.close();
+  queue.entries = [];
+  queue.counts = [];
+  autoSubscribed.clear();
   const proto = location.protocol === "https:" ? "wss" : "ws";
   const c = new Connection({
     url: `${proto}://${location.host}/ws`,
@@ -132,6 +213,9 @@ export function start(token: string): void {
         app.modelCatalog = [];
         app.effortOptions = [];
         app.commands = [];
+        queue.entries = [];
+        queue.counts = [];
+        autoSubscribed.clear();
         app.lastError = detail ?? "authentication failed";
         pushToast("err", `Connection failed: ${app.lastError}`);
         app.needsToken = true;
@@ -161,6 +245,9 @@ export function start(token: string): void {
       if (app.conn !== c) return;
       // Stores were dropped; force every `c.session(id)` lookup to re-resolve.
       app.hostEpoch++;
+      queue.entries = [];
+      queue.counts = [];
+      autoSubscribed.clear();
       pushToast("warn", "Agent host restarted — transcripts resynced");
     },
     onSeqGap: (sessionId, expected, got) => {
@@ -189,6 +276,17 @@ export function start(token: string): void {
         const firstLive = sessions.find((s) => s.status === "live");
         if (firstLive) activate(firstLive.id);
       }
+      // A session with pending approvals is live by definition; subscribe so
+      // it yields real cards and a real received_at instead of a bare count.
+      // Subscribe only — never openSession/activate: spawning agents is not
+      // our call.
+      for (const s of sessions) {
+        if (s.pending_permissions > 0 && !c.subscribed.has(s.id)) {
+          autoSubscribed.add(s.id);
+          c.subscribe(s.id);
+        }
+      }
+      rebuildQueue();
     },
     onControlError: (code, message) => {
       if (app.conn !== c) return; // stale connection
@@ -199,6 +297,20 @@ export function start(token: string): void {
       }
       app.lastError = `${code}: ${message}`;
       pushToast("err", `${code}: ${message}`);
+    },
+    onEvent: (env: Envelope, store) => {
+      if (app.conn !== c) return; // stale connection
+      switch (env.event) {
+        case "permission.request":
+        case "permission.resolved":
+        case "permission.timeout":
+        case "session.snapshot":
+          rebuildQueue();
+          break;
+        default:
+          break;
+      }
+      notifyEvent(env, store);
     },
   });
   app.conn = c;
@@ -213,6 +325,7 @@ export function activate(id: string): void {
   const c = app.conn;
   const prev = app.activeId;
   app.activeId = id;
+  autoSubscribed.delete(id); // user-driven from here on
   if (!c) return;
   if (prev && prev !== id && c.subscribed.has(prev)) {
     const ps = c.session(prev).state;
@@ -229,4 +342,75 @@ export function newSession(): void {
   wantNewSession = true;
   newSessionBaseline = new Set(app.sessions.map((s) => s.id));
   c.openSession();
+}
+
+/** Respond to a pending approval in place — any session, no switch. */
+export function respondGlobal(
+  sessionId: string,
+  requestId: string,
+  choice: "once" | "always" | "deny",
+): void {
+  const c = app.conn;
+  if (!c) return;
+  const entry = queue.entries.find(
+    (e) => e.sessionId === sessionId && e.pending.request_id === requestId,
+  );
+  c.respond(sessionId, requestId, choice);
+  if (entry && sessionId !== app.activeId) {
+    pushToast(
+      choice === "deny" ? "warn" : "ok",
+      `${choice === "deny" ? "⚠" : "✓"} ${entry.pending.tool} → ${choice} · “${entry.sessionTitle}”`,
+    );
+  }
+}
+
+/** Badge / notification-click target: open the session holding the oldest
+ *  pending approval (a count-only session when nothing fuller exists). */
+export function jumpToOldestPending(): void {
+  const first = queue.entries[0];
+  if (first) {
+    activate(first.sessionId);
+    return;
+  }
+  const count = queue.counts[0];
+  if (count) activate(count.id);
+}
+
+/** Cycle the active session within index order (Ctrl+[ / Ctrl+]). */
+export function stepSession(delta: number): void {
+  const list = app.sessions;
+  if (list.length === 0) return;
+  const i = list.findIndex((s) => s.id === app.activeId);
+  const next = list[i < 0 ? 0 : (i + delta + list.length) % list.length];
+  if (next) activate(next.id);
+}
+
+/** Opt-in desktop notifications; enabling requests the browser permission. */
+export async function toggleNotify(): Promise<void> {
+  if (typeof Notification === "undefined") {
+    app.notify = "blocked";
+    pushToast("err", "Notifications unsupported");
+    return;
+  }
+  if (app.notify === "on") {
+    app.notify = "off";
+    localStorage.setItem("dextui.notify", "0");
+    return;
+  }
+  let perm: NotificationPermission = Notification.permission;
+  if (perm !== "granted") {
+    try {
+      perm = await Notification.requestPermission();
+    } catch {
+      perm = "denied";
+    }
+  }
+  if (perm === "granted") {
+    app.notify = "on";
+    localStorage.setItem("dextui.notify", "1");
+    pushToast("ok", "Notifications on");
+  } else {
+    app.notify = "blocked";
+    pushToast("err", "Notifications blocked — enable them in browser settings");
+  }
 }

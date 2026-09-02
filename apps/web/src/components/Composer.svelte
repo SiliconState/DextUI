@@ -2,7 +2,8 @@
   // Inline ❯ prompt — the composer is a terminal input line, not a chat box.
   import type { SessionStore } from "@dextui/client";
   import type { HostCommand } from "@dextui/protocol";
-  import { app, connection } from "../lib/state.svelte";
+  import { tick } from "svelte";
+  import { app, connection, newSession, stepSession } from "../lib/state.svelte";
   import { useSession } from "../lib/useSession.svelte";
 
   let { store }: { store: SessionStore } = $props();
@@ -10,6 +11,12 @@
   let text = $state("");
   let menuIdx = $state(0);
   let inputEl: HTMLTextAreaElement | undefined = $state();
+  // Per-session prompt history (shell semantics): every submitted line —
+  // prompt, steer, slash — newest last, consecutive duplicates collapsed.
+  const HISTORY_CAP = 50;
+  let hist: string[] = [];
+  let histIdx = $state(0);
+  let stash = "";
 
   // Fallback for hosts that predate hello_ok.commands: derive from slash.* caps.
   const LEGACY_COMMANDS: (HostCommand & { cap: string })[] = [
@@ -43,29 +50,54 @@
       live &&
       (!view.working || canSteer),
   );
-  const placeholder = $derived(
-    view.status === "exited"
-      ? "session closed"
-      : !live
-        ? "waking session…"
-        : view.working
-          ? canSteer
-            ? "steer the agent mid-turn…"
-            : "turn running… (^c to stop)"
-          : "type a request…   / commands",
-  );
+  const placeholder = $derived.by(() => {
+    if (view.status === "exited") return "session closed — ⌘n for a new one";
+    if (!live) return "waking session…";
+    if (view.working) {
+      return canSteer ? "steer the agent mid-turn… (^c to stop)" : "turn running… (^c to stop)";
+    }
+    const parts = ["type a request…"];
+    if (commands.length > 0) parts.push("/ commands");
+    parts.push("↑ history");
+    return parts.join("   ");
+  });
   const rows = $derived(Math.min(8, 1 + (text.match(/\n/g)?.length ?? 0)));
 
   // Per-session draft persistence: restore on switch, save on leave/send.
+  // History rides along; the hero-typing stash seeds a fresh session's text.
   $effect(() => {
     const sid = app.activeId;
     if (!sid) return;
     text = localStorage.getItem(`dextui.draft.${sid}`) ?? "";
+    hist = loadHistory(sid);
+    histIdx = 0;
+    stash = "";
+    if (app.pendingDraft) {
+      text = text ? text + app.pendingDraft : app.pendingDraft;
+      app.pendingDraft = "";
+      requestAnimationFrame(() => inputEl?.focus());
+    }
     return () => {
       if (text) localStorage.setItem(`dextui.draft.${sid}`, text);
       else localStorage.removeItem(`dextui.draft.${sid}`);
     };
   });
+
+  function loadHistory(sid: string): string[] {
+    try {
+      const raw: unknown = JSON.parse(localStorage.getItem(`dextui.history.${sid}`) ?? "[]");
+      return Array.isArray(raw) ? raw.filter((x): x is string => typeof x === "string") : [];
+    } catch {
+      return [];
+    }
+  }
+
+  function recordHistory(sid: string, line: string): void {
+    if (!line.trim()) return;
+    if (hist[hist.length - 1] !== line) hist.push(line);
+    if (hist.length > HISTORY_CAP) hist = hist.slice(-HISTORY_CAP);
+    localStorage.setItem(`dextui.history.${sid}`, JSON.stringify(hist));
+  }
 
   function complete(c: string) {
     text = `${c} `;
@@ -78,11 +110,14 @@
     if (!canSend || !c) return;
     const sid = app.activeId;
     const t = text;
+    recordHistory(sid, t);
     if (t.trim().startsWith("/")) c.slash(sid, t.trim());
     else if (view.working && canSteer) c.steer(sid, t);
     else c.prompt(sid, t);
     localStorage.removeItem(`dextui.draft.${sid}`);
     text = "";
+    histIdx = 0;
+    stash = "";
   }
 
   function stop() {
@@ -91,6 +126,7 @@
   }
 
   function onKey(e: KeyboardEvent) {
+    const el = e.currentTarget as HTMLTextAreaElement;
     if (slashOpen && slashList.length > 0) {
       if (e.key === "ArrowDown") {
         e.preventDefault();
@@ -113,9 +149,56 @@
         return;
       }
     }
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "c") {
+      // Copy wins when text is selected; otherwise interrupt the running turn.
+      if (view.working && el.selectionStart === el.selectionEnd) {
+        e.preventDefault();
+        stop();
+      }
+      return;
+    }
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "n") {
+      e.preventDefault();
+      newSession();
+      return;
+    }
+    if ((e.metaKey || e.ctrlKey) && (e.key === "[" || e.key === "]")) {
+      e.preventDefault();
+      stepSession(e.key === "[" ? -1 : 1);
+      return;
+    }
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       send();
+      return;
+    }
+    // History recall (shell semantics): ↑ only from the first line, ↓ only
+    // from the last; editing a recalled line forks the draft (see onInput).
+    if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+      const caret = el.selectionStart ?? 0;
+      const line = text.slice(0, caret).split("\n").length;
+      const last = text.split("\n").length;
+      if (e.key === "ArrowUp" && (text === "" || line === 1) && hist.length > 0) {
+        e.preventDefault();
+        if (histIdx === 0) stash = text; // first ↑ stashes the working draft
+        histIdx = Math.min(histIdx + 1, hist.length);
+        text = hist[hist.length - histIdx] ?? "";
+        void tick().then(() => el.setSelectionRange(0, 0));
+      } else if (e.key === "ArrowDown" && line === last && histIdx > 0) {
+        e.preventDefault();
+        histIdx -= 1;
+        text = histIdx === 0 ? stash : (hist[hist.length - histIdx] ?? "");
+        void tick().then(() => el.setSelectionRange(0, 0));
+      }
+    }
+  }
+
+  // Any edit while recalling history exits history mode — the edit is the
+  // new draft (standard shell behavior).
+  function onInput() {
+    if (histIdx > 0) {
+      histIdx = 0;
+      stash = "";
     }
   }
 </script>
@@ -146,12 +229,16 @@
       bind:this={inputEl}
       bind:value={text}
       onkeydown={onKey}
+      oninput={onInput}
       {rows}
       {placeholder}
       data-agent-id="composer.input"
       data-state={view.working ? "working" : "idle"}
     ></textarea>
     <span class="c-side">
+      {#if histIdx > 0}
+        <span class="faint" data-agent-id="composer.histmark">[↑{histIdx}]</span>
+      {/if}
       {#if view.working}
         <button class="act err" data-agent-id="composer.stop" onclick={stop}>^c stop</button>
       {/if}

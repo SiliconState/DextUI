@@ -1,6 +1,20 @@
 <script lang="ts">
-  import { app, start, connection, newSession, toggleSidebar } from "./lib/state.svelte";
+  import {
+    app,
+    start,
+    connection,
+    activate,
+    newSession,
+    toggleSidebar,
+    queue,
+    queueTotal,
+    respondGlobal,
+    stepSession,
+    jumpToOldestPending,
+    toggleNotify,
+  } from "./lib/state.svelte";
   import { useSession } from "./lib/useSession.svelte";
+  import { useDialog } from "./lib/dialog.svelte";
   import type { ViewBlock } from "@dextui/client";
   import SessionIndex from "./components/SessionIndex.svelte";
   import Scrollback from "./components/Scrollback.svelte";
@@ -9,6 +23,8 @@
   import StatusLine from "./components/StatusLine.svelte";
   import Finder from "./components/Finder.svelte";
   import Toasts from "./components/Toasts.svelte";
+  import Todos from "./components/Todos.svelte";
+  import Shortcuts from "./components/Shortcuts.svelte";
 
   let tokenInput = $state("");
   let inspect: ViewBlock | null = $state(null);
@@ -24,16 +40,17 @@
   const sess = useSession(() => activeStore);
   const view = $derived(sess.view);
   const pendingList = $derived(view ? [...view.pending.values()] : []);
+  const pendingTotal = $derived(queueTotal());
+
+  // Overlay dialogs: focus trap + focus restore for the block inspector and
+  // the raw events drawer.
+  const dlgBlock = useDialog(() => !!inspect);
+  const dlgEvents = useDialog(() => app.eventsOpen && !!view);
 
   function connectSubmit(e: SubmitEvent) {
     e.preventDefault();
     const t = tokenInput.trim();
     if (t) start(t);
-  }
-
-  function respond(requestId: string, choice: "once" | "always" | "deny") {
-    const c = connection();
-    if (c && app.activeId) c.respond(app.activeId, requestId, choice);
   }
 
   function toggleNavigation() {
@@ -51,30 +68,85 @@
     return () => mobile.removeEventListener("change", onChange);
   });
 
-  // Keyboard-first approvals: a=once, s=always, d=deny; Ctrl/Cmd+B toggles navigation.
+  // The document title doubles as the hidden-tab queue badge; the hidden-tab
+  // 100 ms view flush in useSession keeps it tracking while backgrounded.
+  $effect(() => {
+    const n = queueTotal();
+    const meta = app.sessions.find((s) => s.id === app.activeId);
+    const title = meta?.title || (view ? view.title : "");
+    const base = title ? `dext · ${title}` : "dext";
+    document.title = n > 0 ? `(${n}) ${base}` : base;
+  });
+
+  // Keyboard-first approvals: a/s/d approve the globally oldest pending
+  // request across ALL sessions. Ctrl/Cmd+B rail · N new · [ ] prev/next ·
+  // C interrupt · ? shortcuts · any printable key starts a session (hero).
   $effect(() => {
     const onKey = (e: KeyboardEvent) => {
+      dlgBlock.onKey(e);
+      dlgEvents.onKey(e);
       if (e.key === "Escape") {
         if (inspect) inspect = null;
         else if (app.eventsOpen) app.eventsOpen = false;
+        else if (app.shortcutsOpen) app.shortcutsOpen = false;
         else if (indexOpen) indexOpen = false;
         return;
       }
-      if (app.paletteOpen || inspect || app.eventsOpen) return;
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "b") {
         e.preventDefault();
         toggleNavigation();
         return;
       }
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "n") {
+        e.preventDefault();
+        newSession();
+        return;
+      }
+      if ((e.metaKey || e.ctrlKey) && (e.key === "[" || e.key === "]")) {
+        e.preventDefault();
+        stepSession(e.key === "[" ? -1 : 1);
+        return;
+      }
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "c") {
+        // Copy wins whenever something is selected; otherwise stop the turn.
+        const selected = window.getSelection()?.toString() ?? "";
+        if (!selected && app.activeId && view?.working) {
+          e.preventDefault();
+          connection()?.interrupt(app.activeId);
+        }
+        return;
+      }
+      if (app.paletteOpen || app.shortcutsOpen || inspect || app.eventsOpen) return;
       // Modified combos belong to the browser/app (Ctrl+A select-all, Ctrl+S save…).
       if (e.ctrlKey || e.metaKey || e.altKey) return;
       const t = e.target as HTMLElement | null;
       if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
-      const first = pendingList[0];
-      if (!first) return;
-      if (e.key === "a") respond(first.request_id, "once");
-      else if (e.key === "s") respond(first.request_id, "always");
-      else if (e.key === "d") respond(first.request_id, "deny");
+      if (e.key === "?") {
+        e.preventDefault();
+        app.shortcutsOpen = true;
+        return;
+      }
+      // Hero typing: a printable key with no active session spawns one,
+      // seeded with that character; Composer consumes the stash on mount.
+      if (!app.activeId && e.key.length === 1 && e.key.trim()) {
+        app.pendingDraft = e.key;
+        newSession();
+        return;
+      }
+      const choice =
+        e.key === "a" ? "once" : e.key === "s" ? "always" : e.key === "d" ? "deny" : null;
+      if (!choice) return;
+      const target = queue.entries[0];
+      if (target) {
+        // Activate first so the full card (diff + note) is visible, then act.
+        if (target.sessionId !== app.activeId) activate(target.sessionId);
+        respondGlobal(target.sessionId, target.pending.request_id, choice);
+        return;
+      }
+      // No full data anywhere: jump to the first count-only session instead
+      // of ever responding to a count blind.
+      const count = queue.counts[0];
+      if (count) activate(count.id);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -149,6 +221,12 @@
       {/if}
     </div>
 
+    <div class="todos-row">
+      {#if activeStore}
+        <Todos store={activeStore} />
+      {/if}
+    </div>
+
     <div class="statusline">
       {#if activeStore}
         <StatusLine store={activeStore} onToggleIndex={toggleNavigation} />
@@ -158,8 +236,26 @@
           {#if app.sidebarCollapsed}
             <button class="act rail-restore-min" data-agent-id="sidebar.restore" onclick={toggleSidebar}>[› sessions]</button>
           {/if}
+          {#if pendingTotal > 0}
+            <button
+              class="act warn queue-badge"
+              data-agent-id="queue.badge"
+              data-state="active"
+              aria-label={`jump to oldest pending approval (${pendingTotal} total)`}
+              onclick={jumpToOldestPending}
+            >⚠ {pendingTotal}</button
+            >
+          {/if}
           <span class={app.phase === "live" ? "st-green" : app.phase === "failed" ? "st-red" : "st-yellow pulse"}>●</span>
           <span class="dim">{app.phase}{app.phaseDetail ? ` · ${app.phaseDetail}` : ""}</span>
+          <button
+            class="act"
+            data-agent-id="notify.toggle"
+            data-state={app.notify}
+            onclick={toggleNotify}
+            title="notify while the tab is hidden"
+          >notify:{app.notify}</button
+          >
           <span class="faint sl-min-right">⌘k finder</span>
         </div>
       {/if}
@@ -168,7 +264,16 @@
 {/if}
 
 {#if inspect}
-  <div class="insp" data-agent-id="drawer.block" data-state="open">
+  <div
+    class="insp"
+    role="dialog"
+    aria-modal="true"
+    aria-label="block inspector"
+    tabindex="-1"
+    use:dlgBlock.ref
+    data-agent-id="drawer.block"
+    data-state="open"
+  >
     <div class="insp-head">
       <span class="st-magenta">{inspect.kind}</span>
       <span class="dim">raw block</span>
@@ -179,7 +284,16 @@
     <pre class="insp-body" data-agent-id="drawer.block.json">{JSON.stringify(inspect, null, 2)}</pre>
   </div>
 {:else if app.eventsOpen && view}
-  <div class="insp" data-agent-id="drawer.events" data-state="open">
+  <div
+    class="insp"
+    role="dialog"
+    aria-modal="true"
+    aria-label="raw events"
+    tabindex="-1"
+    use:dlgEvents.ref
+    data-agent-id="drawer.events"
+    data-state="open"
+  >
     <div class="insp-head">
       <span class="st-magenta">events</span>
       <span class="dim">last {view.recent.length} envelopes · seq {view.lastSeq}</span>
@@ -192,6 +306,7 @@
 {/if}
 
 <Finder />
+<Shortcuts />
 <Toasts />
 
 <style>

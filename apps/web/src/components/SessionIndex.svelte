@@ -2,6 +2,7 @@
   // Session index: a plain text list, like dext's own listings.
   // Status glyphs mirror the TUI: ● live · ● starting (pulse) · ○ cold · ● exited.
   import { app, activate, newSession } from "../lib/state.svelte";
+  import ActionQueue from "./ActionQueue.svelte";
 
   let {
     onPick,
@@ -37,6 +38,7 @@
     <button class="act rail-min" data-agent-id="sidebar.collapse" onclick={onCollapse} title="Minimize sessions (Ctrl/Cmd+B)">[‹]</button>
     <button class="act rail-close" data-agent-id="sidebar.close" onclick={onClose} title="Close sessions">[×]</button>
   </div>
+  <ActionQueue {onPick} />
   <input
     bind:value={query}
     type="search"
