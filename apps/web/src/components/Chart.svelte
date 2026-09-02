@@ -1,321 +1,315 @@
 <script lang="ts">
-  // Interactive chart renderer — the web tier of packages/client/charts.ts
-  // (the strict validator lives there; this owns everything the frozen SVG
-  // could not do: hover, zoom/pan, drag-a-point editing with live stats,
-  // click-sort, legend toggles, donut isolate, dataset cross-highlight).
-  // All local: Svelte escapes every label, nothing leaves the browser, and
-  // no interaction mutates the spec or round-trips to the host.
-  import { fmt, CHART_COLORS, type ChartSpec } from "@dextui/client";
-  import type { ChartLink } from "../lib/chartlink.svelte";
+  // Interactive chart renderer — the web tier of packages/client/charts.ts.
+  // The strict validator lives there; the geometry/gesture math lives in
+  // packages/client/chartmath.ts (unit-tested); this component only wires
+  // pointer events to it and renders. All state is local: nothing round-trips
+  // to the host, the spec is never mutated, and every label goes through
+  // Svelte text interpolation (no {@html} on dynamic strings).
+  //
+  // Gestures use pointer capture on the <svg>, so no window listeners exist
+  // while idle — N charts in a scrollback cost nothing until touched.
+  import {
+    fmt,
+    CHART_COLORS,
+    CHART_W as W,
+    PLOT,
+    HBAR,
+    SPARK,
+    computeScale,
+    lineX,
+    scaleY,
+    valueAtY,
+    lineIndexAtX,
+    sparkX,
+    sparkY,
+    sparkIndexAtX,
+    barLayout,
+    barX,
+    barIndexAtX,
+    hbarRowAtY,
+    hbarScaleMax,
+    hbarWidth,
+    hbarValueAtX,
+    sortOrder,
+    panWindow,
+    wheelZoom,
+    seriesStats,
+    donutRows,
+    clampTip,
+    type ChartSpec,
+    type Scale,
+  } from "@dextui/client";
+  import { ChartLink } from "../lib/chartlink.svelte";
 
-  let { spec, link }: { spec: ChartSpec; link?: ChartLink } = $props();
+  let { spec, link: linkProp }: { spec: ChartSpec; link?: ChartLink } = $props();
 
-  const W = 560;
-  // $derived: keeps svelte-check's state_referenced_locally heuristic quiet
-  // and stays correct even if a block were ever re-parsed in place.
-  const ds = $derived(spec.dataset ?? "");
+  // Selection link: shared per message when provided; a private one otherwise
+  // so click-to-highlight still works on a lone chart. Charts without a
+  // dataset id get a unique key so they never cross-talk.
+  const uid = `#${Math.random().toString(36).slice(2, 8)}`;
+  const localLink = new ChartLink();
+  const link = $derived(linkProp ?? localLink);
+  const ds = $derived(spec.dataset ?? uid);
+  const linked = $derived(!!spec.dataset);
+
   const seriesAll = $derived(spec.series ?? [{ name: spec.title ?? "", values: spec.values }]);
   const labels = $derived(spec.labels ?? spec.values.map((_, i) => `#${i + 1}`));
   const unit = $derived(spec.unit ?? "");
   const n = $derived(spec.values.length);
-  const plot = { top: 26, bottom: 190, l: 8, r: W - 64 };
+  const type = $derived(spec.type);
 
   // ---- interaction state
-  let hidden = $state(new Set<number>()); // toggled-off series (line/legend)
-  let edit = $state<Record<number, number[]>>({}); // dragged-point overrides
-  let sortMode = $state(0); // 0 none · 1 desc · 2 asc (bar/hbar)
-  let zoom = $state<[number, number] | null>(null); // line x-window
+  let hidden = $state(new Set<number>());
+  let edit = $state<Record<number, number[]>>({});
+  let sortMode = $state<0 | 1 | 2>(0);
+  let zoom = $state<[number, number] | null>(null);
   let hoverI = $state(-1);
-  let iso = $state(-1); // donut isolated slice
-  let drag = $state<{ s: number; i: number; ax: "x" | "y" } | null>(null);
-  let pan = $state<{ px: number; i0: number; i1: number } | null>(null);
-  let brush = $state<{ a: number } | null>(null);
+  let iso = $state(-1);
   let tip = $state({ x: 0, y: 0, on: false });
+  let hostW = $state(560);
+  let svgEl = $state<SVGSVGElement | null>(null);
+
+  type Gesture =
+    | { kind: "drag"; s: number; i: number; ax: "x" | "y"; sc: Scale; hiAbs: number; neg: boolean; moved: number }
+    | { kind: "pan"; px: number; i0: number; w: number; moved: number }
+    | { kind: "brush"; a: number; moved: number };
+  let gesture = $state<Gesture | null>(null);
 
   const vals = (s: number): number[] => edit[s] ?? seriesAll[s]!.values;
   const visible = $derived(seriesAll.map((_, s) => s).filter((s) => !hidden.has(s)));
+  const primary = $derived(visible[0] ?? 0);
   const edited = $derived(Object.keys(edit).length > 0);
-  const cursor = $derived(drag || pan || brush ? "grabbing" : "default");
+
+  // Frozen for the duration of a drag so the axis does not rescale under the
+  // cursor (the value may exceed the frozen max; the scale refits on release).
+  const liveScale = $derived(computeScale((visible.length ? visible : [0]).map(vals), n, zoom, spec.max));
+  const scl = $derived(gesture?.kind === "drag" ? gesture.sc : liveScale);
+  const order = $derived(type === "bar" || type === "hbar" ? sortOrder(vals(0), sortMode) : vals(0).map((_, i) => i));
+  const hiAbs = $derived(hbarScaleMax(vals(0), spec.max));
+  const stats = $derived(seriesStats(vals(primary)));
+  const donut = $derived(donutRows(vals(0)));
+  const bars = $derived(barLayout(n));
+  const showBrush = $derived(type === "line" && linked);
+  const viewH = $derived(
+    type === "spark" ? SPARK.h : type === "donut" ? Math.max(180, 24 + n * 20) : type === "hbar" ? HBAR.y0 + n * HBAR.rowH + 8 : PLOT.bottom + 48 + (showBrush ? 16 : 0),
+  );
+  const cursor = $derived(gesture ? (gesture.kind === "drag" ? (gesture.ax === "x" ? "ew-resize" : "ns-resize") : "grabbing") : "default");
 
   const setVal = (s: number, i: number, v: number) => {
     if (!Number.isFinite(v)) return;
     const arr = [...(edit[s] ?? seriesAll[s]!.values)];
-    arr[i] = v;
+    arr[i] = Math.round(v * 100) / 100;
     edit = { ...edit, [s]: arr };
   };
 
-  // ---- scale (line/bar): y from visible+edited values in the zoom window
-  const scl = $derived.by(() => {
-    const i0 = zoom ? zoom[0] : 0;
-    const i1 = zoom ? zoom[1] : n - 1;
-    const vs: number[] = [];
-    for (const s of visible.length ? visible : [0]) {
-      for (let i = Math.max(0, Math.floor(i0)); i <= Math.min(n - 1, Math.ceil(i1)); i++) {
-        const v = vals(s)[i];
-        if (v !== undefined) vs.push(v);
-      }
-    }
-    let hi = spec.max ?? Math.max(1e-9, ...vs);
-    let lo = vs.length ? Math.min(0, ...vs) : 0;
-    if (hi <= lo) hi = lo + 1;
-    const spanI = Math.max(1e-6, i1 - i0);
-    return {
-      i0,
-      i1,
-      hi,
-      lo,
-      spanI,
-      xi: (i: number) => plot.l + ((plot.r - plot.l) * (i - i0)) / spanI,
-      yi: (v: number) => plot.bottom - ((plot.bottom - plot.top) * (v - lo)) / (hi - lo),
-    };
-  });
+  const dim = (i: number) => (link.has(ds) && !link.active(ds, i) ? 0.16 : 1);
 
-  // ---- sort permutation (bar/hbar)
-  const order = $derived.by(() => {
-    const o = Array.from({ length: n }, (_, i) => i);
-    if (sortMode === 0 || spec.type === "donut" || spec.type === "spark" || spec.type === "line") return o;
-    const key = (i: number) => Math.abs(vals(0)[i] ?? 0);
-    o.sort((a, b) => (sortMode === 1 ? key(b) - key(a) : key(a) - key(b)));
-    return o;
-  });
-
-  // ---- live stats over the primary visible series (edited values included)
-  const stats = $derived.by(() => {
-    const s = visible[0] ?? 0;
-    const vs = vals(s);
-    return {
-      n,
-      min: Math.min(...vs),
-      max: Math.max(...vs),
-      mean: vs.reduce((a, b) => a + b, 0) / vs.length,
-      sum: vs.reduce((a, b) => a + b, 0),
-    };
-  });
-
-  // ---- pointer plumbing
-  let svgEl = $state<SVGSVGElement | null>(null);
-  let moved = 0;
-
+  // ---- pointer plumbing (viewBox coordinates)
   const toSvg = (e: PointerEvent | WheelEvent) => {
     const r = svgEl?.getBoundingClientRect();
-    if (!r) return { x: 0, y: 0 };
+    if (!r || !r.width) return { x: 0, y: 0 };
     return { x: ((e.clientX - r.left) * W) / r.width, y: ((e.clientY - r.top) * viewH) / r.height };
   };
 
-  const idxAt = (x: number) => {
-    const i = scl.i0 + ((x - plot.l) / (plot.r - plot.l)) * scl.spanI;
-    return Math.max(0, Math.min(n - 1, Math.round(i)));
+  const hitIndex = (p: { x: number; y: number }): number => {
+    if (type === "line") return lineIndexAtX(scl, p.x, n);
+    if (type === "spark") return sparkIndexAtX(p.x, n);
+    if (type === "bar") return barIndexAtX(p.x, n, order);
+    if (type === "hbar") return hbarRowAtY(p.y, n, order);
+    return -1;
   };
 
-  const onMove = (e: PointerEvent) => {
-    const p = toSvg(e);
-    if (drag) {
-      moved++;
-      if (drag.ax === "x") {
-        // hbar: horizontal fill — value from x over the track
-        const hiAbs = Math.max(1e-9, ...vals(0).map(Math.abs), spec.max ?? 0);
-        setVal(drag.s, drag.i, Math.round(Math.max(0, ((p.x - hb.x) / hb.w) * hiAbs) * 100) / 100);
-      } else {
-        const raw = scl.lo + ((plot.bottom - p.y) * (scl.hi - scl.lo)) / (plot.bottom - plot.top);
-        setVal(drag.s, drag.i, Math.round(raw * 100) / 100);
-      }
-    } else if (pan) {
-      moved++;
-      const r = svgEl?.getBoundingClientRect();
-      const di = r ? ((pan.px - e.clientX) * (W / r.width) * scl.spanI) / (plot.r - plot.l) : 0;
-      const w = pan.i1 - pan.i0;
-      zoom = [Math.max(0, pan.i0 + di), Math.min(n - 1, Math.max(0, pan.i0 + di) + w)];
-    } else if (brush) {
-      moved++;
-      link?.range(ds, brush.a, idxAt(p.x));
-    }
-  };
-  const onUp = () => {
-    drag = null;
-    pan = null;
-    brush = null;
+  const begin = (e: PointerEvent, g: Gesture) => {
+    e.stopPropagation();
+    gesture = g;
+    hoverI = -1;
+    tip = { ...tip, on: false };
+    svgEl?.setPointerCapture(e.pointerId);
   };
 
-  const onHover = (e: PointerEvent) => {
-    if (drag || pan || brush) return;
-    const p = toSvg(e);
-    hoverI = idxAt(p.x);
-    const host = svgEl?.parentElement?.getBoundingClientRect();
-    if (host) tip = { x: e.clientX - host.left, y: e.clientY - host.top, on: true };
-  };
+  const startDrag = (e: PointerEvent, s: number, i: number, ax: "x" | "y") =>
+    begin(e, { kind: "drag", s, i, ax, sc: liveScale, hiAbs, neg: (vals(s)[i] ?? 0) < 0, moved: 0 });
 
-  const onWheel = (e: WheelEvent) => {
-    if (spec.type !== "line") return;
-    e.preventDefault();
-    const r = svgEl?.getBoundingClientRect();
-    if (!r) return;
-    const fx = ((e.clientX - r.left) * (W / r.width) - plot.l) / (plot.r - plot.l); // 0..1 in window
-    const i0 = zoom ? zoom[0] : 0;
-    const i1 = zoom ? zoom[1] : n - 1;
-    const at = i0 + fx * (i1 - i0);
-    const k = e.deltaY > 0 ? 1.18 : 1 / 1.18;
-    let w = (i1 - i0) * k;
-    if (w >= n - 1) {
-      zoom = null;
+  const onPointerMove = (e: PointerEvent) => {
+    const g = gesture;
+    if (!g) {
+      const p = toSvg(e);
+      hoverI = hitIndex(p);
+      const host = svgEl?.parentElement?.getBoundingClientRect();
+      if (host) tip = { x: e.clientX - host.left, y: e.clientY - host.top, on: hoverI >= 0 };
       return;
     }
-    w = Math.max(2, w);
-    let a = at - fx * w;
-    a = Math.max(0, Math.min(n - 1 - w, a));
-    zoom = [a, a + w];
+    g.moved++;
+    const p = toSvg(e);
+    if (g.kind === "drag") {
+      if (g.ax === "x") setVal(g.s, g.i, hbarValueAtX(p.x, g.hiAbs, g.neg));
+      else setVal(g.s, g.i, valueAtY(g.sc, p.y));
+    } else if (g.kind === "pan") {
+      const r = svgEl?.getBoundingClientRect();
+      const di = r ? ((g.px - e.clientX) * (W / r.width) * scl.spanI) / (PLOT.r - PLOT.l) : 0;
+      zoom = panWindow(g.i0, g.w, di, n);
+    } else {
+      link.range(ds, g.a, lineIndexAtX(scl, p.x, n));
+    }
   };
 
-  const clickShape = (i: number) => {
-    if (moved > 3) return; // it was a drag, not a click
-    link?.pick(ds, i);
-    if (spec.type === "bar" || spec.type === "hbar") sortMode = (sortMode + 1) % 3;
-    if (spec.type === "donut") iso = iso === i ? -1 : i;
+  const onPointerUp = () => {
+    const g = gesture;
+    gesture = null;
+    // A press without movement is a click: select (cross-highlight) that index.
+    if (g && g.kind === "drag" && g.moved < 3) link.pick(ds, g.i);
   };
 
-  const dim = (i: number) => (link && ds && link.has(ds) && !link.active(ds, i) ? 0.16 : 1);
+  const onLeave = () => {
+    if (!gesture) {
+      hoverI = -1;
+      tip = { ...tip, on: false };
+    }
+  };
 
-  // ---- geometry per type
-  const viewH = $derived(
-    spec.type === "spark"
-      ? 48
-      : spec.type === "donut"
-        ? Math.max(180, 24 + n * 20)
-        : spec.type === "hbar"
-          ? 30 + n * 26 + 8
-          : spec.type === "line"
-            ? 254 // 224 plot + x labels + brush strip
-            : 238);
+  // Svelte 5 marks only touchstart/touchmove passive, so preventDefault holds.
+  const onWheel = (e: WheelEvent) => {
+    if (type !== "line") return;
+    e.preventDefault();
+    const fx = (toSvg(e).x - PLOT.l) / (PLOT.r - PLOT.l);
+    zoom = wheelZoom(zoom, n, fx, e.deltaY);
+  };
 
-  // hbar track geometry (label column ends at 118)
-  const hb = { x: 124, w: W - 188 };
-
-  // donut: slice arcs + legend percentages from current (edited) values
-  const donut = $derived.by(() => {
-    const C = 2 * Math.PI * 58;
-    const total = vals(0).reduce((a, b) => a + Math.abs(b), 0) || 1;
-    let acc = 0;
-    const rows = vals(0).map((v, i) => {
-      const frac = Math.abs(v) / total;
-      const row = { i, dash: frac * C, off: acc * C, pct: (frac * 100).toFixed(0) };
-      acc += frac;
-      return row;
-    });
-    return { C, rows };
-  });
+  const cycleSort = () => (sortMode = ((sortMode + 1) % 3) as 0 | 1 | 2);
+  const toggleSeries = (s: number) => {
+    const hs = new Set(hidden);
+    if (hs.has(s)) hs.delete(s);
+    else hs.add(s);
+    hidden = hs;
+  };
+  const tipPos = $derived(clampTip(tip.x, tip.y, hostW));
+  const hint = $derived(
+    type === "line"
+      ? `drag points to edit · drag background to pan · wheel to zoom · dblclick resets${linked ? " · brush strip links siblings" : ""}`
+      : type === "bar"
+        ? "drag bars to edit · click a bar to highlight · sort via button or a label"
+        : type === "hbar"
+          ? "drag fills to edit · click a row to highlight · sort via button or a label"
+          : type === "donut"
+            ? "click a slice to isolate"
+            : "hover for values",
+  );
 </script>
 
-<svelte:window onpointermove={onMove} onpointerup={onUp} />
-
-<div class="chart-wrap" style:cursor={cursor}>
+<div class="chart-wrap" style:cursor={cursor} bind:clientWidth={hostW}>
   {#if spec.title}<div class="chart-title">{spec.title}</div>{/if}
 
-  <svg bind:this={svgEl} viewBox="0 0 {W} {viewH}" width="100%" style="display:block" role="img" aria-label={spec.title ?? spec.type}
-    onpointermove={onHover} onpointerleave={() => { hoverI = -1; tip = { ...tip, on: false }; }} onwheel={onWheel}>
+  <svg bind:this={svgEl} viewBox="0 0 {W} {viewH}" width="100%" style="display:block; touch-action:none" role="img" aria-label={spec.title ?? type}
+    onpointermove={onPointerMove} onpointerup={onPointerUp} onpointercancel={onPointerUp} onpointerleave={onLeave} onwheel={onWheel}>
 
-    {#if spec.type === "spark"}
-      <polyline points={seriesAll[0]!.values.map((v, i) => `${(2 + ((W - 4) * i) / Math.max(1, n - 1)).toFixed(1)},${(4 + 40 * (1 - (v - Math.min(...vals(0))) / (Math.max(...vals(0)) - Math.min(...vals(0)) || 1))).toFixed(1)}`).join(" ")} fill="none" style="stroke:var(--green,#3fb950)" stroke-width="1.5" />
-      <circle cx={2 + ((W - 4) * (n - 1)) / Math.max(1, n - 1)} cy={4 + 40 * (1 - (vals(0)[n - 1]! - Math.min(...vals(0))) / (Math.max(...vals(0)) - Math.min(...vals(0)) || 1))} r="2.5" style="fill:var(--green,#3fb950)" />
+    {#if type === "spark"}
+      {@const sv = vals(0)}
+      <polyline points={sv.map((v, i) => `${sparkX(i, n).toFixed(1)},${sparkY(v, sv).toFixed(1)}`).join(" ")} fill="none" style="stroke:var(--green,#3fb950)" stroke-width="1.5" />
+      <circle cx={sparkX(n - 1, n)} cy={sparkY(sv[n - 1] ?? 0, sv)} r="2.5" style="fill:var(--green,#3fb950)" />
+      {#if hoverI >= 0}<circle cx={sparkX(hoverI, n)} cy={sparkY(sv[hoverI] ?? 0, sv)} r="3.5" fill="none" style="stroke:var(--fg,#e6edf3)" />{/if}
 
-    {:else if spec.type === "donut"}
+    {:else if type === "donut"}
       {@const cx = 90}
       {@const cy = Math.max(100, viewH / 2)}
       {#each donut.rows as r2 (r2.i)}
-      <!-- svelte-ignore a11y_click_events_have_key_events -->
-      <!-- svelte-ignore a11y_no_static_element_interactions -->
-        <circle cx={cx} cy={cy} r="58" fill="none" stroke-width={iso === r2.i ? 32 : 26} stroke-dasharray="{r2.dash.toFixed(2)} {donut.C.toFixed(2)}" stroke-dashoffset={(-r2.off).toFixed(2)} transform="rotate(-90 {cx} {cy})" style="stroke:{CHART_COLORS[r2.i % 5]}; transition: stroke-width .15s ease, opacity .15s ease" opacity={iso < 0 || iso === r2.i ? 1 : 0.15} onpointerdown={() => { moved = 0; }} onclick={() => clickShape(r2.i)} style:cursor="pointer" />
+        <!-- svelte-ignore a11y_click_events_have_key_events -->
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <circle cx={cx} cy={cy} r="58" fill="none" stroke-width={iso === r2.i ? 32 : 26} stroke-dasharray="{r2.dash.toFixed(2)} {donut.C.toFixed(2)}" stroke-dashoffset={(-r2.off).toFixed(2)} transform="rotate(-90 {cx} {cy})" style="stroke:{CHART_COLORS[r2.i % 5]}; cursor:pointer; transition: stroke-width .15s ease, opacity .15s ease" opacity={iso < 0 || iso === r2.i ? 1 : 0.15} onclick={() => (iso = iso === r2.i ? -1 : r2.i)} />
       {/each}
-      <text x={cx} y={cy - 4} text-anchor="middle" font-size="12" style="fill:var(--fg,#e6edf3)">{fmt(stats.sum)}{unit}</text>
-      <text x={cx} y={cy + 12} text-anchor="middle" font-size="10" style="fill:var(--dim,#8b949e)">total</text>
+      <text x={cx} y={cy - 4} text-anchor="middle" font-size="12" style="fill:var(--fg,#e6edf3)">{fmt(iso >= 0 ? (vals(0)[iso] ?? 0) : stats.sum)}{unit}</text>
+      <text x={cx} y={cy + 12} text-anchor="middle" font-size="10" style="fill:var(--dim,#8b949e)">{iso >= 0 ? (labels[iso] ?? "").slice(0, 14) : "total"}</text>
       {#each donut.rows as r2, p (r2.i)}
         <!-- svelte-ignore a11y_click_events_have_key_events -->
         <!-- svelte-ignore a11y_no_static_element_interactions -->
-        <g transform="translate(0,{p * 20})" style="transition: transform .18s ease" onclick={() => clickShape(r2.i)} style:cursor="pointer">
+        <g transform="translate(0,{p * 20})" style="cursor:pointer" onclick={() => (iso = iso === r2.i ? -1 : r2.i)}>
           <rect x="190" y="16" width="10" height="10" rx="2" style="fill:{CHART_COLORS[r2.i % 5]}" opacity={iso < 0 || iso === r2.i ? 1 : 0.3} />
-          <text x="206" y="25" font-size="11" opacity={iso < 0 || iso === r2.i ? 1 : 0.35} style="fill:var(--fg,#e6edf3)">{(labels[r2.i] ?? `#${r2.i + 1}`).slice(0, 18)} · {r2.pct}%</text>
+          <text x="206" y="25" font-size="11" opacity={iso < 0 || iso === r2.i ? 1 : 0.35} style="fill:var(--fg,#e6edf3)">{(labels[r2.i] ?? "").slice(0, 18)} · {r2.pct}% · {fmt(vals(0)[r2.i] ?? 0)}{unit}</text>
         </g>
       {/each}
 
-    {:else if spec.type === "hbar"}
+    {:else if type === "hbar"}
       {#each order as i, p (i)}
-        {@const y = 30 + p * 26}
         {@const v = vals(0)[i] ?? 0}
-        {@const w = Math.max(2, (Math.abs(v) / Math.max(1e-9, ...vals(0).map(Math.abs), spec.max ?? 0)) * hb.w)}
-        <g transform="translate(0,{y})" style="transition: transform .18s ease">
-          <text x="118" y="12" text-anchor="end" font-size="11" style="fill:var(--dim,#8b949e)">{(labels[i] ?? `#${i + 1}`).slice(0, 14)}</text>
-          <rect x={hb.x} y="0" width={hb.w} height="14" rx="3" style="fill:var(--line,#2a2f37)" opacity="0.35" />
+        <g transform="translate(0,{HBAR.y0 + p * HBAR.rowH})" style="transition: transform .18s ease">
           <!-- svelte-ignore a11y_click_events_have_key_events -->
           <!-- svelte-ignore a11y_no_static_element_interactions -->
-          <rect x={hb.x} y="0" width={w} height="14" rx="3" style="fill:{v < 0 ? CHART_COLORS[4] : CHART_COLORS[i % 5]}; transition: width .12s ease" opacity={dim(i)} onpointerdown={(e) => { e.stopPropagation(); moved = 0; drag = { s: 0, i, ax: "x" }; }} onclick={() => clickShape(i)} style:cursor="ew-resize" />
-          <text x={hb.x + hb.w + 6} y="12" font-size="11" style="fill:var(--fg,#e6edf3)">{fmt(v)}{unit}</text>
+          <text x="118" y="12" text-anchor="end" font-size="11" style="fill:var(--dim,#8b949e); cursor:pointer" onclick={cycleSort}>{(labels[i] ?? "").slice(0, 14)}</text>
+          <rect x={HBAR.x} y="0" width={HBAR.w} height="14" rx="3" style="fill:var(--line,#2a2f37)" opacity="0.35" />
+          <!-- svelte-ignore a11y_no_static_element_interactions -->
+          <rect x={HBAR.x} y="0" width={hbarWidth(v, hiAbs)} height="14" rx="3" style="fill:{v < 0 ? CHART_COLORS[4] : CHART_COLORS[i % 5]}; cursor:ew-resize" opacity={hoverI === i ? 1 : dim(i)} onpointerdown={(e) => startDrag(e, 0, i, "x")} />
+          <text x={HBAR.x + HBAR.w + 6} y="12" font-size="11" style="fill:var(--fg,#e6edf3)">{fmt(v)}{unit}</text>
         </g>
       {/each}
 
     {:else}
-      <!-- shared axes: bar + line -->
       {#each [0, 1, 2, 3] as g (g)}
-        {@const gy = plot.bottom - ((plot.bottom - plot.top) * g) / 3}
-        <line x1={plot.l} y1={gy} x2={plot.r} y2={gy} style="stroke:var(--line,#2a2f37)" />
-        <text x={plot.r + 4} y={gy + 3} font-size="10" style="fill:var(--dim,#8b949e)">{fmt(scl.lo + ((scl.hi - scl.lo) * g) / 3)}{unit}</text>
+        {@const gy = PLOT.bottom - ((PLOT.bottom - PLOT.top) * g) / 3}
+        <line x1={PLOT.l} y1={gy} x2={PLOT.r} y2={gy} style="stroke:var(--line,#2a2f37)" />
+        <text x={PLOT.r + 4} y={gy + 3} font-size="10" style="fill:var(--dim,#8b949e)">{fmt(scl.lo + ((scl.hi - scl.lo) * g) / 3)}{unit}</text>
       {/each}
       {#if scl.lo < 0 && scl.hi > 0}
-        <line x1={plot.l} y1={scl.yi(0)} x2={plot.r} y2={scl.yi(0)} style="stroke:var(--dim,#8b949e)" stroke-width="1.5" />
+        <line x1={PLOT.l} y1={scaleY(scl, 0)} x2={PLOT.r} y2={scaleY(scl, 0)} style="stroke:var(--dim,#8b949e)" stroke-width="1.5" />
       {/if}
 
-      {#if spec.type === "bar"}
-        {@const slot = (plot.r - plot.l) / n}
-        {@const bw = Math.min(44, slot * 0.62)}
+      {#if type === "bar"}
         {#each order as i, p (i)}
-          {@const x = plot.l + slot * (p + 0.5)}
+          {@const x = barX(p, n)}
           {@const v = vals(0)[i] ?? 0}
-          {@const by = Math.min(scl.yi(0), scl.yi(v))}
-          {@const bh = Math.max(2, Math.abs(scl.yi(0) - scl.yi(v)))}
+          {@const y0 = scaleY(scl, 0)}
+          {@const y1 = scaleY(scl, v)}
+          {@const by = Math.max(0, Math.min(y0, y1))}
+          {@const bh = Math.max(2, Math.abs(y0 - y1))}
           <g transform="translate({x},0)" style="transition: transform .18s ease">
-            <!-- svelte-ignore a11y_click_events_have_key_events -->
             <!-- svelte-ignore a11y_no_static_element_interactions -->
-            <rect x={-bw / 2} y={by} width={bw} height={bh} rx="2" style="fill:{v < 0 ? CHART_COLORS[4] : CHART_COLORS[i % 5]}; transition: y .06s linear, height .06s linear" opacity={hoverI === i ? 1 : dim(i)} onpointerdown={() => { moved = 0; drag = { s: 0, i, ax: "y" }; }} onclick={() => clickShape(i)} style:cursor="ns-resize" />
-            {#if n <= 14}<text x="0" y={by - 4} text-anchor="middle" font-size="10" style="fill:var(--fg,#e6edf3)">{fmt(v)}{unit}</text>{/if}
+            <rect x={-bars.bw / 2} y={by} width={bars.bw} height={bh} rx="2" style="fill:{v < 0 ? CHART_COLORS[4] : CHART_COLORS[i % 5]}; cursor:ns-resize" opacity={hoverI === i ? 1 : dim(i)} onpointerdown={(e) => startDrag(e, 0, i, "y")} />
+            {#if n <= 14}<text x="0" y={Math.max(10, by - 4)} text-anchor="middle" font-size="10" style="fill:var(--fg,#e6edf3)">{fmt(v)}{unit}</text>{/if}
           </g>
-          <text x={x} y={plot.bottom + 16} text-anchor="middle" font-size="10" style="fill:var(--dim,#8b949e)">{(labels[i] ?? `#${i + 1}`).slice(0, 10)}</text>
+          <!-- svelte-ignore a11y_click_events_have_key_events -->
+          <!-- svelte-ignore a11y_no_static_element_interactions -->
+          <text x={x} y={PLOT.bottom + 16} text-anchor="middle" font-size="10" style="fill:var(--dim,#8b949e); cursor:pointer" onclick={cycleSort}>{(labels[i] ?? "").slice(0, 10)}</text>
         {/each}
 
       {:else}
-        <!-- line: pan surface, series, crosshair, brush strip -->
         <!-- svelte-ignore a11y_no_static_element_interactions -->
-        <rect x={plot.l} y={plot.top} width={plot.r - plot.l} height={plot.bottom - plot.top} fill="transparent" onpointerdown={(e) => { moved = 0; pan = { px: e.clientX, i0: scl.i0, i1: scl.i1 }; }} ondblclick={() => (zoom = null)} style="cursor:grab" />
+        <rect x={PLOT.l} y={PLOT.top} width={PLOT.r - PLOT.l} height={PLOT.bottom - PLOT.top} fill="transparent" style="cursor:grab" onpointerdown={(e) => begin(e, { kind: "pan", px: e.clientX, i0: scl.i0, w: scl.i1 - scl.i0, moved: 0 })} ondblclick={() => (zoom = null)} />
         {#each visible as s (s)}
-          {@const pts = seriesAll[s]!.values.map((_, i) => i).filter((i) => i >= scl.i0 - 0.5 && i <= scl.i1 + 0.5).map((i) => `${scl.xi(i).toFixed(1)},${scl.yi(vals(s)[i] ?? 0).toFixed(1)}`).join(" ")}
-          <polyline points={pts} fill="none" style="stroke:{CHART_COLORS[s % 5]}" stroke-width="2" />
+          {@const sv = vals(s)}
+          <polyline points={sv.map((v, i) => (i >= scl.i0 - 0.5 && i <= scl.i1 + 0.5 ? `${lineX(scl, i).toFixed(1)},${scaleY(scl, v).toFixed(1)}` : "")).filter(Boolean).join(" ")} fill="none" style="stroke:{CHART_COLORS[s % 5]}" stroke-width="2" />
           {#if n <= 60}
-            {#each seriesAll[s]!.values as _, i (i)}
+            {#each sv as v, i (i)}
               {#if i >= scl.i0 - 0.5 && i <= scl.i1 + 0.5}
                 <!-- svelte-ignore a11y_no_static_element_interactions -->
-                <circle cx={scl.xi(i)} cy={scl.yi(vals(s)[i] ?? 0)} r="4" style="fill:{CHART_COLORS[s % 5]}; transition: cy .06s linear" opacity={hoverI === i ? 1 : dim(i) < 1 ? 0.35 : 0.9} onpointerdown={(e) => { e.stopPropagation(); moved = 0; drag = { s, i, ax: "y" }; }} style:cursor="ns-resize" />
+                <circle cx={lineX(scl, i)} cy={scaleY(scl, v)} r="4" style="fill:{CHART_COLORS[s % 5]}; cursor:ns-resize" opacity={hoverI === i ? 1 : dim(i) < 1 ? 0.35 : 0.9} onpointerdown={(e) => startDrag(e, s, i, "y")} />
               {/if}
             {/each}
           {/if}
         {/each}
-        {#if hoverI >= 0 && hoverI >= scl.i0 - 0.5 && hoverI <= scl.i1 + 0.5 && !drag}
-          <line x1={scl.xi(hoverI)} y1={plot.top} x2={scl.xi(hoverI)} y2={plot.bottom} style="stroke:var(--dim,#8b949e)" stroke-dasharray="3 3" opacity="0.7" />
+        {#if hoverI >= 0 && !gesture}
+          <line x1={lineX(scl, hoverI)} y1={PLOT.top} x2={lineX(scl, hoverI)} y2={PLOT.bottom} style="stroke:var(--dim,#8b949e)" stroke-dasharray="3 3" opacity="0.7" />
         {/if}
         {#each [0, 1, 2, 3, 4] as t (t)}
           {@const i = Math.round(scl.i0 + ((scl.i1 - scl.i0) * t) / 4)}
           {#if i >= 0 && i < n}
-            <text x={scl.xi(i)} y={plot.bottom + 16} text-anchor="middle" font-size="10" style="fill:var(--dim,#8b949e)">{(labels[i] ?? `#${i + 1}`).slice(0, 10)}</text>
+            <text x={lineX(scl, i)} y={PLOT.bottom + 16} text-anchor="middle" font-size="10" style="fill:var(--dim,#8b949e)">{(labels[i] ?? "").slice(0, 10)}</text>
           {/if}
         {/each}
-        {#if link && ds}
+        {#if showBrush}
+          {@const sy = PLOT.bottom + 48}
           <!-- svelte-ignore a11y_no_static_element_interactions -->
-          <rect x={plot.l} y="238" width={plot.r - plot.l} height="12" rx="2" style="fill:var(--line,#2a2f37)" opacity="0.5" onpointerdown={(e) => { e.stopPropagation(); moved = 0; brush = { a: idxAt(toSvg(e).x) }; }} style:cursor="crosshair" />
-          <text x={plot.l + 4} y="247" font-size="8" style="fill:var(--dim,#8b949e)">drag to brush → highlight siblings</text>
+          <rect x={PLOT.l} y={sy} width={PLOT.r - PLOT.l} height="12" rx="2" style="fill:var(--line,#2a2f37); cursor:crosshair" opacity="0.5" onpointerdown={(e) => begin(e, { kind: "brush", a: lineIndexAtX(scl, toSvg(e).x, n), moved: 0 })} />
+          {#if link.sel && link.sel.ds === ds}
+            <rect x={lineX(scl, link.sel.lo)} y={sy} width={Math.max(2, lineX(scl, link.sel.hi) - lineX(scl, link.sel.lo))} height="12" rx="2" style="fill:var(--cyan,#39c5cf); pointer-events:none" opacity="0.6" />
+          {/if}
+          <text x={PLOT.l + 4} y={sy + 9} font-size="8" style="fill:var(--dim,#8b949e); pointer-events:none">drag to brush → highlights siblings sharing "{spec.dataset}"</text>
         {/if}
       {/if}
       {#if spec.y}<text x={W - 4} y="16" text-anchor="end" font-size="9" style="fill:var(--dim,#8b949e)">{spec.y}</text>{/if}
-      {#if spec.x}<text x={W - 4} y={viewH - 4} text-anchor="end" font-size="9" style="fill:var(--dim,#8b949e)">{spec.x}</text>{/if}
+      {#if spec.x}<text x={W - 4} y={PLOT.bottom + 30} text-anchor="end" font-size="9" style="fill:var(--dim,#8b949e)">{spec.x}</text>{/if}
     {/if}
   </svg>
 
-  {#if tip.on && hoverI >= 0 && !drag && spec.type !== "donut"}
-    <div class="chart-tip" style:left="{Math.min(tip.x, 380)}px" style:top="{Math.max(0, tip.y - 56)}px">
+  {#if tip.on && hoverI >= 0 && !gesture && type !== "donut"}
+    <div class="chart-tip" style:left="{tipPos.left}px" style:top="{tipPos.top}px">
       <div class="chart-tip-l">{labels[hoverI] ?? `#${hoverI + 1}`}</div>
       {#each visible.length ? visible : [0] as s (s)}
         <div><i style="background:{CHART_COLORS[s % 5]}"></i>{seriesAll[s]!.name || `s${s + 1}`} <b>{fmt(vals(s)[hoverI] ?? 0)}{unit}</b></div>
@@ -323,10 +317,10 @@
     </div>
   {/if}
 
-  {#if seriesAll.length > 1 && (spec.type === "line" || spec.type === "bar")}
+  {#if seriesAll.length > 1 && (type === "line" || type === "bar")}
     <div class="chart-chips">
       {#each seriesAll as sr, s (s)}
-        <button class="chart-chip" class:off={hidden.has(s)} onclick={() => { const hs = new Set(hidden); hs.has(s) ? hs.delete(s) : hs.add(s); hidden = hs; }}>
+        <button class="chart-chip" class:off={hidden.has(s)} onclick={() => toggleSeries(s)}>
           <i style="background:{CHART_COLORS[s % 5]}"></i>{sr.name || `s${s + 1}`}
         </button>
       {/each}
@@ -336,20 +330,15 @@
   <div class="chart-foot">
     <span class="chart-stats">n {stats.n} · min {fmt(stats.min)} · max {fmt(stats.max)} · μ {fmt(stats.mean)} · Σ {fmt(stats.sum)}{unit}</span>
     <span class="chart-btns">
-      {#if spec.type === "bar" || spec.type === "hbar"}<button class="chart-btn" onclick={() => (sortMode = (sortMode + 1) % 3)}>sort {["off", "desc", "asc"][sortMode]}</button>{/if}
+      {#if type === "bar" || type === "hbar"}<button class="chart-btn" onclick={cycleSort}>sort {["off", "desc", "asc"][sortMode]}</button>{/if}
       {#if edited}<button class="chart-btn" onclick={() => (edit = {})}>reset edits</button>{/if}
       {#if zoom}<button class="chart-btn" onclick={() => (zoom = null)}>reset zoom</button>{/if}
-      {#if link?.has(ds)}<button class="chart-btn" onclick={() => link?.clear(ds)}>clear sel</button>{/if}
+      {#if link.has(ds)}<button class="chart-btn" onclick={() => link.clear(ds)}>clear highlight</button>{/if}
+      {#if iso >= 0}<button class="chart-btn" onclick={() => (iso = -1)}>show all</button>{/if}
     </span>
     {#if edited}<span class="chart-badge">edited</span>{/if}
   </div>
-  <div class="chart-hint">
-    {spec.type === "line" ? "drag points to edit · drag bg to pan · wheel to zoom · dblclick resets"
-      : spec.type === "bar" ? "drag bars to edit · click a bar to sort"
-      : spec.type === "hbar" ? "drag fills to edit · click a row to sort"
-      : spec.type === "donut" ? "click a slice to isolate"
-      : "hover for values"}
-  </div>
+  <div class="chart-hint">{hint}</div>
 </div>
 
 <style>
@@ -365,7 +354,7 @@
   .chart-chip.off { opacity: 0.35; text-decoration: line-through; }
   .chart-foot { display: flex; align-items: center; gap: 8px; margin-top: 4px; flex-wrap: wrap; }
   .chart-stats { font-size: 10px; color: var(--dim); }
-  .chart-btns { display: inline-flex; gap: 4px; }
+  .chart-btns { display: inline-flex; gap: 4px; flex-wrap: wrap; }
   .chart-btn { background: none; border: 1px solid var(--line); color: var(--dim); font-size: 10px; padding: 0 6px; cursor: pointer; }
   .chart-btn:hover { color: var(--fg); border-color: var(--dim); }
   .chart-badge { font-size: 10px; color: var(--yellow, #d29922); border: 1px solid var(--yellow, #d29922); padding: 0 4px; }
