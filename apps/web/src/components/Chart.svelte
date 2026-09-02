@@ -196,7 +196,7 @@
   );
 </script>
 
-<div class="chart-wrap" style:cursor={cursor} bind:clientWidth={hostW}>
+<div class="chart-wrap" style:cursor={cursor} bind:clientWidth={hostW} title={hint}>
   {#if spec.title}<div class="chart-title">{spec.title}</div>{/if}
 
   <svg bind:this={svgEl} viewBox="0 0 {W} {viewH}" width="100%" style="display:block; touch-action:none" role="img" aria-label={spec.title ?? type}
@@ -244,7 +244,7 @@
     {:else}
       {#each [0, 1, 2, 3] as g (g)}
         {@const gy = PLOT.bottom - ((PLOT.bottom - PLOT.top) * g) / 3}
-        <line x1={PLOT.l} y1={gy} x2={PLOT.r} y2={gy} style="stroke:var(--line,#2a2f37)" />
+        <line x1={PLOT.l} y1={gy} x2={PLOT.r} y2={gy} style="stroke:var(--line,#2a2f37)" opacity="0.55" />
         <text x={PLOT.r + 4} y={gy + 3} font-size="10" style="fill:var(--dim,#8b949e)">{fmt(scl.lo + ((scl.hi - scl.lo) * g) / 3)}{unit}</text>
       {/each}
       {#if scl.lo < 0 && scl.hi > 0}
@@ -262,7 +262,6 @@
           <g transform="translate({x},0)" style="transition: transform .18s ease">
             <!-- svelte-ignore a11y_no_static_element_interactions -->
             <rect x={-bars.bw / 2} y={by} width={bars.bw} height={bh} rx="2" style="fill:{v < 0 ? CHART_COLORS[4] : CHART_COLORS[i % 5]}; cursor:ns-resize" opacity={hoverI === i ? 1 : dim(i)} onpointerdown={(e) => startDrag(e, 0, i, "y")} />
-            {#if n <= 14}<text x="0" y={Math.max(10, by - 4)} text-anchor="middle" font-size="10" style="fill:var(--fg,#e6edf3)">{fmt(v)}{unit}</text>{/if}
           </g>
           <!-- svelte-ignore a11y_click_events_have_key_events -->
           <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -300,7 +299,7 @@
           {#if link.sel && link.sel.ds === ds}
             <rect x={lineX(scl, link.sel.lo)} y={sy} width={Math.max(2, lineX(scl, link.sel.hi) - lineX(scl, link.sel.lo))} height="12" rx="2" style="fill:var(--cyan,#39c5cf); pointer-events:none" opacity="0.6" />
           {/if}
-          <text x={PLOT.l + 4} y={sy + 9} font-size="8" style="fill:var(--dim,#8b949e); pointer-events:none">drag to brush → highlights siblings sharing "{spec.dataset}"</text>
+          <text x={PLOT.l + 4} y={sy + 9} font-size="8" class="brush-hint" style="fill:var(--dim,#8b949e); pointer-events:none">drag to brush → highlights siblings sharing "{spec.dataset}"</text>
         {/if}
       {/if}
       {#if spec.y}<text x={W - 4} y="16" text-anchor="end" font-size="9" style="fill:var(--dim,#8b949e)">{spec.y}</text>{/if}
@@ -327,7 +326,7 @@
     </div>
   {/if}
 
-  <div class="chart-foot">
+  <div class="chart-foot" class:dirty={edited || zoom !== null || sortMode !== 0 || link.has(ds) || iso >= 0}>
     <span class="chart-stats">n {stats.n} · min {fmt(stats.min)} · max {fmt(stats.max)} · μ {fmt(stats.mean)} · Σ {fmt(stats.sum)}{unit}</span>
     <span class="chart-btns">
       {#if type === "bar" || type === "hbar"}<button class="chart-btn" onclick={cycleSort}>sort {["off", "desc", "asc"][sortMode]}</button>{/if}
@@ -338,25 +337,29 @@
     </span>
     {#if edited}<span class="chart-badge">edited</span>{/if}
   </div>
-  <div class="chart-hint">{hint}</div>
 </div>
 
 <style>
-  .chart-wrap { position: relative; border: 1px solid var(--line); background: var(--bg1); padding: 8px 12px 6px; }
-  .chart-title { font-size: 12px; font-weight: bold; color: var(--fg); margin-bottom: 4px; text-align: center; }
+  .chart-wrap { position: relative; padding: 2px 0 0; }
+  .chart-title { font-size: 11px; color: var(--dim); margin-bottom: 2px; }
   .chart-tip { position: absolute; pointer-events: none; background: var(--bg3, #161b22); border: 1px solid var(--line); padding: 4px 8px; font-size: 11px; color: var(--fg); z-index: 5; min-width: 110px; }
   .chart-tip-l { color: var(--dim); margin-bottom: 2px; }
   .chart-tip i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 5px; }
   .chart-tip b { float: right; margin-left: 10px; }
-  .chart-chips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
-  .chart-chip { background: none; border: 1px solid var(--line); color: var(--fg); font-size: 10px; padding: 1px 6px; cursor: pointer; display: inline-flex; align-items: center; gap: 4px; }
+  .chart-chips { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 2px; }
+  .chart-chip { background: none; border: none; color: var(--dim); font-size: 10px; padding: 0 2px; cursor: pointer; display: inline-flex; align-items: center; gap: 4px; }
+  .chart-chip:hover { color: var(--fg); }
   .chart-chip i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; }
-  .chart-chip.off { opacity: 0.35; text-decoration: line-through; }
-  .chart-foot { display: flex; align-items: center; gap: 8px; margin-top: 4px; flex-wrap: wrap; }
+  .chart-chip.off { opacity: 0.4; }
+  /* Controls stay out of the transcript's way until the chart is touched or
+     carries state (edits/zoom/sort/selection); dirty keeps them visible. */
+  .chart-foot { display: flex; align-items: baseline; gap: 8px; margin-top: 2px; flex-wrap: wrap; visibility: hidden; opacity: 0; transition: opacity .12s ease; }
+  .chart-wrap:hover .chart-foot, .chart-foot:focus-within, .chart-foot.dirty { visibility: visible; opacity: 1; }
   .chart-stats { font-size: 10px; color: var(--dim); }
-  .chart-btns { display: inline-flex; gap: 4px; flex-wrap: wrap; }
-  .chart-btn { background: none; border: 1px solid var(--line); color: var(--dim); font-size: 10px; padding: 0 6px; cursor: pointer; }
-  .chart-btn:hover { color: var(--fg); border-color: var(--dim); }
-  .chart-badge { font-size: 10px; color: var(--yellow, #d29922); border: 1px solid var(--yellow, #d29922); padding: 0 4px; }
-  .chart-hint { font-size: 9px; color: var(--dim); opacity: 0.7; margin-top: 2px; }
+  .chart-btns { display: inline-flex; gap: 8px; flex-wrap: wrap; }
+  .chart-btn { background: none; border: none; color: var(--dim); font-size: 10px; padding: 0; cursor: pointer; }
+  .chart-btn:hover { color: var(--fg); text-decoration: underline; }
+  .chart-badge { font-size: 10px; color: var(--yellow, #d29922); }
+  .brush-hint { opacity: 0; transition: opacity .12s ease; }
+  .chart-wrap:hover .brush-hint { opacity: 0.8; }
 </style>

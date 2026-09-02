@@ -235,7 +235,7 @@
     line-height: 1.3;
   }
   .md-chartbox {
-    max-width: 640px;
+    max-width: 720px;
   }
   .md-img {
     display: inline-flex;
