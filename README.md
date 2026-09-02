@@ -35,7 +35,8 @@ session via a dedicated dext seat.
 Host flags: `--port` (8788) · `--token` (random, printed) · `--dext` (auto-detects
 `~/Dext/target/release/dext`, falls back to PATH) · `--cwd` (session working dir —
 must be owner-safe, not under /tmp) · `--approval` (`auto-read|auto-write|never|always`,
-default `auto-read`) · `--static` (built PWA dir).
+default `auto-read`) · `--static` (built PWA dir) · `--state-dir` (on-disk journals +
+session index; default `~/.dextui/agentlinkd`).
 
 In-session host commands: `/help`, `/approval <profile>` (applies from the next turn).
 
@@ -82,8 +83,9 @@ DextUI is designed to be drivable by other agents, not just humans:
   disables send while a turn runs (capability-gated).
 - **No interactive approvals** — tool policy is dext's own `--approval` profile;
   change per session with `/approval <profile>`.
-- **Journals are in-memory** — a host restart clears the session list; the dext
-  seats (and their history) persist on disk and hold the durable state.
+- **Journals persist under `--state-dir`** — a host restart restores the session
+  list cold from disk; dext seats hold the history, and a session wakes on
+  `session.open` or the next prompt.
 
 See [UPSTREAM.md](./UPSTREAM.md) for the planned `dext serve` native bridge
 (NdjsonSink, PermissionRequested round-trip, steering channel).
