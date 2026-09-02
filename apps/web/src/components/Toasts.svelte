@@ -4,7 +4,7 @@
   const icon: Record<string, string> = { info: "·", ok: "✓", warn: "⚠", err: "✗" };
 </script>
 
-<div class="toasts" data-agent-id="toast.stack" data-state={app.toasts.length > 0 ? "active" : "empty"}>
+<div class="toasts" data-agent-id="toast.stack" data-state={app.toasts.length > 0 ? "active" : "empty"} aria-live="polite">
   {#each app.toasts as t (t.id)}
     <button
       class={`toast t-${t.kind}`}

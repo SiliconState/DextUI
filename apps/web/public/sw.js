@@ -1,5 +1,8 @@
 // DextUI PWA service worker: network-first with offline cache fallback.
-const CACHE = "dextui-v1";
+// The cache name is build-specific: the app registers `/sw.js?v=<build-id>`
+// and this worker derives `dextui-<id>` from its own URL, deleting every
+// other `dextui-*` cache on activate so an update never serves an old shell.
+const CACHE = `dextui-${new URL(self.location.href).searchParams.get("v") ?? "dev"}`;
 
 self.addEventListener("install", () => {
   self.skipWaiting();
@@ -8,6 +11,10 @@ self.addEventListener("install", () => {
 self.addEventListener("activate", (event) => {
   event.waitUntil(
     (async () => {
+      const names = await caches.keys();
+      await Promise.all(
+        names.filter((n) => n.startsWith("dextui-") && n !== CACHE).map((n) => caches.delete(n)),
+      );
       await self.clients.claim();
     })(),
   );

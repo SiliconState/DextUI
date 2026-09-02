@@ -107,10 +107,11 @@ a {
 .shell {
   display: grid;
   grid-template-columns: var(--rail-size) minmax(0, 1fr);
-  grid-template-rows: minmax(0, 1fr) auto auto;
+  grid-template-rows: minmax(0, 1fr) auto auto auto;
   grid-template-areas:
     "index main"
     "composer composer"
+    "todos todos"
     "status status";
   width: 100%;
   height: 100%;
@@ -151,6 +152,11 @@ a {
   background: var(--bg1);
 }
 
+.shell > .todos-row {
+  grid-area: todos;
+  min-width: 0;
+}
+
 /* Fluid edge gutters; content stays left-anchored and uses the available width. */
 .content-axis {
   width: 100%;
@@ -180,6 +186,7 @@ a {
     grid-template-areas:
       "main"
       "composer"
+      "todos"
       "status";
   }
   .shell.rail-collapsed {
@@ -237,6 +244,20 @@ a {
   color: var(--faint);
   cursor: default;
   text-decoration: none;
+}
+
+/* The queue badge surfaces the cross-session approval count wherever the rail
+   cannot show it: mobile off-canvas drawer or a collapsed desktop rail. */
+.queue-badge {
+  display: none;
+}
+.shell.rail-collapsed .queue-badge {
+  display: inline;
+}
+@media (max-width: 900px) {
+  .queue-badge {
+    display: inline;
+  }
 }
 
 /* ---------- misc ---------- */

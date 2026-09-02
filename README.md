@@ -72,6 +72,7 @@ DextUI is designed to be drivable by other agents, not just humans:
 
 - Every actionable element carries a stable `data-agent-id` (e.g. `composer.send`,
   `approval.<request_id>.once`, `session.<id>.open`)
+- New controls follow the same scheme: `queue.<session>.<request_id>.once`, `queue.badge`, `todos.toggle`, `notify.toggle`, `shortcuts.close`, `composer.histmark`
 - Regions expose `data-state` (`awaiting_approval`, `working`, `idle`, `ready`, `disabled`)
 - `GET /__agent` returns a bounded scene digest (auth required)
 - `window.__agentlink` counts received envelopes by event type — transport debugging

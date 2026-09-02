@@ -3,7 +3,7 @@
   //   ● ~/cwd | session │ model │ approval:ask │ Ctx [██████░░░░] 42% │ ↑12k ↓3k $0.04
   import type { SessionStore } from "@dextui/client";
   import type { ThinkingEffort } from "@dextui/protocol";
-  import { app, toggleTheme, rePair, toggleSidebar } from "../lib/state.svelte";
+  import { app, toggleTheme, rePair, toggleSidebar, queueTotal, jumpToOldestPending, toggleNotify } from "../lib/state.svelte";
   import { fmtTokens, fmtElapsed } from "../lib/markdown";
   import { useSession } from "../lib/useSession.svelte";
 
@@ -11,6 +11,7 @@
 
   const sess = useSession(() => store);
   const view = $derived(sess.view ?? store.state);
+  const pendingTotal = $derived(queueTotal());
 
   let now = $state(Date.now());
   $effect(() => {
@@ -164,7 +165,25 @@
     <span class="st-yellow" data-agent-id="status.clock">{fmtElapsed(now - view.turnStartedAt)}</span>
   {/if}
   <span class="sl-right">
+    {#if pendingTotal > 0}
+      <button
+        class="act warn queue-badge"
+        data-agent-id="queue.badge"
+        data-state="active"
+        aria-label={`jump to oldest pending approval (${pendingTotal} total)`}
+        onclick={jumpToOldestPending}
+      >⚠ {pendingTotal}</button
+      >
+    {/if}
     <button class="act" data-agent-id="finder.open" onclick={() => (app.paletteOpen = true)} title="finder (⌘K)">⌘k</button>
+    <button
+      class="act"
+      data-agent-id="notify.toggle"
+      data-state={app.notify}
+      onclick={toggleNotify}
+      title="notify while the tab is hidden"
+    >notify:{app.notify}</button
+    >
     <button class="act" data-agent-id="theme.toggle" onclick={toggleTheme} title="cycle theme: dark → light → system">
       theme:{app.theme}
     </button>

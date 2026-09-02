@@ -11,8 +11,12 @@ const app = mount(App, {
 
 export default app;
 
+// Injected by vite `define` (see vite.config.ts); versions the SW registration
+// so each build owns a fresh cache name.
+declare const __BUILD_ID__: string;
+
 if (import.meta.env.PROD && "serviceWorker" in navigator) {
-  navigator.serviceWorker.register("/sw.js").catch(() => {
+  navigator.serviceWorker.register(`/sw.js?v=${__BUILD_ID__}`).catch(() => {
     /* PWA is progressive; ignore */
   });
 }
