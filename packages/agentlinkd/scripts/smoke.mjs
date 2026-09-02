@@ -323,6 +323,31 @@ try {
   ok("non-image MIME rejected", mimeRes.status === 404);
   const travRes = await fetch(`${base}/sessions/${sid}/file?p=${encodeURIComponent("../../../etc/passwd")}`, { headers: H });
   ok("path traversal rejected", travRes.status === 404);
+
+  // HTML artifact tier: path-shaped URLs (so nested relative images resolve),
+  // ?t= token auth for subresource loads that cannot send headers, and the
+  // sandboxing CSP. Encoded traversal via the path shape is rejected too.
+  fs.writeFileSync(
+    path.join(fileDir, "dash.html"),
+    `<!doctype html><title>dash</title><img src="chart-check.png"><p>ok</p>`,
+  );
+  const T = `?t=${encodeURIComponent(token)}`;
+  const dashRes = await fetch(`${base}/sessions/${sid}/file/${path.basename(fileDir)}/dash.html${T}`);
+  ok(
+    "html artifact served via path URL with ?t auth",
+    dashRes.status === 200 &&
+      (dashRes.headers.get("content-type") ?? "").startsWith("text/html") &&
+      (dashRes.headers.get("content-security-policy") ?? "").includes("sandbox allow-scripts"),
+  );
+  const nestedRes = await fetch(`${base}/sessions/${sid}/file/${path.basename(fileDir)}/chart-check.png${T}`);
+  ok(
+    "nested image resolves via path URL (relative to the artifact)",
+    nestedRes.status === 200 && nestedRes.headers.get("content-type") === "image/png",
+  );
+  const noAuthRes = await fetch(`${base}/sessions/${sid}/file/${path.basename(fileDir)}/chart-check.png`);
+  ok("file request with no token -> 401 and no lockout strike", noAuthRes.status === 401);
+  const encTravRes = await fetch(`${base}/sessions/${sid}/file/%2e%2e%2f%2e%2e%2fetc%2fpasswd${T}`);
+  ok("encoded traversal via path URL rejected", encTravRes.status === 404);
   fs.rmSync(fileDir, { recursive: true, force: true });
   fs.rmSync(outside, { force: true });
 

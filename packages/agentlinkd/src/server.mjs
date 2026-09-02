@@ -1068,16 +1068,24 @@ const MIME = {
   ".map": "application/json",
 };
 
-function checkAuth(req, res) {
+function checkAuth(req, res, allowQuery = false) {
   if (authLocked()) {
     res.writeHead(429, { "content-type": "application/json" });
     res.end(JSON.stringify({ error: "rate_limited" }));
     return false;
   }
   const header = req.headers.authorization ?? "";
-  const presented = header.startsWith("Bearer ") ? header.slice(7) : header;
+  let presented = header.startsWith("Bearer ") ? header.slice(7) : header;
+  if (!presented && allowQuery) {
+    // Subresource loads (<img>, <iframe>) cannot send Authorization headers;
+    // the file endpoint also accepts ?t=<token>. Loopback single-operator
+    // tradeoff, documented in PROTOCOL.md.
+    presented = new URL(req.url, "http://localhost").searchParams.get("t") ?? "";
+  }
   if (!tokenEquals(presented)) {
-    noteAuthFailure();
+    // Only a WRONG token counts toward the lockout — missing auth on a stray
+    // <img> from a stale page must never lock the operator out.
+    if (presented) noteAuthFailure();
     res.writeHead(401, { "content-type": "application/json" });
     res.end(JSON.stringify({ error: "unauthorized" }));
     return false;
@@ -1256,6 +1264,8 @@ const FILE_MIME = {
   ".gif": "image/gif",
   ".webp": "image/webp",
   ".svg": "image/svg+xml",
+  ".html": "text/html; charset=utf-8",
+  ".htm": "text/html; charset=utf-8",
 };
 
 // Resolve a session-relative path to a servable image. Confined to the
@@ -1279,6 +1289,37 @@ function sessionFile(s, rel) {
   }
 }
 
+// Response headers per artifact type. HTML dashboards run inline scripts and
+// styles (self-contained model output) in a sandboxed opaque origin: they can
+// never touch the app's storage/cookies, network is limited to images.
+function fileHeaders(mime) {
+  const html = mime.startsWith("text/html");
+  return {
+    "content-type": mime,
+    "cache-control": "private, no-store",
+    "x-content-type-options": "nosniff",
+    "content-security-policy": html
+      ? "default-src 'none'; style-src 'unsafe-inline'; img-src * data: blob:; script-src 'unsafe-inline'; font-src data:; sandbox allow-scripts"
+      : "default-src 'none'; style-src 'unsafe-inline'; sandbox",
+  };
+}
+
+// Shared tail for both URL shapes of the file endpoint.
+function serveSessionFile(s, rel, req, res) {
+  const hit = sessionFile(s, rel);
+  if (!hit) {
+    res.writeHead(404, { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: "no_file" }));
+    return;
+  }
+  res.writeHead(200, fileHeaders(hit.mime));
+  // A file vanishing between stat and read must not crash the host:
+  // pipe() does not forward stream errors, so handle them here.
+  const stream = fs.createReadStream(hit.real);
+  stream.on("error", () => res.destroy());
+  stream.pipe(res);
+}
+
 const server = http.createServer((req, res) => {
   const pathName = new URL(req.url, "http://localhost").pathname;
   if (pathName === "/health") {
@@ -1287,7 +1328,10 @@ const server = http.createServer((req, res) => {
     return;
   }
   if (pathName === "/sessions" || pathName === "/__agent" || pathName.startsWith("/sessions/")) {
-    if (!checkAuth(req, res)) return;
+    // The file endpoint also accepts ?t=<token> (subresource loads cannot send
+    // Authorization headers); every other surface is header-only.
+    const pre = pathName.split("/").filter(Boolean);
+    if (!checkAuth(req, res, pre[0] === "sessions" && pre[2] === "file")) return;
     if (pathName === "/sessions") {
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({ sessions: [...sessions.values()].map(metaOf) }));
@@ -1315,27 +1359,24 @@ const server = http.createServer((req, res) => {
       res.end(JSON.stringify(todosFor(s)));
       return;
     }
-    if (parts.length === 3 && parts[2] === "file") {
-      const hit = sessionFile(s, new URL(req.url, "http://localhost").searchParams.get("p") ?? "");
-      if (!hit) {
-        res.writeHead(404, { "content-type": "application/json" });
-        res.end(JSON.stringify({ error: "no_file" }));
-        return;
+    if (parts.length >= 3 && parts[2] === "file") {
+      // Path shape: /sessions/:id/file/<rel..> — required for HTML artifacts,
+      // whose nested relative images must resolve against the document URL.
+      // Query shape: /sessions/:id/file?p=<rel> — used by markdown images.
+      // Auth (header or ?t=) was already checked at the outer gate.
+      let rel;
+      if (parts.length > 3) {
+        try {
+          rel = parts.slice(3).map(decodeURIComponent).join("/");
+        } catch {
+          res.writeHead(404, { "content-type": "application/json" });
+          res.end(JSON.stringify({ error: "no_file" }));
+          return;
+        }
+      } else {
+        rel = new URL(req.url, "http://localhost").searchParams.get("p") ?? "";
       }
-      // no-store: the workspace file can change between turns. SVG gets a
-      // sandboxing CSP because browsers execute scripts when SVG is navigated
-      // directly; inline <img> use is unaffected.
-      res.writeHead(200, {
-        "content-type": hit.mime,
-        "cache-control": "private, no-store",
-        "x-content-type-options": "nosniff",
-        "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; sandbox",
-      });
-      // A file vanishing between stat and read must not crash the host:
-      // pipe() does not forward stream errors, so handle them here.
-      const stream = fs.createReadStream(hit.real);
-      stream.on("error", () => res.destroy());
-      stream.pipe(res);
+      serveSessionFile(s, rel, req, res);
       return;
     }
     res.writeHead(404, { "content-type": "application/json" });

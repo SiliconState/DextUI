@@ -9,6 +9,45 @@
 
   const blocks = $derived(parseMarkdown(src));
   const canFiles = $derived(app.caps.includes("files_read"));
+  // Subresource loads (<img>/<iframe>) send no Authorization header; the file
+  // endpoint accepts ?t=<token> instead. Read once — the page already holds
+  // this value in localStorage.
+  const fileToken = typeof localStorage !== "undefined" ? (localStorage.getItem("dextui.token") ?? "") : "";
+  // href → true once the browser reports a failed image load: an actionable
+  // chip instead of silent alt-text soup when a file 404s.
+  let broken = $state<Record<string, boolean>>({});
+
+  // Models emit file paths in several shapes — relative ("qc_charts/x.png"),
+  // absolute file URIs ("file:///home/demo/dextui-workspace/qc_charts/x.png"),
+  // and WSL UNC URIs ("file://wsl.localhost/Ubuntu/home/demo/..."). Only paths
+  // under the session cwd are servable; relativize everything to that.
+  function normalizeHref(href: string): string {
+    let p = href;
+    if (p.startsWith("file://")) {
+      p = p.slice(7);
+      const wsl = /^wsl\.localhost\/[^/]+(\/.*)$/.exec(p);
+      if (wsl && wsl[1]) p = wsl[1];
+    }
+    try {
+      p = decodeURIComponent(p);
+    } catch {
+      /* keep raw */
+    }
+    const cwd = app.sessions.find((s) => s.id === sessionId)?.cwd ?? "";
+    if (cwd && p.startsWith(`${cwd}/`)) p = p.slice(cwd.length + 1);
+    return p.replace(/^\//, "");
+  }
+
+  // Path-shaped URL so an HTML artifact's nested relative images resolve.
+  function fileUrl(href: string): string {
+    const path = normalizeHref(href)
+      .split("/")
+      .map(encodeURIComponent)
+      .join("/");
+    return `/sessions/${encodeURIComponent(sessionId)}/file/${path}?t=${encodeURIComponent(fileToken)}`;
+  }
+
+  const isHtmlArtifact = (href: string): boolean => /\.html?$/i.test(href);
 </script>
 
 {#snippet inline(parts: Inline[])}
@@ -17,17 +56,25 @@
       {#if /^https?:\/\//.test(tk.href)}
         <!-- model-chosen remote URLs stay links: never fetch them silently -->
         <a href={tk.href} target="_blank" rel="noopener noreferrer">{tk.s || tk.href}</a>
-      {:else if sessionId && canFiles}
+      {:else if !sessionId || !canFiles}
+        <code class="ic">{tk.href}</code>
+      {:else if isHtmlArtifact(tk.href)}
+        <!-- HTML artifact: self-contained dashboard in a sandboxed opaque-origin frame -->
+        <span class="md-artifact" data-agent-id="markdown.artifact">
+          <span class="md-artifact-head">
+            <span class="st-cyan">▤ artifact</span>
+            <span class="dim md-artifact-name">{tk.s || tk.href}</span>
+            <a class="act" href={fileUrl(tk.href)} target="_blank" rel="noopener noreferrer">open ↗</a>
+          </span>
+          <iframe sandbox="allow-scripts" loading="lazy" title={tk.s || tk.href} src={fileUrl(tk.href)}></iframe>
+        </span>
+      {:else if broken[tk.href]}
+        <span class="md-imgmiss" data-agent-id="markdown.image.missing">✗ image not found under the session workspace: {tk.href}</span>
+      {:else}
         <span class="md-img" data-agent-id="markdown.image">
-          <img
-            src={`/sessions/${encodeURIComponent(sessionId)}/file?p=${encodeURIComponent(tk.href)}`}
-            alt={tk.s}
-            loading="lazy"
-          />
+          <img src={fileUrl(tk.href)} alt={tk.s} loading="lazy" onerror={() => (broken[tk.href] = true)} />
           {#if tk.s}<span class="faint md-imgcap">{tk.s}</span>{/if}
         </span>
-      {:else}
-        <code class="ic">{tk.href}</code>
       {/if}
     {:else}{tk.s}{/if}
   {/each}
@@ -197,6 +244,47 @@
   }
   .md-imgcap {
     font-size: 10px;
+  }
+  .md-artifact {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    max-width: 100%;
+    border: 1px solid var(--line);
+    background: var(--bg1);
+  }
+  .md-artifact-head {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    border-bottom: 1px solid var(--line);
+    padding: 3px 8px;
+  }
+  .md-artifact-head .act {
+    margin-left: auto;
+  }
+  .md-artifact-name {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 11.5px;
+  }
+  .md-artifact iframe {
+    display: block;
+    width: 100%;
+    height: 560px;
+    border: 0;
+    background: #0b0d10;
+  }
+  .md-imgmiss {
+    display: inline-block;
+    max-width: 100%;
+    overflow-wrap: anywhere;
+    border: 1px solid color-mix(in srgb, var(--red, #f85149) 45%, var(--line));
+    color: var(--red, #f85149);
+    padding: 2px 8px;
+    font-size: 11.5px;
   }
   .md-list {
     padding-left: 2ch;
