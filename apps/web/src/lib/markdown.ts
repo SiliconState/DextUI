@@ -3,11 +3,12 @@
 // injection surface. Web-native structure (true tables, lists, headings,
 // links) instead of terminal box-drawing that shreds when lines wrap.
 // Two web-only extensions a terminal cannot afford:
-//   ```chart fences  → real SVG charts (packages/client charts.ts)
+//   ```chart fences  → interactive charts (spec validated in packages/client,
+//     rendered by apps/web Chart.svelte)
 //   ![alt](path)     → images a turn wrote to the session cwd, served by the
 //                      host's authenticated /sessions/:id/file endpoint
 
-import { parseChartSpec, renderChartSVG } from "@dextui/client";
+import { parseChartSpec, type ChartSpec } from "@dextui/client";
 
 export type Inline =
   | { t: "text"; s: string }
@@ -26,7 +27,7 @@ export type MdBlock =
   | { kind: "heading"; level: number; inline: Inline[] }
   | { kind: "para"; inline: Inline[] }
   | { kind: "code"; text: string; lang: string }
-  | { kind: "chart"; svg: string }
+  | { kind: "chart"; spec: ChartSpec }
   | { kind: "list"; ordered: boolean; items: ListItem[] }
   | { kind: "table"; align: ("l" | "c" | "r")[]; head: Inline[][]; rows: Inline[][][] }
   | { kind: "quote"; inline: Inline[] }
@@ -108,7 +109,7 @@ export function parseMarkdown(src: string): MdBlock[] {
       if (lang === "chart") {
         const spec = parseChartSpec(buf.join("\n"));
         if (spec) {
-          out.push({ kind: "chart", svg: renderChartSVG(spec) });
+          out.push({ kind: "chart", spec });
           continue;
         }
       }

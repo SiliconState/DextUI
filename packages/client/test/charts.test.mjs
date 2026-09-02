@@ -91,3 +91,49 @@ test("max override rescales bars without touching labels", () => {
   assert.ok(scaled !== unscaled);
   assert.ok(scaled.includes("5") && !scaled.includes("NaN"));
 });
+
+test("parse: series — pure-series authoring works, series[0] mirrors values, extras validated", () => {
+  const s = parseChartSpec(
+    JSON.stringify({
+      type: "line",
+      dataset: "mkt",
+      x: "time",
+      y: "price",
+      labels: ["a", "b"],
+      series: [
+        { name: "px", values: [1, 2] },
+        { name: "vol", values: [3, 4] },
+      ],
+    }),
+  );
+  assert.ok(s, "series without top-level values is valid");
+  assert.deepStrictEqual(s.values, [1, 2], "values synthesized from series[0]");
+  assert.equal(s.series?.length, 2);
+  assert.deepStrictEqual(s.series?.[0]?.values, [1, 2], "series[0] mirrors values");
+  assert.equal(s.dataset, "mkt");
+  assert.equal(s.x, "time");
+  assert.equal(s.y, "price");
+  // mismatched series length → null
+  assert.equal(
+    parseChartSpec(JSON.stringify({ type: "line", values: [1, 2], series: [{ name: "a", values: [1] }] })),
+    null,
+  );
+  // non-numeric inside a series → null
+  assert.equal(
+    parseChartSpec(JSON.stringify({ type: "line", values: [1, 2], series: [{ name: "a", values: [1, "x"] }] })),
+    null,
+  );
+  // too many series → null
+  assert.equal(
+    parseChartSpec(JSON.stringify({ values: [1], series: Array.from({ length: 9 }, () => ({ name: "s", values: [1] })) })),
+    null,
+  );
+});
+
+test("parse: dense types (line/spark) accept up to 180 points, categorical stay at 31", () => {
+  const dense = Array.from({ length: 180 }, (_, i) => i);
+  assert.ok(parseChartSpec(JSON.stringify({ type: "line", values: dense })));
+  assert.equal(parseChartSpec(JSON.stringify({ type: "line", values: [...dense, 1] })), null);
+  assert.equal(parseChartSpec(JSON.stringify({ type: "bar", values: Array.from({ length: 32 }, () => 1) })), null);
+  assert.ok(parseChartSpec(JSON.stringify({ type: "spark", values: Array.from({ length: 32 }, () => 1) })));
+});

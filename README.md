@@ -57,7 +57,7 @@ answers `markdown table demo` with a rich-markdown turn.
 - **Multi-session** index with status glyphs and pending badges; desktop sidebar can be minimized/restored (`Ctrl/Cmd+B`) and persists, while narrow screens use an off-canvas drawer; `Ctrl+[` / `Ctrl+]` cycles sessions
 - **Global action queue**: every pending approval across all sessions in one rail (oldest first) with in-place `a`/`s`/`d`, a status-line badge, finder actions, and a document-title counter for background tabs
 - **Todo panel**: reads dext's own todo files per session through the host (`todos_read`-gated) — source badge, path, `○ ◐ ●` status glyphs; refreshes on activation and `turn_end`
-- **Real charts, images, and HTML artifacts**: a ` ```chart ` fence carrying a JSON spec (`bar`, `hbar`, `line`, `spark`, `donut`) renders as a theme-aware SVG; `![alt](path)` images a turn wrote under the session cwd render inline through the host's authenticated `files_read` endpoint; `![title](dashboard.html)` renders the page itself in a sandboxed frame (nested relative images resolve; `file://` and WSL `\\wsl.localhost\` style hrefs are normalized automatically). Remote URLs stay links — the app never fetches model-chosen hosts
+- **Interactive charts, images, and HTML artifacts**: a ` ```chart ` fence carrying a JSON spec (`bar`, `hbar`, `line`, `spark`, `donut`; multi-`series`, `x`/`y` axis captions, up to 180 points for lines / 31 for categorical) renders as a live chart — hover tooltips, drag points/bars for what-ifs with recomputed stats, click-sort, wheel-zoom + pan, legend toggles, donut isolate, and charts sharing a `dataset` id cross-highlight each other; all local, zero chart dependencies, no `{@html}` on dynamic strings. `![alt](path)` images a turn wrote under the session cwd render inline through the host's authenticated `files_read` endpoint; `![title](dashboard.html)` renders the page itself in a sandboxed frame (nested relative images resolve; `file://` and WSL `\\wsl.localhost\` style hrefs are normalized automatically). Remote URLs stay links — the app never fetches model-chosen hosts
 - **Steering without stopping**: input sent while a turn runs queues on the host and auto-runs as the next turn at the boundary — `steering_received` markers acknowledge immediately, `^c` keeps the queue for the next prompt
 - **Desktop notifications** (opt-in): approval requests, turn completion with usage/cost, failures — only while the tab is hidden, deduped across reconnect replays
 - **Keyboard-first approvals** (mock/upstream): `a` / `s` / `d`, note, diff preview — local dock or the global queue
@@ -101,11 +101,12 @@ See [UPSTREAM.md](./UPSTREAM.md) for the planned `dext serve` native bridge
 
 ```bash
 npm test                 # node:test — fold equivalence vs mock fold(), store
-                         # contract, connection lifecycle (48 checks)
+                         # contract, connection lifecycle, chart spec (60 checks)
 npm run smoke           # mock host end-to-end (31 checks)
-npm run smoke:agentlinkd # real-host surface with a fake dext (35 checks:
+npm run smoke:agentlinkd # real-host surface with a fake dext (50 checks:
                          # restart/restore, seq replay, cold wake + auto-wake,
-                         # todos, auth lockout + 429, digest 4 KiB cap)
+                         # todos, auth lockout + 429, digest 4 KiB cap,
+                         # html artifacts + file ?t auth)
 ```
 
 `npm run typecheck` and `npm run build` cover protocol → client → web.

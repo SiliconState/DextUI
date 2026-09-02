@@ -10,6 +10,11 @@
 
 export type ChartType = "bar" | "hbar" | "line" | "spark" | "donut";
 
+export interface ChartSeries {
+  name: string;
+  values: number[];
+}
+
 export interface ChartSpec {
   type: ChartType;
   title?: string;
@@ -18,10 +23,21 @@ export interface ChartSpec {
   unit?: string;
   /** Scale override (bar/hbar/line). Defaults to the data's own max. */
   max?: number;
+  /** Named series. When present, this list IS the data (entry 0 mirrors
+   *  `values`); every entry must match `values` length. */
+  series?: ChartSeries[];
+  /** Shared id: charts in one message with the same dataset cross-highlight. */
+  dataset?: string;
+  /** Axis captions. */
+  x?: string;
+  y?: string;
 }
 
+/** Dense series (line/spark) may carry more points than categorical types. */
+const MAX_POINTS_DENSE = 180;
 const MAX_POINTS = 31;
-const PALETTE = [
+const MAX_SERIES = 8;
+export const CHART_COLORS = [
   "var(--green,#3fb950)",
   "var(--cyan,#39c5cf)",
   "var(--yellow,#d29922)",
@@ -33,7 +49,7 @@ function esc(s: string): string {
   return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] ?? c);
 }
 
-function fmt(n: number): string {
+export function fmt(n: number): string {
   const abs = Math.abs(n);
   if (abs >= 1000) return n.toLocaleString("en-US");
   return String(Number(n.toFixed(2)));
@@ -50,9 +66,17 @@ export function parseChartSpec(json: string): ChartSpec | null {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
   const o = raw as Record<string, unknown>;
   const type = o.type === "hbar" || o.type === "line" || o.type === "spark" || o.type === "donut" ? o.type : "bar";
-  if (!Array.isArray(o.values) || o.values.length === 0 || o.values.length > MAX_POINTS) return null;
+  const dense = type === "line" || type === "spark";
+  const cap = dense ? MAX_POINTS_DENSE : MAX_POINTS;
+  // Capture once — TS narrowing of `o.series` doesn't survive the hasSeries const.
+  const rawSeries = o.series;
+  const hasSeries = Array.isArray(rawSeries) && rawSeries.length > 0;
+  const firstSeries = hasSeries ? (rawSeries[0] as { values?: unknown } | undefined) : undefined;
+  // Pure-series authoring: no top-level values → series[0] is the primary.
+  const rawPrimary = hasSeries && !Array.isArray(o.values) ? firstSeries?.values : o.values;
+  if (!Array.isArray(rawPrimary) || rawPrimary.length === 0 || rawPrimary.length > cap) return null;
   const values: number[] = [];
-  for (const v of o.values) {
+  for (const v of rawPrimary) {
     const n = typeof v === "number" ? v : Number(v);
     if (!Number.isFinite(n)) return null;
     values.push(n);
@@ -69,7 +93,40 @@ export function parseChartSpec(json: string): ChartSpec | null {
     if (!Number.isFinite(m) || m <= 0) return null;
     max = m;
   }
-  return { type, title, labels, values, unit, ...(max !== undefined ? { max } : {}) };
+  let series: ChartSeries[] | undefined;
+  if (hasSeries) {
+    if (rawSeries.length > MAX_SERIES) return null;
+    series = [];
+    for (const s of rawSeries) {
+      if (!s || typeof s !== "object" || Array.isArray(s)) return null;
+      const so = s as Record<string, unknown>;
+      if (!Array.isArray(so.values) || so.values.length !== values.length) return null;
+      const sv: number[] = [];
+      for (const v of so.values) {
+        const n = typeof v === "number" ? v : Number(v);
+        if (!Number.isFinite(n)) return null;
+        sv.push(n);
+      }
+      series.push({ name: typeof so.name === "string" ? so.name.slice(0, 32) : "", values: sv });
+    }
+    // The renderer trusts that series[0] mirrors `values`.
+    series[0] = { name: series[0]?.name ?? "", values: values.slice() };
+  }
+  const dataset = typeof o.dataset === "string" ? o.dataset.slice(0, 32) : undefined;
+  const ax = typeof o.x === "string" ? o.x.slice(0, 24) : undefined;
+  const ay = typeof o.y === "string" ? o.y.slice(0, 24) : undefined;
+  return {
+    type,
+    title,
+    labels,
+    values,
+    unit,
+    ...(max !== undefined ? { max } : {}),
+    ...(series ? { series } : {}),
+    ...(dataset !== undefined ? { dataset } : {}),
+    ...(ax !== undefined ? { x: ax } : {}),
+    ...(ay !== undefined ? { y: ay } : {}),
+  };
 }
 
 function scaleMax(spec: ChartSpec): number {
@@ -145,7 +202,7 @@ export function renderChartSVG(spec: ChartSpec): string {
       if (frac <= 0) continue;
       slices +=
         `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke-width="26"` +
-        ` style="stroke:${PALETTE[i % PALETTE.length]}"` +
+        ` style="stroke:${CHART_COLORS[i % CHART_COLORS.length]}"` +
         ` stroke-dasharray="${(frac * C).toFixed(2)} ${C.toFixed(2)}"` +
         ` stroke-dashoffset="${(-acc * C).toFixed(2)}"` +
         ` transform="rotate(-90 ${cx} ${cy})"/>`;
@@ -156,7 +213,7 @@ export function renderChartSVG(spec: ChartSpec): string {
       `<svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block" role="img" aria-label="${esc(spec.title ?? "donut chart")}">` +
       titleTag(spec, W) +
       slices +
-      legend(spec, PALETTE, legendX) +
+      legend(spec, CHART_COLORS, legendX) +
       `</svg>`
     );
   }
@@ -172,7 +229,7 @@ export function renderChartSVG(spec: ChartSpec): string {
       const v = spec.values[i] ?? 0;
       const y = 30 + i * 26;
       const w = Math.max(2, (Math.abs(v) / hi) * trackW);
-      const color = v < 0 ? PALETTE[4] : PALETTE[i % PALETTE.length];
+      const color = v < 0 ? CHART_COLORS[4] : CHART_COLORS[i % CHART_COLORS.length];
       rows += `<text x="${labelW}" y="${y + 12}" text-anchor="end" font-size="11" style="fill:var(--dim,#8b949e)">${esc((labels[i] ?? "").slice(0, 14))}</text>`;
       rows += `<rect x="${trackX}" y="${y}" width="${trackW}" height="14" rx="3" style="fill:var(--line,#2a2f37)" opacity="0.35"/>`;
       rows += `<rect x="${trackX}" y="${y}" width="${w.toFixed(1)}" height="14" rx="3" style="fill:${color}"/>`;
@@ -210,7 +267,7 @@ export function renderChartSVG(spec: ChartSpec): string {
       const bh = Math.max(2, Math.abs(y0 - y1));
       body +=
         `<rect x="${(px(i) - bw / 2).toFixed(1)}" y="${by.toFixed(1)}" width="${bw.toFixed(1)}" height="${bh.toFixed(1)}" rx="2"` +
-        ` style="fill:${v < 0 ? PALETTE[4] : PALETTE[i % PALETTE.length]}"><title>${esc(`${labels[i] ?? ""}: ${fmt(v)}${unit}`)}</title></rect>`;
+        ` style="fill:${v < 0 ? CHART_COLORS[4] : CHART_COLORS[i % CHART_COLORS.length]}"><title>${esc(`${labels[i] ?? ""}: ${fmt(v)}${unit}`)}</title></rect>`;
       body += `<text x="${px(i).toFixed(1)}" y="${(by - 4).toFixed(1)}" text-anchor="middle" font-size="10" style="fill:var(--fg,#e6edf3)">${esc(`${fmt(v)}${unit}`)}</text>`;
     }
   } else {
