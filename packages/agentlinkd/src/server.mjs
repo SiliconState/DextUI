@@ -1116,8 +1116,16 @@ function agentDigest() {
       actions: [
         ...list.flatMap((s) => {
           const acts = [];
+          // prompt.submit is valid whenever a turn can run — idle OR working
+          // (mid-turn it queues as steering and delivers at the boundary).
+          if (s.status === "live" || s.status === "cold") {
+            acts.push({
+              cmd: "prompt.submit",
+              session: s.id,
+              ...(s.working ? { note: "queues as steering; delivered next turn" } : {}),
+            });
+          }
           if (s.working) acts.push({ cmd: "interrupt", session: s.id });
-          else if (s.status === "live" || s.status === "cold") acts.push({ cmd: "prompt.submit", session: s.id });
           if (s.status === "cold") acts.push({ cmd: "session.open", session: s.id });
           else if (s.status === "live") acts.push({ cmd: "session.close", session: s.id });
           return acts;

@@ -199,6 +199,12 @@ try {
   a.send({ v: 1, cmd: "prompt.submit", session: sid, text: "queued while busy" });
   const ackS = await a.waitFor((e) => e.session === sid && e.event === "steering_received", 3000, "steering ack");
   ok("mid-turn steering accepted and journaled", Array.isArray(ackS.data.messages) && ackS.data.preview.includes("steer:"));
+  const busyDigest = JSON.parse(await (await fetch(`${base}/__agent`, { headers: { authorization: `Bearer ${token}` } })).text());
+  ok(
+    "digest marks prompt.submit valid while working (queues as steering)",
+    busyDigest.actions.some((x) => x.cmd === "prompt.submit" && x.session === sid && /steering/.test(x.note ?? "")) &&
+      busyDigest.actions.some((x) => x.cmd === "interrupt" && x.session === sid),
+  );
   const end2 = await a.waitFor((e) => e.session === sid && e.event === "turn_end" && e.seq > end1.seq, 5000, "turn 2 end");
   const resumed = a.events.find((e) => e.session === sid && e.event === "text_block_complete" && e.seq < end2.seq && String(e.data).includes("two"));
   ok("second turn accepted immediately", !!end2);
