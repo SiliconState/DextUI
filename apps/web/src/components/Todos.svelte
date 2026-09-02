@@ -5,12 +5,14 @@
   import type { SessionStore } from "@dextui/client";
   import type { TodosResponse } from "@dextui/protocol";
   import { app } from "../lib/state.svelte";
+  import { prettyPath } from "../lib/markdown";
   import { useSession } from "../lib/useSession.svelte";
 
   let { store }: { store: SessionStore } = $props();
 
   const sess = useSession(() => store);
   const view = $derived(sess.view ?? store.state);
+  const sessCwd = $derived(app.sessions.find((s) => s.id === view.id)?.cwd ?? "");
 
   let open = $state(localStorage.getItem("dextui.todosOpen") === "1");
   let data = $state(null as TodosResponse | null);
@@ -115,7 +117,10 @@
       {#if data}
         <span class="st-cyan">({done}/{data.items.length})</span>
         <span class="faint">· {data.source}</span>
-        {#if data.path}<span class="faint t-path" title={data.path}>{data.path}</span>{/if}
+        {#if data.path}
+          {@const shown = prettyPath(data.path, sessCwd)}
+          <span class="faint t-path" title={shown}>{shown}</span>
+        {/if}
       {:else if loading}
         <span class="faint">· …</span>
       {/if}

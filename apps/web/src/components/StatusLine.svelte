@@ -4,7 +4,7 @@
   import type { SessionStore } from "@dextui/client";
   import type { ThinkingEffort } from "@dextui/protocol";
   import { app, toggleTheme, rePair, toggleSidebar, queueTotal, jumpToOldestPending, toggleNotify } from "../lib/state.svelte";
-  import { fmtTokens, fmtElapsed } from "../lib/markdown";
+  import { fmtTokens, fmtElapsed, prettyPath } from "../lib/markdown";
   import { useSession } from "../lib/useSession.svelte";
 
   let { store, onToggleIndex }: { store: SessionStore; onToggleIndex?: () => void } = $props();
@@ -82,7 +82,7 @@
     <button class="act rail-restore" data-agent-id="sidebar.restore" onclick={toggleSidebar} title="Show sessions (Ctrl/Cmd+B)">[› sessions]</button>
   {/if}
   <span class={`dot ${dotClass}`} data-agent-id="status.phase" data-state={app.phase}>●</span>
-  <span class="st-green truncate">{view.cwd || "dextui"}</span>
+  <span class="st-green truncate">{view.cwd ? prettyPath(view.cwd, view.cwd) : "dextui"}</span>
   {#if view.title && view.title !== view.id}
     <span class="sep">|</span>
     <span class="dim truncate">{view.title}</span>

@@ -233,3 +233,30 @@ export function fmtElapsed(ms: number): string {
   const h = Math.floor(m / 60);
   return `${h}h ${String(m % 60).padStart(2, "0")}m`;
 }
+
+/**
+ * Display-only path prettifier — never mutates stored data (the digest, file
+ * endpoint, and inspector keep real paths). Exists so status surfaces and
+ * transcripts don't leak the operator's user name: cwd-relative → "workspace/…",
+ * /home/<user>/ or /Users/<user>/ → "~/", WSL UNC and file:// forms normalized
+ * first. Unknown paths pass through.
+ */
+export function prettyPath(p: string, cwd = ""): string {
+  if (!p) return p;
+  let out = p.replaceAll("\\", "/");
+  if (out.startsWith("file://")) out = out.slice(7);
+  out = out.replace(/^wsl\.localhost\/[^/]+/, "");
+  try {
+    out = decodeURIComponent(out);
+  } catch {
+    /* keep raw */
+  }
+  if (cwd && (out === cwd || out.startsWith(`${cwd}/`))) {
+    const rel = out.slice(cwd.length).replace(/^\//, "");
+    return rel ? `workspace/${rel}` : "workspace";
+  }
+  const home = /^\/(?:home|Users)\/[^/]+\/?(.*)$/.exec(out);
+  if (home && home[1] !== undefined) return home[1] ? `~/${home[1]}` : "~";
+  if (out === "/root" || out.startsWith("/root/")) return `~${out.slice(5)}`;
+  return out;
+}

@@ -60,3 +60,38 @@ New `src/bridge.rs`:
 `packages/mock-server/fixtures/*.raw.jsonl` (real `stream-json` recordings) pin the event shapes. The PR's tests: fixture round-trip, permission timeout → Deny, double-respond race (first wins), secret never appearing on stdout, interrupt mid-tool-round.
 
 Estimated size: ~500-700 LOC new module, ~50 LOC wiring, tests included.
+
+## Addendum — engine asks surfaced by real usage (2026-09-02)
+
+A live agent session (market dashboard with charts/images) fault-injected the
+whole stack. DextUI-side fixes shipped the same day (HTML artifact serving,
+href normalization, subresource auth — see PROTOCOL.md "Session files"). What
+remains is dext-side; each item is evidence-backed, not speculative:
+
+1. **Registry-as-tools.** Packs are prompt-declared today, so `/pack run` in
+   agent output is inert text and the agent burns turns probing (3 turns /
+   ~127s observed). Ask: compile the shelf registry into real tool schemas at
+   session boot; health-check each pack and drop dead ones from the prompt
+   (`on_missing: degrade`), never 127 in-session.
+2. **Boot-time capability probe.** No capability matrix exists in the
+   runtime status, so the planner discovers the environment by trial and
+   error. Ask: probe once at boot and inject the result (e.g.
+   `browser=none`, `matplotlib=absent`, `net=open`) into Context State so
+   routing around gaps happens on turn 1. Related verified environment facts
+   on this host: `python3` present, `pip3` absent, matplotlib not importable,
+   no chromium; `agent-browser` lives in `~/.local/bin` — supervisors that
+   spawn dext children must propagate that PATH (agentlinkd's unit now does).
+3. **`ui.push_artifact` (deliverable declaration).** Smallest loop for the
+   "render it here" ask: agent declares a written file, host registers and
+   serves it, next message embeds a URL the renderer trusts. DextUI's file
+   endpoint + href normalization already render relative, `file:///`, and
+   WSL-UNC forms — the tool's value is making the convention first-class so
+   models stop guessing path schemes.
+4. **Batched approvals + machine-readable policy.** `approval=always` is
+   all-or-nothing per call, and one denied write stalls a whole plan.
+   Ask: batched plan approval (one aggregated diff, one consent) and an
+   `allow/ask/deny` block parsed from DEXT.md as policy. The bridge's
+   `approval.set` covers profile switching; this covers scope.
+5. **Ledger auto-verification.** Checkpoints marked "verifiable" should
+   require an attached artifact + validation result to resolve, so close-out
+   is enforced rather than self-reported.

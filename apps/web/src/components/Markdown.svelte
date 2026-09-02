@@ -2,7 +2,7 @@
   // Renders parsed markdown as real DOM: true <table>, lists, headings, safe
   // links. Terminal soul stays in the chrome; content gets the web — charts
   // and session-cwd images included.
-  import { parseMarkdown, type Inline } from "../lib/markdown";
+  import { parseMarkdown, prettyPath, type Inline } from "../lib/markdown";
   import { app } from "../lib/state.svelte";
 
   let { src, sessionId = "" }: { src: string; sessionId?: string } = $props();
@@ -16,6 +16,8 @@
   // href → true once the browser reports a failed image load: an actionable
   // chip instead of silent alt-text soup when a file 404s.
   let broken = $state<Record<string, boolean>>({});
+
+  const sessCwd = $derived(app.sessions.find((s) => s.id === sessionId)?.cwd ?? "");
 
   // Models emit file paths in several shapes — relative ("qc_charts/x.png"),
   // absolute file URIs ("file:///home/demo/dextui-workspace/qc_charts/x.png"),
@@ -33,7 +35,7 @@
     } catch {
       /* keep raw */
     }
-    const cwd = app.sessions.find((s) => s.id === sessionId)?.cwd ?? "";
+    const cwd = sessCwd;
     if (cwd && p.startsWith(`${cwd}/`)) p = p.slice(cwd.length + 1);
     return p.replace(/^\//, "");
   }
@@ -63,13 +65,13 @@
         <span class="md-artifact" data-agent-id="markdown.artifact">
           <span class="md-artifact-head">
             <span class="st-cyan">▤ artifact</span>
-            <span class="dim md-artifact-name">{tk.s || tk.href}</span>
+            <span class="dim md-artifact-name">{tk.s || prettyPath(tk.href, sessCwd)}</span>
             <a class="act" href={fileUrl(tk.href)} target="_blank" rel="noopener noreferrer">open ↗</a>
           </span>
           <iframe sandbox="allow-scripts" loading="lazy" title={tk.s || tk.href} src={fileUrl(tk.href)}></iframe>
         </span>
       {:else if broken[tk.href]}
-        <span class="md-imgmiss" data-agent-id="markdown.image.missing">✗ image not found under the session workspace: {tk.href}</span>
+        <span class="md-imgmiss" data-agent-id="markdown.image.missing">✗ image not found under the session workspace: {prettyPath(tk.href, sessCwd)}</span>
       {:else}
         <span class="md-img" data-agent-id="markdown.image">
           <img src={fileUrl(tk.href)} alt={tk.s} loading="lazy" onerror={() => (broken[tk.href] = true)} />
