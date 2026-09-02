@@ -319,6 +319,30 @@ try {
     autoStarting.seq < autoLive.seq && autoLive.seq < wokenTurn.seq && String(a.hello.data.instance).length > 0,
   );
 
+  // ---------- digest cap: >4 KiB drops oldest sessions, reports sessions_omitted ----------
+
+  const beforeCount = r.hello.data.sessions.length;
+  for (let i = 0; i < 20; i++) r.send({ v: 1, cmd: "session.open" });
+  const grown = await r.waitFor(
+    (e) => e.event === "session.list" && e.data.sessions.length === beforeCount + 20,
+    4000,
+    "20 new sessions in list",
+  );
+  const newestId = grown.data.sessions[grown.data.sessions.length - 1].id;
+  const cappedRes = await fetch(`${base}/__agent`, { headers: H });
+  const cappedText = await cappedRes.text();
+  const capped = JSON.parse(cappedText);
+  ok(
+    "digest over 4 KiB drops oldest sessions and reports sessions_omitted",
+    Buffer.byteLength(cappedText) <= 4096 &&
+      typeof capped.sessions_omitted === "number" &&
+      capped.sessions_omitted >= 1 &&
+      capped.sessions.length === beforeCount + 20 - capped.sessions_omitted &&
+      !capped.sessions.some((x) => x.id === sid) &&
+      capped.sessions.some((x) => x.id === newestId),
+    `${Buffer.byteLength(cappedText)}B omitted=${capped.sessions_omitted}`,
+  );
+
   // ---------- auth: wrong token, then rate limiting (last: locks auth) ----------
 
   const wrong = await badHello("definitely-not-the-token");
