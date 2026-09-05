@@ -47,6 +47,7 @@ const CAPABILITIES = [
   "model_select",
   "effort_select",
   "todos_read",
+  "session_manage",
 ];
 
 // Host-driven composer completion (mirrors the slash.* caps above).
@@ -87,6 +88,7 @@ function makeSession({ title, fixture, approvalFlow, live }) {
     turnStartedAt: null,
     createdAt: Date.now(),
     seq: 0,
+    generation: 0,
     journal: [],
     pending: new Map(),
     approvalCounter: 0,
@@ -116,6 +118,7 @@ function metaOf(s) {
     id: s.id,
     title: s.title,
     cwd: s.cwd,
+    generation: s.generation,
     agent: { name: "dext-mock", version: "0.1.0" },
     model: s.model,
     provider: s.provider,
@@ -427,6 +430,28 @@ function sendError(client, code, message) {
   sendControl(client, "error", { code, message });
 }
 
+function manageSession(s, remove, by) {
+  clearTimeout(s.timer);
+  s.pending.clear();
+  s.plan = null;
+  s.working = false;
+  s.turnStartedAt = null;
+  s.pos = 0;
+  s.journal = [];
+  s.seq = 0;
+  s.turns = 0;
+  s.modelLocked = false;
+  s.generation++;
+  s.status = remove ? "exited" : "live";
+  if (remove) sessions.delete(s.id);
+  const event = remove ? "session.removed" : "session.cleared";
+  for (const c of clients) {
+    c.subs.delete(s.id);
+    if (c.phase === "live") sendControl(c, event, { id: s.id, generation: s.generation, by });
+  }
+  scheduleList();
+}
+
 function handleCommand(client, frame) {
   if (frame.v !== 1) {
     sendError(client, "bad_version", "unsupported protocol version");
@@ -480,7 +505,7 @@ function handleCommand(client, frame) {
           publish(journalData(s, "session.state", { status: "starting" }));
           setTimeout(() => {
             // The session may have been closed (back to cold) while starting.
-            if (s.status !== "starting") return;
+            if (s.status !== "starting" || !sessions.has(s.id)) return;
             s.status = "live";
             publish(journalData(s, "session.state", { status: "live" }));
           }, 250);
@@ -583,6 +608,29 @@ function handleCommand(client, frame) {
       flushPending(s);
       // Subscribers track status from events, not the list — tell them.
       publish(journalData(s, "session.state", { status: "cold" }));
+      return;
+    }
+
+    case "session.delete":
+    case "session.clear": {
+      const s = sessions.get(frame.id);
+      if (!s) {
+        sendError(client, "no_session", `unknown session ${frame.id}`);
+        return;
+      }
+      manageSession(s, frame.cmd === "session.delete", client.id);
+      return;
+    }
+
+    case "session.delete_all": {
+      if (!["all", "cold", "exited"].includes(frame.scope)) {
+        sendError(client, "bad_request", "session.delete_all requires scope: all | cold | exited");
+        return;
+      }
+      const targets = [...sessions.values()].filter((s) => frame.scope === "all" ||
+        s.status === frame.scope || (frame.scope === "cold" && s.status === "exited"));
+      for (const s of targets) manageSession(s, true, client.id);
+      sendControl(client, "sessions.deleted", { ids: targets.map((s) => s.id), scope: frame.scope });
       return;
     }
 
@@ -820,7 +868,7 @@ server.on("upgrade", (req, socket, head) => {
 });
 
 server.listen(PORT, "127.0.0.1", () => {
-  console.log(`agentlink-mock listening on http://127.0.0.1:${PORT}`);
+  console.log(`agentlink-mock listening on http://127.0.0.1:${server.address().port}`);
   console.log(`  token: ${TOKEN}`);
   console.log(`  sessions: ${seededText.id} (text fixture), ${seededTool.id} (tool fixture + synthetic approval)`);
 });

@@ -56,6 +56,7 @@
   const MOD = /Mac|iPhone|iPad|iPod/.test(navigator.platform || navigator.userAgent) ? "⌘" : "^";
   const placeholder = $derived.by(() => {
     if (view.status === "exited") return `session closed — ${MOD}n for a new one`;
+    if (view.status === "cold") return "session closed — use wake in the session menu";
     if (!live) return "waking session…";
     if (view.working) {
       return canSteer ? "type to queue — delivers as the next turn… (^c to stop)" : "turn running… (^c to stop)";
@@ -96,6 +97,8 @@
   $effect(() => {
     const sid = app.activeId;
     if (!sid) return;
+    const revision = app.draftRevisions[sid] ?? 0;
+    const generation = localStorage.getItem(`dextui.generation.${sid}`);
     // The stash is consumed, not tracked: a reactive read of it (or of `text`)
     // here would re-run this effect on the next keystroke and reset history.
     const seed = untrack(() => app.pendingDraft);
@@ -103,11 +106,17 @@
     hist = loadHistory(sid);
     histIdx = 0;
     stash = "";
+    menuHidden = false;
+    menuIdx = 0;
     if (seed) {
       app.pendingDraft = "";
       requestAnimationFrame(() => inputEl?.focus());
     }
     return () => {
+      // Clearing/deleting must not be undone by this effect's draft teardown.
+      if ((app.draftRevisions[sid] ?? 0) !== revision ||
+          !app.sessions.some((s) => s.id === sid) ||
+          localStorage.getItem(`dextui.generation.${sid}`) !== generation) return;
       if (text) localStorage.setItem(`dextui.draft.${sid}`, text);
       else localStorage.removeItem(`dextui.draft.${sid}`);
     };
@@ -157,6 +166,8 @@
     else c.prompt(sid, t);
     localStorage.removeItem(`dextui.draft.${sid}`);
     text = "";
+    menuHidden = false;
+    menuIdx = 0;
     histIdx = 0;
     stash = "";
   }
@@ -238,8 +249,9 @@
       const after = text.slice(caret);
       if (up ? before.includes("\n") || hist.length === 0 : after.includes("\n") || histIdx === 0) return;
       const draft = text;
+      const sid = app.activeId;
       requestAnimationFrame(() => {
-        if (el.value !== draft) return; // edited in the meantime
+        if (el.value !== draft || sid !== app.activeId || !el.isConnected) return;
         const pos = el.selectionStart ?? 0;
         if (up ? pos !== 0 : pos !== draft.length) return; // caret moved within the box
         if (up) {

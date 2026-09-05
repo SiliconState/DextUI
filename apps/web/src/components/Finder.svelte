@@ -10,6 +10,9 @@
     rePair,
     queue,
     respondGlobal,
+    requestSessionAction,
+    closeSession,
+    wakeSession,
   } from "../lib/state.svelte";
   import { useSession } from "../lib/useSession.svelte";
   import { useDialog } from "../lib/dialog.svelte";
@@ -100,6 +103,18 @@
         run: () => (app.eventsOpen = true),
       });
     }
+    if (app.phase === "live" && app.caps.includes("session_manage")) {
+      const id = app.activeId;
+      const meta = app.sessions.find((s) => s.id === id);
+      if (meta) {
+        for (const kind of ["rename", "clear", "delete"] as const) {
+          out.push({ slug: `session.${kind}`, label: `${kind} session${kind === "clear" ? " — fresh context" : kind === "delete" ? " — permanent purge" : ""}`, group: "sess", run: () => requestSessionAction({ kind, id }) });
+        }
+        out.push({ slug: "session.close-wake", label: meta.status === "cold" ? "wake session" : "close session — keep history", group: "sess", run: () => meta.status === "cold" ? wakeSession(id) : closeSession(id) });
+      }
+      if (app.sessions.length) out.push({ slug: "sessions.delete_all", label: "delete all sessions — permanent purge", group: "sess", run: () => requestSessionAction({ kind: "bulk", scope: "all" }) });
+      if (app.sessions.some((s) => s.status === "cold" || s.status === "exited")) out.push({ slug: "sessions.delete_cold", label: "delete closed sessions — permanent purge", group: "sess", run: () => requestSessionAction({ kind: "bulk", scope: "cold" }) });
+    }
     for (const s of app.sessions) {
       if (s.id === app.activeId) continue;
       out.push({
@@ -172,6 +187,7 @@
   }
 
   function onWindowKey(e: KeyboardEvent) {
+    if (e.isComposing || app.sessionAction) return;
     dlg.onKey(e);
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
       e.preventDefault();

@@ -12,6 +12,7 @@
     stepSession,
     jumpToOldestPending,
     toggleNotify,
+    requestSessionAction,
   } from "./lib/state.svelte";
   import { useSession } from "./lib/useSession.svelte";
   import { useDialog } from "./lib/dialog.svelte";
@@ -58,6 +59,14 @@
     else toggleSidebar();
   }
 
+  $effect(() => {
+    if (app.sessionAction && matchMedia("(max-width: 900px)").matches) indexOpen = true;
+  });
+  $effect(() => {
+    void app.hostEpoch;
+    inspect = null; // never retain raw transcript content after purge/clear
+  });
+
   // Never carry an open off-canvas drawer across the desktop breakpoint.
   $effect(() => {
     const mobile = matchMedia("(max-width: 900px)");
@@ -83,6 +92,11 @@
   // C interrupt · ? shortcuts · any printable key starts a session (hero).
   $effect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (e.defaultPrevented || e.isComposing || e.keyCode === 229) return;
+      if (app.sessionAction) {
+        if (e.key === "Escape" && !app.sessionPending) app.sessionAction = null;
+        return;
+      }
       dlgBlock.onKey(e);
       dlgEvents.onKey(e);
       if (e.key === "Escape") {
@@ -109,7 +123,10 @@
       }
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "c") {
         // Copy wins whenever something is selected; otherwise stop the turn.
-        const selected = window.getSelection()?.toString() ?? "";
+        const target = e.target;
+        const selected = target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement
+          ? target.selectionStart !== target.selectionEnd
+          : !!window.getSelection()?.toString();
         if (!selected && app.activeId && view?.working) {
           e.preventDefault();
           connection()?.interrupt(app.activeId);
@@ -117,6 +134,17 @@
         return;
       }
       if (app.paletteOpen || app.shortcutsOpen || inspect || app.eventsOpen) return;
+      const editing = e.target instanceof HTMLElement && (e.target.matches("input, textarea") || e.target.isContentEditable);
+      if (!editing && app.activeId && (e.ctrlKey || e.metaKey) && e.key === "Backspace") {
+        e.preventDefault();
+        requestSessionAction({ kind: "delete", id: app.activeId });
+        return;
+      }
+      if (!editing && app.activeId && e.key === "F2") {
+        e.preventDefault();
+        requestSessionAction({ kind: "rename", id: app.activeId });
+        return;
+      }
       // Modified combos belong to the browser/app (Ctrl+A select-all, Ctrl+S save…).
       if (e.ctrlKey || e.metaKey || e.altKey) return;
       const t = e.target as HTMLElement | null;

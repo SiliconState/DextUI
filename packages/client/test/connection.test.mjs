@@ -379,6 +379,62 @@ test("(l) routing does not throw without a window global", (t) => {
   assert.equal(conn.session("s1").state.blocks.length, 1);
 });
 
+test("session management commands wait for acknowledgments; removal drops tails", (t) => {
+  const removed = [];
+  const { conn } = setup(t, { onSessionRemoved: (id) => removed.push(id) });
+  const ws = goLive(conn);
+  conn.subscribe("s1");
+  conn.clearSession("s1");
+  conn.deleteSession("s1");
+  conn.deleteSessions("cold");
+  assert.deepEqual(ws.frames("session.clear"), [{ v: 1, cmd: "session.clear", id: "s1" }]);
+  assert.deepEqual(ws.frames("session.delete_all"), [{ v: 1, cmd: "session.delete_all", scope: "cold" }]);
+  assert.ok(conn.sessions.has("s1"), "no optimistic deletion");
+  ws.receive({ v: 1, event: "session.removed", data: { id: "s1" } });
+  assert.deepEqual(removed, ["s1"]);
+  assert.equal(conn.sessions.has("s1"), false);
+  assert.equal(conn.subscribed.has("s1"), false);
+  ws.receive({ v: 1, session: "s1", seq: 99, event: "text_delta", data: "late" });
+  assert.equal(conn.sessions.has("s1"), false);
+});
+
+test("clear replaces store, drops pending approvals, and subscribes without seq", (t) => {
+  const cleared = [];
+  const { conn } = setup(t, { onSessionCleared: (...args) => cleared.push(args) });
+  const ws = goLive(conn);
+  conn.subscribe("s1");
+  const old = conn.session("s1");
+  old.state.lastSeq = 40;
+  old.state.pending.set("p", { request_id: "p" });
+  ws.receive({ v: 1, event: "session.cleared", data: { id: "s1", generation: 1 } });
+  assert.notEqual(conn.session("s1"), old);
+  assert.equal(conn.session("s1").state.pending.size, 0);
+  assert.deepEqual(ws.frames("session.subscribe").at(-1), { v: 1, cmd: "session.subscribe", id: "s1" });
+  assert.deepEqual(cleared, [["s1", 1]]);
+  ws.receive({ v: 1, event: "session.list", data: { sessions: [{ id: "s1", generation: 1 }] } });
+  assert.equal(cleared.length, 1, "list after acknowledgment does not reset twice");
+});
+
+test("reconnect reconciles offline clears by generation and offline deletes", (t) => {
+  const cleared = [], removed = [];
+  const { conn } = setup(t, { onSessionCleared: (...args) => cleared.push(args), onSessionRemoved: (id) => removed.push(id) });
+  const ws = goLive(conn);
+  conn.subscribe("s1");
+  conn.session("s1").state.lastSeq = 1;
+  ws.drop();
+  mock.timers.tick(1000);
+  const next = FakeWebSocket.instances.at(-1);
+  next.open();
+  next.receive(helloOk({ sessions: [{ id: "s1", generation: 2 }] }));
+  assert.deepEqual(cleared, [["s1", 2]]);
+  assert.equal(conn.session("s1").state.lastSeq, 0);
+  assert.ok(!("since_seq" in next.frames("session.subscribe").at(-1)));
+  next.receive({ v: 1, event: "session.list", data: { sessions: [] } });
+  assert.deepEqual(removed, ["s1"]);
+  assert.equal(conn.sessions.size, 0);
+  assert.equal(conn.subscribed.size, 0);
+});
+
 test("live ping is sent on the interval and stops after close", (t) => {
   const { conn } = setup(t);
   const ws = goLive(conn);

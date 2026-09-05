@@ -51,10 +51,13 @@ Commands are fire-and-forget; effects arrive as events. Only two commands have d
 | `hello_ok` | `{server, version, protocol, instance?, capabilities[], sessions[], model_catalog?, effort_options?, commands?}` | auth accepted; includes session list and optional host controls |
 | `hello_fail` | `{reason}` | auth or version rejected; socket closes |
 | `session.list` | `{sessions[]}` | pushed whenever the list changes |
+| `session.removed` | `{id, by?}` | session purged (by any client); drop stores, subscriptions, and local drafts; late tails for `id` must be ignored |
+| `session.cleared` | `{id, generation}` | session history purged in place; drop the store and resubscribe without `since_seq` |
+| `sessions.deleted` | `{ids[], scope}` | summary reply to `session.delete_all` |
 | `pong` | `{}` | reply to `ping` |
 | `error` | `{code, message}` | rejected command; no state changed |
 
-`SessionMeta`: `{id, title, cwd, agent:{name,version}, model?, provider?, thinking_effort?, model_locked?, approval_profile?, status:"cold"|"starting"|"live", created_at, updated_at, last_seq, unread, pending_permissions}`. `title` is host-derived from the first prompt (60 chars); `session.rename` overrides.
+`SessionMeta`: `{id, title, cwd, generation?, agent:{name,version}, ...}`. `title` is host-derived from the first prompt (60 chars); `session.rename` overrides. `generation` increments on every `session.clear` and survives host restarts, so clients detect clears they missed while offline by comparing the list against their remembered generation.
 
 `model_catalog` is grouped as `[{provider, label?, models[]}]`; `effort_options` contains host-supported values such as `off|minimal|low|medium|high|xhigh|max`. Clients expose these controls only when the matching capability is advertised.
 
@@ -128,6 +131,9 @@ Tool cards are keyed by `call_id`, and `name`/`summary` are **sticky**: an event
 | `session.rename` | `{id, title}` | |
 | `session.configure` | `{id, provider?, model?, thinking_effort?}` | idle-only. Model requires provider+model and may be fresh-session-only; effort applies to the next turn. Success emits `session.configured`; rejection emits control `error` |
 | `session.close` | `{id}` | stop the child; durable state remains, session goes `cold` |
+| `session.delete` | `{id}` | **true purge**: stops the child, then removes the journal, the index entry, and the agent's own seat state; broadcasts `session.removed`. No optimistic success — a failed purge keeps the session, persists a retryable cleanup intent (retried at host boot), and replies `error` |
+| `session.clear` | `{id}` | purge history but keep the session shell (title, cwd, settings): fresh seat, `seq` 0, `generation`+1; broadcasts `session.cleared`; clients drop stores, drafts, and pending approvals and resubscribe without `since_seq` |
+| `session.delete_all` | `{scope:"all"\|"cold"\|"exited"}` | bulk purge of the captured set; one `session.removed` per session, then `sessions.deleted {ids, scope}` to the requester |
 | `prompt.submit` | `{session, text}` | new turn; host journals `user_message` then the turn stream. Sent while a turn runs on a queueing host → treated as steering (queued for the turn boundary) |
 | `steering.inject` | `{session, text}` | mid-turn input. Hosts with a live steering channel inject in-stream; queueing hosts (agentlinkd) ack with a `steering_received` journal event and deliver the text automatically as the next turn's prompt |
 | `interrupt` | `{session}` | soft cancel → `interrupted`; hard kill is `session.close` |
@@ -151,7 +157,7 @@ Tool cards are keyed by `call_id`, and `name`/`summary` are **sticky**: an event
 
 ## Capabilities
 
-Advertised in `hello_ok`: `approvals`, `steering`, `interrupt`, `slash`, `multi_session`, `usage`, `thinking`, `model_select`, `effort_select`, `todos_read`, `files_read`, `checkpoints`, `seats`, `packs`, `push`. A host without `approvals` never sends `permission.request`; a client without approval UI must not subscribe to sessions that require them. Model/effort controls require both their capability and option data. Extensions are namespaced: `x-<host>.<thing>`.
+Advertised in `hello_ok`: `approvals`, `steering`, `interrupt`, `slash`, `multi_session`, `usage`, `thinking`, `model_select`, `effort_select`, `todos_read`, `files_read`, `session_manage`, `checkpoints`, `seats`, `packs`, `push`. A host without `approvals` never sends `permission.request`; a client without approval UI must not subscribe to sessions that require them. Model/effort controls require both their capability and option data. Extensions are namespaced: `x-<host>.<thing>`.
 
 ## Agent surface
 

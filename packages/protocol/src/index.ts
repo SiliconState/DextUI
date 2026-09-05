@@ -123,6 +123,8 @@ export interface SessionMeta {
   id: string;
   title: string;
   cwd: string;
+  /** Increments on clear, including across host restarts. */
+  generation?: number;
   agent: { name: string; version: string };
   model?: string;
   provider?: string;
@@ -208,6 +210,15 @@ export interface SnapshotEvent {
 export interface SessionStateEvent {
   status: SessionStatus;
   detail?: string;
+}
+
+/** `session.delete_all` scope: every session, or only the ones not live. */
+export type DeleteScope = "all" | "cold" | "exited";
+
+/** Sent after `session.delete_all`; per-session `session.removed` precede it. */
+export interface SessionsDeletedEvent {
+  ids: string[];
+  scope: DeleteScope;
 }
 
 // ---------- REST surfaces ----------
@@ -324,6 +335,11 @@ export interface ControlEventMap {
   };
   hello_fail: { reason: string };
   "session.list": { sessions: SessionMeta[] };
+  /** A session was deleted (by any client); stores, subscriptions, and local
+   *  drafts for `id` should be dropped. `by` names the requesting client. */
+  "session.removed": { id: string; by?: string };
+  "session.cleared": { id: string; generation: number };
+  "sessions.deleted": SessionsDeletedEvent;
   pong: Record<string, never>;
   error: { code: string; message: string };
 }
@@ -353,6 +369,8 @@ export const CAPABILITIES = [
   "model_select",
   "effort_select",
   "todos_read",
+  /** Host honors session.delete / session.clear / session.delete_all. */
+  "session_manage",
 ] as const;
 
 // ---------- helpers ----------

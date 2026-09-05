@@ -19,6 +19,16 @@
       ],
     },
     {
+      name: "sessions",
+      rows: [
+        ["rail ⋯ / finder", "rename · close/wake · clear · delete"],
+        ["sessions ⋯", "delete closed / delete all (confirmed)"],
+        ["F2", "rename active session (outside inputs)"],
+        ["⌘/ctrl backspace", "confirm deletion (outside inputs)"],
+        ["clear vs close", "fresh context vs keep history for resuming"],
+      ],
+    },
+    {
       name: "compose",
       rows: [
         ["⏎", "send (steer when supported)"],

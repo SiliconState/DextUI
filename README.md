@@ -55,6 +55,7 @@ answers `markdown table demo` with a rich-markdown turn.
   fences, safe links — real DOM elements, escaped by construction; pre-drawn
   box-art passes through verbatim in x-scrolling `<pre>`
 - **Multi-session** index with status glyphs and pending badges; desktop sidebar can be minimized/restored (`Ctrl/Cmd+B`) and persists, while narrow screens use an off-canvas drawer; `Ctrl+[` / `Ctrl+]` cycles sessions
+- **Session lifecycle**: per-session menu with rename (`F2`), close/wake, clear (fresh agent context, keeps the shell), and true-purge delete — the host stops the child, then removes the journal, the index entry, the dext seat's transcripts and records, and the client's local drafts/history; `Ctrl+Backspace` deletes the active session; bulk "delete closed / delete all" run behind an explicit confirmation. Failed purges never fake success: the session stays, the intent is retried at host boot, and ids are never recycled
 - **Global action queue**: every pending approval across all sessions in one rail (oldest first) with in-place `a`/`s`/`d`, a status-line badge, finder actions, and a document-title counter for background tabs
 - **Todo panel**: reads dext's own todo files per session through the host (`todos_read`-gated) — source badge, path, `○ ◐ ●` status glyphs; refreshes on activation and `turn_end`
 - **Interactive charts, images, and HTML artifacts**: a ` ```chart ` fence carrying a JSON spec (`bar`, `hbar`, `line`, `spark`, `donut`; multi-`series`, `x`/`y` axis captions, up to 180 points for lines / 31 for categorical) renders as a live chart — hover tooltips, drag points/bars for what-ifs with recomputed stats, click-sort, wheel-zoom + pan, legend toggles, donut isolate, and charts sharing a `dataset` id cross-highlight each other; all local, zero chart dependencies, no `{@html}` on dynamic strings. `![alt](path)` images a turn wrote under the session cwd render inline through the host's authenticated `files_read` endpoint; `![title](dashboard.html)` renders the page itself in a sandboxed frame (nested relative images resolve; `file://` and WSL `\\wsl.localhost\` style hrefs are normalized automatically). Remote URLs stay links — the app never fetches model-chosen hosts
@@ -79,7 +80,7 @@ DextUI is designed to be drivable by other agents, not just humans:
 
 - Every actionable element carries a stable `data-agent-id` (e.g. `composer.send`,
   `approval.<request_id>.once`, `session.<id>.open`)
-- New controls follow the same scheme: `queue.<session>.<request_id>.once`, `queue.badge`, `todos.toggle`, `notify.toggle`, `shortcuts.close`, `composer.histmark`
+- New controls follow the same scheme: `queue.<session>.<request_id>.once`, `queue.badge`, `todos.toggle`, `notify.toggle`, `shortcuts.close`, `composer.histmark`, `session.<id>.actions`, `session.action.confirm`
 - Regions expose `data-state` (`awaiting_approval`, `working`, `idle`, `ready`, `disabled`)
 - `GET /__agent` returns a bounded scene digest (auth required)
 - `window.__agentlink` counts received envelopes by event type — transport debugging
@@ -101,12 +102,15 @@ See [UPSTREAM.md](./UPSTREAM.md) for the planned `dext serve` native bridge
 
 ```bash
 npm test                 # node:test — fold equivalence vs mock fold(), store
-                         # contract, connection lifecycle, chart spec + math (71 checks)
+                         # contract, connection lifecycle, chart spec + math,
+                         # session purge/clear/reconnect against both hosts (78 checks)
 npm run smoke           # mock host end-to-end (31 checks)
 npm run smoke:agentlinkd # real-host surface with a fake dext (50 checks:
                          # restart/restore, seq replay, cold wake + auto-wake,
                          # todos, auth lockout + 429, digest 4 KiB cap,
                          # html artifacts + file ?t auth)
+npm run smoke:browser    # real-browser checks via agent-browser CLI (composer
+                         # wrap/cap, slash menu, themed charts, rename/delete flows)
 ```
 
 `npm run typecheck` and `npm run build` cover protocol → client → web.

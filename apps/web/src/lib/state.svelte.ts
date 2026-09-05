@@ -6,6 +6,8 @@ import { notifyEvent } from "./notify";
 
 export type Theme = "dark" | "light" | "system";
 export type NotifyState = "on" | "off" | "blocked";
+export type SessionAction = { kind: "rename" | "clear" | "delete"; id: string } | { kind: "bulk"; scope: "all" | "cold" };
+
 export interface Toast {
   id: number;
   kind: "info" | "ok" | "warn" | "err";
@@ -38,6 +40,9 @@ export const app = $state({
   /** Hero-typing stash: the printable key that spawned a fresh session. */
   pendingDraft: "",
   shortcutsOpen: false,
+  sessionAction: null as SessionAction | null,
+  sessionPending: false,
+  draftRevisions: {} as Record<string, number>,
 });
 
 // ---------- global action queue ----------
@@ -113,6 +118,59 @@ let everLive = false;
 let wantNewSession = false;
 let newSessionBaseline = new Set<string>();
 let toastSeq = 0;
+let selectionAfterRemoval: number | null = null;
+let expectedRename = "";
+let sessionActionTimer: ReturnType<typeof setTimeout> | undefined;
+
+function purgeLocalSession(id: string): void {
+  app.draftRevisions[id] = (app.draftRevisions[id] ?? 0) + 1;
+  for (const prefix of ["draft", "history", "generation"]) localStorage.removeItem(`dextui.${prefix}.${id}`);
+  autoSubscribed.delete(id);
+  hydrating.delete(id);
+  if (app.activeId === id) {
+    app.pendingDraft = "";
+    app.eventsOpen = false;
+  }
+}
+
+function finishSessionAction(): void {
+  clearTimeout(sessionActionTimer);
+  app.sessionPending = false;
+  app.sessionAction = null;
+}
+
+export function requestSessionAction(action: SessionAction): void {
+  if (app.phase !== "live" || !app.caps.includes("session_manage") || app.sessionPending) return;
+  app.sessionAction = action;
+  app.sidebarCollapsed = false;
+}
+
+export function confirmSessionAction(title = ""): void {
+  const a = app.sessionAction;
+  const c = app.conn;
+  if (!a || !c || app.phase !== "live" || app.sessionPending) return;
+  if (a.kind === "rename" && !title.trim()) return;
+  app.sessionPending = true;
+  sessionActionTimer = setTimeout(() => {
+    app.sessionPending = false;
+    pushToast("warn", "No session-operation acknowledgment yet; reconnect or retry if needed");
+  }, 15000);
+  if (a.kind === "bulk") c.deleteSessions(a.scope);
+  else if (a.kind === "delete") c.deleteSession(a.id);
+  else if (a.kind === "clear") c.clearSession(a.id);
+  else {
+    expectedRename = title.trim().slice(0, 80);
+    c.renameSession(a.id, expectedRename);
+  }
+}
+
+export function closeSession(id: string): void {
+  if (app.phase === "live") app.conn?.closeSession(id);
+}
+
+export function wakeSession(id: string): void {
+  if (app.phase === "live") app.conn?.openSession({ id });
+}
 
 export function connection(): Connection | null {
   return app.conn;
@@ -268,10 +326,53 @@ export function start(token: string): void {
       if (app.conn !== c) return;
       pushToast("warn", `Resyncing ${sessionId} (seq ${expected}→${got})`);
     },
+    onSessionRemoved: (id) => {
+      if (app.conn !== c) return;
+      purgeLocalSession(id);
+      if (app.activeId === id) {
+        selectionAfterRemoval = Math.max(0, app.sessions.findIndex((s) => s.id === id));
+        app.activeId = "";
+      }
+      app.sessions = app.sessions.filter((s) => s.id !== id);
+      app.hostEpoch++;
+      if (app.sessionAction && "id" in app.sessionAction && app.sessionAction.id === id) finishSessionAction();
+      rebuildQueue();
+    },
+    onSessionCleared: (id, generation) => {
+      if (app.conn !== c) return;
+      purgeLocalSession(id);
+      localStorage.setItem(`dextui.generation.${id}`, String(generation));
+      app.sessions = app.sessions.map((s) => s.id === id ? { ...s, generation, pending_permissions: 0, last_seq: 0, model_locked: false } : s);
+      app.hostEpoch++;
+      if (app.sessionAction && "id" in app.sessionAction && app.sessionAction.id === id) finishSessionAction();
+      rebuildQueue();
+    },
     onSessionList: (sessions) => {
       if (app.conn !== c) return; // stale connection
-      app.sessions = sessions;
       const ids = new Set(sessions.map((s) => s.id));
+      // Also clean tabs opened after deletion, not just currently subscribed stores.
+      for (const key of Object.keys(localStorage)) {
+        const match = /^dextui\.(?:draft|history|generation)\.(.+)$/.exec(key);
+        if (match?.[1] && !ids.has(match[1])) purgeLocalSession(match[1]);
+      }
+      for (const s of sessions) {
+        const key = `dextui.generation.${s.id}`;
+        const previous = Number(localStorage.getItem(key) ?? 0);
+        if (previous !== (s.generation ?? 0)) purgeLocalSession(s.id);
+        localStorage.setItem(key, String(s.generation ?? 0));
+      }
+      app.sessions = sessions;
+      const rename = app.sessionAction;
+      if (app.sessionPending && rename?.kind === "rename" && sessions.some((s) => s.id === rename.id && s.title === expectedRename)) finishSessionAction();
+      if (selectionAfterRemoval !== null) {
+        const neighbor = sessions[Math.min(selectionAfterRemoval, sessions.length - 1)];
+        selectionAfterRemoval = null;
+        if (neighbor) {
+          // Show a neighbor without automatically waking a closed agent.
+          app.activeId = neighbor.id;
+          c.subscribe(neighbor.id);
+        }
+      }
       // Host restart: an active id can disappear while the Connection's local
       // stores survive. Drop the stale selection; a reused id will be reset by
       // the next snapshot rather than displaying the old host's transcript.
@@ -312,6 +413,8 @@ export function start(token: string): void {
         newSessionBaseline.clear();
         app.pendingDraft = "";
       }
+      clearTimeout(sessionActionTimer);
+      app.sessionPending = false;
       app.lastError = `${code}: ${message}`;
       pushToast("err", `${code}: ${message}`);
     },
@@ -330,6 +433,14 @@ export function start(token: string): void {
       }
       notifyEvent(env, store);
     },
+  });
+  c.onControl((env) => {
+    if (app.conn !== c) return;
+    if (env.event === "sessions.deleted") {
+      const d = env.data as { ids: string[] };
+      finishSessionAction();
+      pushToast("ok", `Deleted ${d.ids.length} session(s)`);
+    }
   });
   app.conn = c;
   c.connect();

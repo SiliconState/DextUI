@@ -30,6 +30,7 @@ import crypto from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
 import { acceptKey, FrameParser, encodeFrame, OP_PONG, OP_TEXT } from "../../mock-server/src/ws.mjs";
 import { fold, foldMeta } from "../../mock-server/src/fold.mjs";
+import { checkedPath, purgeSeat, seatFiles } from "./session-files.mjs";
 
 const here = path.dirname(url.fileURLToPath(import.meta.url));
 const repoRoot = path.join(here, "..", "..", "..");
@@ -70,7 +71,7 @@ const MAX_STDOUT_BUFFER = 16 * 1024 * 1024;
 const STEERING_MAX_MESSAGES = 10;
 const STEERING_MAX_CHARS = 100_000;
 
-if (!Number.isInteger(PORT) || PORT < 1 || PORT > 65535) throw new Error(`invalid --port '${PORT}'`);
+if (!Number.isInteger(PORT) || PORT < 0 || PORT > 65535) throw new Error(`invalid --port '${PORT}'`);
 if (!TOKEN) throw new Error("pairing token must not be empty");
 if (!APPROVALS.has(DEFAULT_APPROVAL)) throw new Error(`invalid --approval '${DEFAULT_APPROVAL}'`);
 if (!fs.existsSync(DEFAULT_CWD) || !fs.statSync(DEFAULT_CWD).isDirectory()) {
@@ -201,6 +202,9 @@ const CAPABILITIES = [
   "slash.approval",
   "todos_read",
   "files_read",
+  // session.delete / session.clear / session.delete_all: true purge of the
+  // journal, index entry, and the dext seat's own state dirs.
+  "session_manage",
 ];
 
 // Host-handled slash commands, advertised in hello_ok so the composer's
@@ -216,13 +220,13 @@ const INSTANCE = crypto.randomBytes(8).toString("hex");
 
 // ---------- state ----------
 
-let sessionCounter = 0;
 let clientCounter = 0;
 const sessions = new Map();
 const clients = new Set();
 
 function makeSession({ cwd, approval }) {
-  const id = `sess_${(++sessionCounter).toString().padStart(3, "0")}`;
+  // Never reuse a deleted id after restart (old tabs may still hold drafts).
+  const id = `sess_${BigInt(`0x${crypto.randomBytes(12).toString("hex")}`)}`;
   const s = {
     id,
     title: "New session",
@@ -245,6 +249,10 @@ function makeSession({ cwd, approval }) {
     child: null,
     killed: false,
     indexEntry: null,
+    // Bumped by session.clear so a turn already in flight cannot journal its
+    // tail into the fresh transcript; deleted sessions never journal again.
+    epoch: 0,
+    deleted: false,
   };
   sessions.set(id, s);
   persistIndex();
@@ -272,6 +280,7 @@ function journalFile(s) {
 }
 
 function appendJournalLine(s, env) {
+  if (s.deleted) return; // a purged journal must never be recreated by a late child
   try {
     lstatChecked(journalFile(s), "journal file");
     fs.appendFileSync(journalFile(s), `${JSON.stringify(env)}\n`, { mode: 0o600 });
@@ -293,6 +302,8 @@ function indexEntryOf(s) {
     thinkingEffort: s.thinkingEffort,
     modelLocked: s.modelLocked,
     seat: s.seat,
+    generation: s.generation ?? 0,
+    ...(s.cleanup ? { cleanup: s.cleanup } : {}),
     ...(s.steeringQueue.length > 0 ? { steeringQueue: [...s.steeringQueue] } : {}),
     turns: s.turns,
     createdAt: s.createdAt,
@@ -301,23 +312,20 @@ function indexEntryOf(s) {
 }
 
 // Rewrites sessions.json only when one of its fields actually changed; the
-// tmp+rename swap keeps readers from ever seeing a torn index.
-function persistIndex() {
-  let dirty = false;
-  for (const s of sessions.values()) {
-    const entry = JSON.stringify(indexEntryOf(s));
-    if (s.indexEntry !== entry) {
-      s.indexEntry = entry;
-      dirty = true;
-    }
-  }
-  if (!dirty) return;
+// tmp+rename swap keeps readers from ever seeing a torn index. `force` covers
+// removals, which the per-session dirty check cannot observe.
+function persistIndex(force = false, strict = false) {
+  const entries = [...sessions.values()].map(indexEntryOf);
+  if (!force && [...sessions.values()].every((s, i) => s.indexEntry === JSON.stringify(entries[i]))) return;
   try {
-    lstatChecked(INDEX_PATH, "session index");
+    checkedPath(INDEX_PATH);
     const tmp = `${INDEX_PATH}.tmp`;
-    fs.writeFileSync(tmp, `${JSON.stringify([...sessions.values()].map(indexEntryOf), null, 2)}\n`, { mode: 0o600 });
+    checkedPath(tmp);
+    fs.writeFileSync(tmp, `${JSON.stringify(entries, null, 2)}\n`, { mode: 0o600 });
     fs.renameSync(tmp, INDEX_PATH);
+    for (const s of sessions.values()) s.indexEntry = JSON.stringify(indexEntryOf(s));
   } catch (err) {
+    if (strict) throw err;
     console.error(`agentlinkd: session index write failed: ${err.message}`);
   }
 }
@@ -394,7 +402,7 @@ function terminateUnfinishedTurn(s) {
 }
 
 // Boot: load sessions.json, bring every session back cold, replay journals,
-// and continue sessionCounter from the highest numeric id.
+// and retry unfinished cleanup intents after the entire index is loaded.
 function restoreSessions() {
   let entries = [];
   const st = lstatChecked(INDEX_PATH, "session index");
@@ -436,13 +444,22 @@ function restoreSessions() {
       child: null,
       killed: false,
       indexEntry: null,
+      epoch: 0,
+      deleted: false,
+      generation: Number.isSafeInteger(e.generation) ? e.generation : 0,
+      cleanup: e.cleanup?.action === "delete" || e.cleanup?.action === "clear" ? e.cleanup : null,
     };
     sessions.set(s.id, s);
     restoreJournal(s);
-    terminateUnfinishedTurn(s);
+    if (!s.cleanup) terminateUnfinishedTurn(s);
     s.indexEntry = JSON.stringify(indexEntryOf(s));
-    const n = Number(s.id.slice(5));
-    if (Number.isInteger(n) && n > sessionCounter) sessionCounter = n;
+  }
+  // Load the entire index BEFORE completing intents (completion rewrites it).
+  for (const s of [...sessions.values()]) {
+    if (!s.cleanup) continue;
+    try { finishCleanup(s); } catch (err) {
+      console.error(`agentlinkd: pending ${s.cleanup?.action} for ${s.id} failed; retry from UI: ${err.message}`);
+    }
   }
   if (sessions.size > 0) console.error(`agentlinkd: restored ${sessions.size} session(s) cold from ${STATE_DIR}`);
 }
@@ -462,6 +479,7 @@ function metaOf(s) {
     id: s.id,
     title: s.title,
     cwd: s.cwd,
+    generation: s.generation ?? 0,
     agent: { name: "dext", version: "cli" },
     model: s.model ?? undefined,
     provider: s.provider ?? undefined,
@@ -539,6 +557,7 @@ function runTurn(s, prompt) {
   s.working = true;
   s.turnStartedAt = Date.now();
   s.killed = false;
+  const epoch = s.epoch;
   let sawTurnEnd = false;
   let turnEndData;
   let finished = false;
@@ -592,6 +611,7 @@ function runTurn(s, prompt) {
   const handleLine = (line) => {
     const t = line.trim();
     if (!t) return;
+    if (s.deleted || s.epoch !== epoch) return; // purged/cleared under this turn
     let v;
     try {
       v = JSON.parse(t);
@@ -622,6 +642,9 @@ function runTurn(s, prompt) {
     if (finished) return;
     finished = true;
     if (s.child === child) s.child = null;
+    // The session was deleted or cleared while this child ran: its tail
+    // belongs to a transcript that no longer exists.
+    if (s.deleted || s.epoch !== epoch) return;
     if (buf.trim()) {
       handleLine(buf);
       buf = "";
@@ -745,6 +768,108 @@ function wakeSession(s) {
   scheduleList();
 }
 
+// ---------- delete / clear ----------
+
+function broadcastControl(event, data) {
+  const msg = JSON.stringify({ v: 1, ts: Date.now(), event, data });
+  for (const c of clients) if (c.phase === "live") c.send(msg);
+}
+
+function removeJournalFile(s) {
+  for (const file of [journalFile(s), `${journalFile(s)}.tmp`]) {
+    checkedPath(file);
+    fs.rmSync(file, { force: true });
+  }
+}
+
+async function stopForPurge(s) {
+  const child = s.child;
+  if (!child) return;
+  s.killed = true;
+  await new Promise((resolve, reject) => {
+    const finish = () => {
+      clearTimeout(kill);
+      clearTimeout(deadline);
+      // Also stop remaining descendants after the parent exits.
+      signalChild(child, "SIGKILL");
+      resolve();
+    };
+    const kill = setTimeout(() => signalChild(child, "SIGKILL"), 1500);
+    const deadline = setTimeout(() => {
+      child.off("close", finish);
+      reject(new Error("agent did not stop; purge not completed"));
+    }, 6500);
+    child.once("close", finish);
+    signalChild(child, "SIGINT");
+  });
+}
+
+// The persisted cleanup intent retains the OLD seat until every owned file
+// is removed. A crash or disk error is retryable; no success ack on failure.
+function finishCleanup(s, by) {
+  const intent = s.cleanup;
+  purgeSeat(intent.seat);
+  removeJournalFile(s);
+  s.journal = [];
+  s.pending.clear();
+  s.steeringQueue = [];
+  s.working = false;
+  s.turnStartedAt = null;
+  if (intent.action === "delete") {
+    sessions.delete(s.id);
+    try { persistIndex(true, true); } catch (err) {
+      sessions.set(s.id, s);
+      throw err;
+    }
+    s.deleted = true;
+    for (const c of clients) c.subs.delete(s.id);
+    broadcastControl("session.removed", { id: s.id, by });
+  } else {
+    s.seat = intent.nextSeat;
+    s.generation = intent.generation;
+    s.seq = 0;
+    s.turns = 0;
+    s.modelLocked = false;
+    s.status = "live";
+    s.cleanup = null;
+    try { persistIndex(true, true); } catch (err) {
+      s.cleanup = intent;
+      throw err;
+    }
+    for (const c of clients) c.subs.delete(s.id);
+    broadcastControl("session.cleared", { id: s.id, generation: s.generation });
+  }
+  scheduleList();
+}
+
+async function manageSession(s, action, by) {
+  if (s.managing) throw new Error("session cleanup already in progress");
+  if (s.cleanup && s.cleanup.action !== action) throw new Error(`retry session.${s.cleanup.action} first`);
+  s.managing = true;
+  try {
+    // Mark before signalling so late events cannot recreate purged data.
+    s.epoch++;
+    await stopForPurge(s);
+    if (!s.cleanup) {
+      s.cleanup = {
+        action, seat: s.seat,
+        nextSeat: `dextui-${crypto.randomBytes(4).toString("hex")}`,
+        generation: (s.generation ?? 0) + 1,
+      };
+    }
+    persistIndex(true, true);
+    finishCleanup(s, by);
+  } finally {
+    s.managing = false;
+  }
+}
+
+function deleteScopeFilter(scope) {
+  if (scope === "cold") return (s) => s.status === "cold" || s.status === "exited";
+  if (scope === "exited") return (s) => s.status === "exited";
+  return () => true;
+}
+
 // ---------- command dispatch ----------
 
 function sendControl(client, event, data) {
@@ -791,7 +916,8 @@ function handleSlash(client, s, raw) {
   sendError(client, "unsupported", `host handles /help and /approval only; '${trimmed.split(/\s/)[0]}' needs interactive dext`);
 }
 
-function handleCommand(client, frame) {
+async function handleCommand(client, frame) {
+  if (!frame || typeof frame !== "object") return;
   if (frame.v !== 1) {
     sendError(client, "bad_version", "unsupported protocol version");
     return;
@@ -827,6 +953,12 @@ function handleCommand(client, frame) {
     return;
   }
   if (client.phase !== "live") return;
+  const target = sessions.get(frame.id ?? frame.session);
+  if (target && (target.managing || target.cleanup) &&
+      !["session.delete", "session.clear", "session.unsubscribe"].includes(frame.cmd)) {
+    sendError(client, "busy", "session cleanup pending; retry delete/clear before using it");
+    return;
+  }
 
   switch (frame.cmd) {
     case "ping":
@@ -957,6 +1089,42 @@ function handleCommand(client, frame) {
       s.status = "cold";
       publish(journalData(s, "session.state", { status: "cold" }));
       persistIndex();
+      return;
+    }
+
+    case "session.delete": {
+      const s = sessions.get(frame.id);
+      if (!s) {
+        sendError(client, "no_session", `unknown session ${frame.id}`);
+        return;
+      }
+      await manageSession(s, "delete", client.id);
+      return;
+    }
+
+    case "session.clear": {
+      const s = sessions.get(frame.id);
+      if (!s) {
+        sendError(client, "no_session", `unknown session ${frame.id}`);
+        return;
+      }
+      await manageSession(s, "clear", client.id);
+      return;
+    }
+
+    case "session.delete_all": {
+      const scope = frame.scope;
+      if (!["all", "cold", "exited"].includes(scope)) {
+        sendError(client, "bad_request", "session.delete_all requires scope: all | cold | exited");
+        return;
+      }
+      const targets = [...sessions.values()].filter(deleteScopeFilter(scope));
+      // Lock the entire captured set synchronously; new sessions are unaffected.
+      const results = await Promise.allSettled(targets.map((s) => manageSession(s, "delete", client.id)));
+      const ids = targets.filter((_, i) => results[i].status === "fulfilled").map((s) => s.id);
+      sendControl(client, "sessions.deleted", { ids, scope });
+      const failed = results.filter((r) => r.status === "rejected");
+      if (failed.length) sendError(client, "purge_failed", `${failed.length} session(s) could not be purged; retry. ${failed[0].reason.message}`);
       return;
     }
 
@@ -1136,9 +1304,12 @@ function agentDigest() {
           if (s.working) acts.push({ cmd: "interrupt", session: s.id });
           if (s.status === "cold") acts.push({ cmd: "session.open", session: s.id });
           else if (s.status === "live") acts.push({ cmd: "session.close", session: s.id });
+          if (s.seq > 0) acts.push({ cmd: "session.clear", session: s.id, note: "empty transcript, fresh context" });
+          acts.push({ cmd: "session.delete", session: s.id, note: "purges journal + dext state" });
           return acts;
         }),
         { cmd: "session.open", note: "new session" },
+        ...(list.length > 0 ? [{ cmd: "session.delete_all", note: "scope: all | cold" }] : []),
       ],
     };
     if (Buffer.byteLength(JSON.stringify(body)) <= 4096 || list.length === 0) break;
@@ -1156,18 +1327,19 @@ const TODO_STATUSES = new Set(["pending", "in_progress", "completed"]);
 
 // dext session headers (src/session.rs, format v3+) carry "seat":{"id":…}
 // on their first JSON line. Seats are unique per agentlinkd session, so the
-// newest dext session dir whose header seat matches is this session's own
-// state dir — no need to reimplement dext's project_key derivation.
-function findDextSessionDir(s) {
+// dext session dirs whose header seat matches are this session's own state
+// dirs (one per resume) — no need to reimplement dext's project_key derivation.
+// Newest first.
+function findDextSessionDirs(seat) {
   const home = process.env.DEXT_HOME ? path.resolve(process.env.DEXT_HOME) : path.join(process.env.HOME ?? "", ".dext");
   const projects = path.join(home, "projects");
   let projectDirs;
   try {
     projectDirs = fs.readdirSync(projects, { withFileTypes: true });
   } catch {
-    return null;
+    return [];
   }
-  let best = null;
+  const found = [];
   for (const project of projectDirs) {
     if (!project.isDirectory()) continue;
     const sessionsDir = path.join(projects, project.name, "sessions");
@@ -1189,7 +1361,7 @@ function findDextSessionDir(s) {
           const n = fs.readSync(fd, cap, 0, cap.length, 0);
           const firstLine = cap.toString("utf8", 0, n).split("\n", 1)[0];
           const header = JSON.parse(firstLine);
-          if (!header || typeof header !== "object" || header.seat?.id !== s.seat) continue;
+          if (!header || typeof header !== "object" || header.seat?.id !== seat) continue;
         } finally {
           fs.closeSync(fd);
         }
@@ -1197,10 +1369,15 @@ function findDextSessionDir(s) {
       } catch {
         continue;
       }
-      if (!best || mtimeMs > best.mtimeMs) best = { dir, mtimeMs };
+      found.push({ dir, mtimeMs });
     }
   }
-  return best?.dir ?? null;
+  return found.sort((a, b) => b.mtimeMs - a.mtimeMs).map((f) => f.dir);
+}
+
+/** Newest dext session dir for this session's seat, or null. */
+function findDextSessionDir(s) {
+  return findDextSessionDirs(s.seat)[0] ?? null;
 }
 
 // Parse exactly like dext's TUI reader (src/tui.rs todo_items_from_path):
@@ -1434,7 +1611,10 @@ server.on("upgrade", (req, socket, head) => {
         if (client.phase === "live") sendError(client, "bad_json", "malformed frame");
         return;
       }
-      handleCommand(client, frame);
+      void handleCommand(client, frame).catch((err) => {
+        console.error(`agentlinkd: ${frame?.cmd} failed: ${err.message}`);
+        sendError(client, "operation_failed", `${frame?.cmd}: ${err.message}`);
+      });
     },
     onClose: () => {
       clients.delete(client);
@@ -1477,7 +1657,7 @@ initStateDir();
 restoreSessions();
 
 server.listen(PORT, "127.0.0.1", () => {
-  console.log(`agentlinkd listening on http://127.0.0.1:${PORT}`);
+  console.log(`agentlinkd listening on http://127.0.0.1:${server.address().port}`);
   console.log(`  token:    ${TOKEN}`);
   console.log(`  dext:     ${DEXT_BIN}`);
   console.log(`  cwd:      ${DEFAULT_CWD}`);

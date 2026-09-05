@@ -6,6 +6,7 @@ import {
   isSessionRouted,
   PROTOCOL_VERSION,
   type Envelope,
+  type DeleteScope,
   type HostCommand,
   type ModelGroup,
   type SessionMeta,
@@ -21,6 +22,8 @@ export interface ConnectionOpts {
   client?: string;
   onPhase?: (phase: ConnPhase, detail?: string) => void;
   onSessionList?: (sessions: SessionMeta[]) => void;
+  onSessionRemoved?: (id: string) => void;
+  onSessionCleared?: (id: string, generation: number) => void;
   onControlError?: (code: string, message: string) => void;
   onSeqGap?: (sessionId: string, expected: number, got: number) => void;
   /** The host process changed between connections; all session stores were reset. */
@@ -53,6 +56,8 @@ export class Connection {
   private resyncPending = new Set<string>();
   private controlListeners = new Set<(e: Envelope) => void>();
   private everLive = false;
+  private metadata = new Map<string, SessionMeta>();
+  private removed = new Set<string>();
 
   constructor(opts: ConnectionOpts) {
     this.opts = opts;
@@ -186,6 +191,51 @@ export class Connection {
     this.sendRaw(cmd("session.close", { id }));
   }
 
+  deleteSession(id: string): void {
+    this.sendRaw(cmd("session.delete", { id }));
+  }
+
+  clearSession(id: string): void {
+    this.sendRaw(cmd("session.clear", { id }));
+  }
+
+  deleteSessions(scope: DeleteScope): void {
+    this.sendRaw(cmd("session.delete_all", { scope }));
+  }
+
+  private forget(id: string): void {
+    this.sessions.delete(id);
+    this.subscribed.delete(id);
+    this.resyncPending.delete(id);
+    this.metadata.delete(id);
+    this.removed.add(id);
+    this.opts.onSessionRemoved?.(id);
+  }
+
+  private reset(id: string, generation: number, resubscribe: boolean): void {
+    this.sessions.delete(id);
+    this.resyncPending.delete(id);
+    this.opts.onSessionCleared?.(id, generation);
+    if (resubscribe && this.subscribed.has(id)) this.subscribe(id, true);
+  }
+
+  /** Lists are authoritative, including clears/deletes missed while offline. */
+  private acceptList(list: SessionMeta[], resubscribe: boolean): void {
+    const ids = new Set(list.map((m) => m.id));
+    for (const id of new Set([...this.metadata.keys(), ...this.sessions.keys(), ...this.subscribed])) {
+      if (!ids.has(id)) this.forget(id);
+    }
+    for (const meta of list) {
+      const prev = this.metadata.get(meta.id);
+      this.removed.delete(meta.id);
+      this.metadata.set(meta.id, meta);
+      if (prev && (prev.generation ?? 0) !== (meta.generation ?? 0)) {
+        this.reset(meta.id, meta.generation ?? 0, resubscribe);
+      }
+    }
+    this.opts.onSessionList?.(list);
+  }
+
   hasCap(cap: string): boolean {
     return this.capabilities.includes(cap);
   }
@@ -205,6 +255,7 @@ export class Connection {
     }
     if (isSessionRouted(env)) {
       const sessionId = env.session as string;
+      if (this.removed.has(sessionId)) return; // late tails cannot resurrect deleted stores
       const store = this.session(sessionId);
       if (env.event !== "session.snapshot" && typeof env.seq === "number") {
         // Idempotence: reconnect replays and races can deliver an already-folded
@@ -253,7 +304,7 @@ export class Connection {
         this.everLive = true;
         this.setPhase("live");
         this.startPing();
-        this.opts.onSessionList?.(d.sessions);
+        this.acceptList(d.sessions, false);
         // Re-attach every wanted tail. Sessions the host no longer lists are
         // dropped rather than producing a no_session error per reconnect.
         const known = new Set(d.sessions.map((s) => s.id));
@@ -275,7 +326,19 @@ export class Connection {
       }
       case "session.list": {
         const d = env.data as { sessions: SessionMeta[] };
-        this.opts.onSessionList?.(d.sessions);
+        this.acceptList(d.sessions, true);
+        break;
+      }
+      case "session.removed": {
+        const d = env.data as { id: string };
+        this.forget(d.id);
+        break;
+      }
+      case "session.cleared": {
+        const d = env.data as { id: string; generation: number };
+        const meta = this.metadata.get(d.id);
+        if (meta) this.metadata.set(d.id, { ...meta, generation: d.generation });
+        this.reset(d.id, d.generation, true);
         break;
       }
       case "pong":
