@@ -3,11 +3,24 @@
   // web-native content (real markdown, scrollable raw output). Structure rails
   // are CSS borders, never literal glyphs — glyph gutters shred when lines wrap.
   import type { ViewBlock as Block } from "@dextui/client";
-  import { copyText } from "../lib/state.svelte";
+  import { app, copyText } from "../lib/state.svelte";
+  import { fileUrl, htmlPathIn } from "../lib/files";
+  import { prettyPath } from "../lib/markdown";
   import Markdown from "./Markdown.svelte";
   import Diff from "./Diff.svelte";
+  import HtmlArtifact from "./HtmlArtifact.svelte";
 
   let { block, onInspect, sessionId = "" }: { block: Block; onInspect?: (b: Block) => void; sessionId?: string } = $props();
+
+  // A successful write/edit whose summary names an .html file gets a live
+  // preview card, so a generated dashboard shows up without a follow-up link.
+  const WRITER = /write|edit|create|save|patch/i;
+  const sessCwd = $derived(app.sessions.find((s) => s.id === sessionId)?.cwd ?? "");
+  const htmlOut = $derived.by(() => {
+    if (block.kind !== "tool" || block.status !== "ok" || !sessionId || !app.caps.includes("files_read")) return null;
+    if (!WRITER.test(block.name)) return null;
+    return htmlPathIn(block.summary);
+  });
 
   function looksLikeDiff(t: string): boolean {
     return /^[-+]{3} |^@@ |^diff --git /m.test(t);
@@ -101,6 +114,11 @@
           <pre class="tool-pre" data-agent-id={`tool.${block.call_id}.content`}>{block.content}</pre>
         {/if}
       </details>
+    {/if}
+    {#if htmlOut}
+      <div class="tool-artifact" data-agent-id={`tool.${block.call_id}.artifact`}>
+        <HtmlArtifact src={fileUrl(sessionId, htmlOut, sessCwd)} name={prettyPath(htmlOut, sessCwd)} />
+      </div>
     {/if}
   </div>
 {:else if block.kind === "marker"}
@@ -248,6 +266,10 @@
   }
   .tool-full summary::-webkit-details-marker {
     display: none;
+  }
+  .tool-artifact {
+    margin-top: 4px;
+    max-width: 960px;
   }
   .view-body {
     width: 100%;

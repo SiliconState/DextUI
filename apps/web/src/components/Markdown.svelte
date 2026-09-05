@@ -3,7 +3,9 @@
   // links. Terminal soul stays in the chrome; content gets the web — charts
   // and session-cwd images included.
   import { parseMarkdown, prettyPath, type Inline } from "../lib/markdown";
+  import { fileUrl as fileUrlFor, isHtmlPath } from "../lib/files";
   import Chart from "./Chart.svelte";
+  import HtmlArtifact from "./HtmlArtifact.svelte";
   import { ChartLink } from "../lib/chartlink.svelte";
   import { app } from "../lib/state.svelte";
 
@@ -14,47 +16,14 @@
   // cross-highlight — click a bar in one, its siblings dim the same index.
   const link = new ChartLink();
   const canFiles = $derived(app.caps.includes("files_read"));
-  // Subresource loads (<img>/<iframe>) send no Authorization header; the file
-  // endpoint accepts ?t=<token> instead. Read once — the page already holds
-  // this value in localStorage.
-  const fileToken = typeof localStorage !== "undefined" ? (localStorage.getItem("dextui.token") ?? "") : "";
   // href → true once the browser reports a failed image load: an actionable
   // chip instead of silent alt-text soup when a file 404s.
   let broken = $state<Record<string, boolean>>({});
 
   const sessCwd = $derived(app.sessions.find((s) => s.id === sessionId)?.cwd ?? "");
 
-  // Models emit file paths in several shapes — relative ("qc_charts/x.png"),
-  // absolute file URIs ("file:///home/demo/dextui-workspace/qc_charts/x.png"),
-  // and WSL UNC URIs ("file://wsl.localhost/Ubuntu/home/demo/..."). Only paths
-  // under the session cwd are servable; relativize everything to that.
-  function normalizeHref(href: string): string {
-    let p = href;
-    if (p.startsWith("file://")) {
-      p = p.slice(7);
-      const wsl = /^wsl\.localhost\/[^/]+(\/.*)$/.exec(p);
-      if (wsl && wsl[1]) p = wsl[1];
-    }
-    try {
-      p = decodeURIComponent(p);
-    } catch {
-      /* keep raw */
-    }
-    const cwd = sessCwd;
-    if (cwd && p.startsWith(`${cwd}/`)) p = p.slice(cwd.length + 1);
-    return p.replace(/^\//, "");
-  }
-
-  // Path-shaped URL so an HTML artifact's nested relative images resolve.
-  function fileUrl(href: string): string {
-    const path = normalizeHref(href)
-      .split("/")
-      .map(encodeURIComponent)
-      .join("/");
-    return `/sessions/${encodeURIComponent(sessionId)}/file/${path}?t=${encodeURIComponent(fileToken)}`;
-  }
-
-  const isHtmlArtifact = (href: string): boolean => /\.html?$/i.test(href);
+  const fileUrl = (href: string): string => fileUrlFor(sessionId, href, sessCwd);
+  const isHtmlArtifact = isHtmlPath;
 </script>
 
 {#snippet inline(parts: Inline[])}
@@ -67,14 +36,7 @@
         <code class="ic">{tk.href}</code>
       {:else if isHtmlArtifact(tk.href)}
         <!-- HTML artifact: self-contained dashboard in a sandboxed opaque-origin frame -->
-        <span class="md-artifact" data-agent-id="markdown.artifact">
-          <span class="md-artifact-head">
-            <span class="st-cyan">▤ artifact</span>
-            <span class="dim md-artifact-name">{tk.s || prettyPath(tk.href, sessCwd)}</span>
-            <a class="act" href={fileUrl(tk.href)} target="_blank" rel="noopener noreferrer">open ↗</a>
-          </span>
-          <iframe sandbox="allow-scripts" loading="lazy" title={tk.s || tk.href} src={fileUrl(tk.href)}></iframe>
-        </span>
+        <HtmlArtifact src={fileUrl(tk.href)} name={tk.s || prettyPath(tk.href, sessCwd)} />
       {:else if broken[tk.href]}
         <span class="md-imgmiss" data-agent-id="markdown.image.missing">✗ image not found under the session workspace: {prettyPath(tk.href, sessCwd)}</span>
       {:else}
@@ -99,6 +61,11 @@
       <div class="md-code">
         {#if b.lang}<span class="md-lang">{b.lang}</span>{/if}
         <pre>{b.text}</pre>
+      </div>
+    {:else if b.kind === "html"}
+      <!-- inline markup from a ```html/```svg fence: sandboxed srcdoc frame with a code toggle -->
+      <div class="md-chartbox" data-agent-id="markdown.html">
+        <HtmlArtifact html={b.text} name={b.lang === "svg" ? "inline svg" : "inline html"} />
       </div>
     {:else if b.kind === "chart"}
       <!-- interactive: hover, zoom/pan, drag-to-edit with live stats, sort,
@@ -251,41 +218,6 @@
   }
   .md-imgcap {
     font-size: 10px;
-  }
-  .md-artifact {
-    display: flex;
-    flex-direction: column;
-    width: 100%;
-    max-width: 100%;
-    border: 1px solid var(--line);
-    background: var(--bg1);
-  }
-  .md-artifact-head {
-    display: flex;
-    gap: 8px;
-    align-items: center;
-    border-bottom: 1px solid var(--line);
-    padding: 3px 8px;
-  }
-  .md-artifact-head .act {
-    margin-left: auto;
-  }
-  .md-artifact-name {
-    flex: 1;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-size: 11.5px;
-  }
-  .md-artifact iframe {
-    display: block;
-    width: 100%;
-    height: 560px;
-    border: 0;
-    /* Follows the app theme; `color-scheme` is inherited from <html>, so an
-       embedded page's prefers-color-scheme resolves to ours, not the OS's. */
-    background: var(--bg);
-    color-scheme: inherit;
   }
   .md-imgmiss {
     display: inline-block;

@@ -27,6 +27,7 @@ export type MdBlock =
   | { kind: "heading"; level: number; inline: Inline[] }
   | { kind: "para"; inline: Inline[] }
   | { kind: "code"; text: string; lang: string }
+  | { kind: "html"; text: string; lang: string }
   | { kind: "chart"; spec: ChartSpec }
   | { kind: "list"; ordered: boolean; items: ListItem[] }
   | { kind: "table"; align: ("l" | "c" | "r")[]; head: Inline[][]; rows: Inline[][][] }
@@ -87,6 +88,14 @@ function isTableStart(lines: string[], i: number): boolean {
   return line.includes("|") && next.includes("-") && TABLE_SEP.test(next);
 }
 
+/** A fenced ```html body is worth rendering when it carries at least one real
+ *  element — a bare attribute snippet or a one-liner `<b>` stays code. */
+function looksLikeMarkup(lines: string[]): boolean {
+  const s = lines.join("\n");
+  if (/<(!doctype|html|body|svg|div|section|table|main|header|article|canvas|style|script|h[1-6])\b/i.test(s)) return true;
+  return (s.match(/<[a-z][\w-]*[\s>]/gi)?.length ?? 0) >= 3;
+}
+
 export function parseMarkdown(src: string): MdBlock[] {
   const out: MdBlock[] = [];
   const lines = src.split("\n");
@@ -112,6 +121,12 @@ export function parseMarkdown(src: string): MdBlock[] {
           out.push({ kind: "chart", spec });
           continue;
         }
+      }
+      // ```html / ```svg fences that carry real markup render inline in a
+      // sandboxed frame (with a code toggle); bare snippets stay code.
+      if ((lang === "html" || lang === "svg") && looksLikeMarkup(buf)) {
+        out.push({ kind: "html", text: buf.join("\n"), lang });
+        continue;
       }
       out.push({ kind: "code", text: buf.join("\n"), lang: fence[1] ?? "" });
       continue;
