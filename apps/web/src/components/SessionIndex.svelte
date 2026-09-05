@@ -51,6 +51,9 @@
         data-agent-id="sessions.delete_all" onclick={() => { menu = ""; requestSessionAction({ kind: "bulk", scope: "all" }); }}>delete all</button>
     </div>
   {/if}
+  {#if app.phase === "live" && !canManage}
+    <p class="idx-note" data-agent-id="session.manage.unavailable">rename/clear/delete hidden: this host doesn't advertise <code>session_manage</code> — restart it on current code</p>
+  {/if}
   <SessionAction />
   <ActionQueue {onPick} />
   <input
@@ -150,6 +153,8 @@
   .idx-main { display: flex; align-items: center; }
   .idx-more { flex-shrink: 0; padding: 8px; }
   .idx-actions { display: flex; flex-wrap: wrap; gap: 10px; padding: 8px 10px; background: var(--bg1); font-size: 11px; }
+  .idx-note { padding: 6px 10px; border-bottom: 1px solid var(--line); font-size: 11px; color: var(--faint); overflow-wrap: anywhere; }
+  .idx-note code { color: var(--dim); }
   button:focus-visible { outline: 1px solid var(--cyan); outline-offset: -1px; }
   .idx-row {
     min-width: 0;

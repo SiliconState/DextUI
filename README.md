@@ -32,6 +32,13 @@ Open http://127.0.0.1:8788 and pair with the printed token (or pass `--token=...
 Every prompt runs a real `dext` turn in `--cwd`; follow-up prompts resume the same
 session via a dedicated dext seat.
 
+After pulling host changes, **restart the running `agentlinkd`** (e.g.
+`systemctl --user restart dext-agentlinkd`): the process keeps the code it
+started with, and the web app reads host capabilities once per connection —
+an old host hides every control it can't honor (the session rail says so).
+Web-only changes need just `npm run build` plus a tab reload; the host serves
+`apps/web/dist` from disk.
+
 Host flags: `--port` (8788) · `--token` (random, printed) · `--dext` (auto-detects
 `~/Dext/target/release/dext`, falls back to PATH) · `--cwd` (session working dir —
 must be owner-safe, not under /tmp) · `--approval` (`auto-read|auto-write|never|always`,

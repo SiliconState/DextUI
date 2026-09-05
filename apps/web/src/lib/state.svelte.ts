@@ -140,7 +140,12 @@ function finishSessionAction(): void {
 }
 
 export function requestSessionAction(action: SessionAction): void {
-  if (app.phase !== "live" || !app.caps.includes("session_manage") || app.sessionPending) return;
+  if (app.phase !== "live" || app.sessionPending) return;
+  if (!app.caps.includes("session_manage")) {
+    // Keyboard paths (F2, Ctrl+Backspace, finder) must not fail silently.
+    pushToast("warn", "This host doesn't advertise session_manage — restart it on current code to rename/clear/delete");
+    return;
+  }
   app.sessionAction = action;
   app.sidebarCollapsed = false;
 }
