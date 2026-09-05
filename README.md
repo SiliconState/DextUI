@@ -45,7 +45,7 @@ must be owner-safe, not under /tmp) · `--approval` (`auto-read|auto-write|never
 default `auto-read`) · `--static` (built PWA dir) · `--state-dir` (on-disk journals +
 session index; default `~/.dextui/agentlinkd`).
 
-In-session host commands: `/help`, `/approval <profile>` (applies from the next turn).
+In-session host commands: `/help`, `/approval <profile>` (applies from the next turn), `/pack run <name> <task>`, `/pack list`, `/pack inspect <name>`, `/pack create <shelf>/<name>`.
 
 ## Quickstart — mock (no API key)
 
@@ -62,6 +62,7 @@ answers `markdown table demo` with a rich-markdown turn.
   fences, safe links — real DOM elements, escaped by construction; pre-drawn
   box-art passes through verbatim in x-scrolling `<pre>`
 - **Multi-session** index with status glyphs and pending badges; desktop sidebar can be minimized/restored (`Ctrl/Cmd+B`) and persists, while narrow screens use an off-canvas drawer; `Ctrl+[` / `Ctrl+]` cycles sessions
+- **Packs as product**: the host discovers dext's pack catalog (`dext pack list --verbose` + each `PACK.md`) and advertises it in `hello_ok.packs`. The empty state is a **pack gallery** (hero "Build a connector" card + curated cards + all packs), also one key away (`g`); every card prefills the composer with a starter prompt you review before it runs. `/pack run <name> <task>` is executed by the host as an explicit `dext --pack <name>` turn (the composer's `/` menu lists every pack), `/pack list|inspect|create` work too, turns carry a pack badge, and `runtime_view` cards get **run again · edit pack · make my own**. The rail has a collapsible packs section; a pack that needs a stricter approval profile than the session has is refused with `pack_requires_profile` and the toast offers a one-click `/approval` switch (headless dext would otherwise deny its writes silently). New pack directories are picked up live (`packs.changed`). Curated day-1 starter prompts live in `packages/agentlinkd/src/packs.mjs` (`GALLERY_DEFAULTS`); pack authors override them with flat `ui-*` keys in `PACK.md` front matter (see below). Assessment and deviations from the proposal: [`docs/packs-day1-assessment.md`](./docs/packs-day1-assessment.md)
 - **Session lifecycle**: per-session menu with rename (`F2`), close/wake, clear (fresh agent context, keeps the shell), and true-purge delete — the host stops the child, then removes the journal, the index entry, the dext seat's transcripts and records, and the client's local drafts/history; `Ctrl+Backspace` deletes the active session; bulk "delete closed / delete all" run behind an explicit confirmation. Failed purges never fake success: the session stays, the intent is retried at host boot, and ids are never recycled
 - **Global action queue**: every pending approval across all sessions in one rail (oldest first) with in-place `a`/`s`/`d`, a status-line badge, finder actions, and a document-title counter for background tabs
 - **Todo panel**: reads dext's own todo files per session through the host (`todos_read`-gated) — source badge, path, `○ ◐ ●` status glyphs; refreshes on activation and `turn_end`
@@ -81,13 +82,39 @@ answers `markdown table demo` with a rich-markdown turn.
 - Interrupt (`^c stop`), block inspector drawer, toasts, mobile drawer layout,
   offline-capable PWA
 
+## Pack gallery metadata
+
+DextUI reads optional, flat `ui-*` keys from a pack's `PACK.md` front matter
+(dext's parser ignores unknown keys, so this is backward compatible):
+
+```yaml
+---
+name: report
+description: Generate self-contained interactive HTML reports …
+ui-starter-prompt: Summarise this workspace as an HTML report
+ui-artifact: html            # html | chart | table | markdown | file | none
+ui-time-to-first-artifact: 45
+ui-requires: [approval:auto-write]   # also: chromium, lightpanda, connector:<name>
+ui-gallery: true
+ui-tags: [research, summary]
+---
+```
+
+The sample `hello-chart` pack (guaranteed sub-10 s chart, no tools) ships in
+`packages/agentlinkd/sample-packs/hello-chart/`. Install it into your shelves:
+
+```bash
+dext pack create samples/hello-chart && cp packages/agentlinkd/sample-packs/hello-chart/PACK.md ~/.dext/shelves/samples/packs/hello-chart/PACK.md
+```
+
 ## Agent affordances
 
 DextUI is designed to be drivable by other agents, not just humans:
 
 - Every actionable element carries a stable `data-agent-id` (e.g. `composer.send`,
   `approval.<request_id>.once`, `session.<id>.open`)
-- New controls follow the same scheme: `queue.<session>.<request_id>.once`, `queue.badge`, `todos.toggle`, `notify.toggle`, `shortcuts.close`, `composer.histmark`, `session.<id>.actions`, `session.action.confirm`
+- New controls follow the same scheme: `queue.<session>.<request_id>.once`, `queue.badge`, `todos.toggle`, `notify.toggle`, `shortcuts.close`, `composer.histmark`, `session.<id>.actions`, `session.action.confirm`, `packs.gallery`, `packs.card.<name>`, `packs.hero`, `rail.packs.<name>.run`, `view.<pack>.rerun`, `toast.<id>.action`
+- `GET /packs` and `GET /packs/:name` (auth) expose the catalog and a shallow, read-only file listing
 - Regions expose `data-state` (`awaiting_approval`, `working`, `idle`, `ready`, `disabled`)
 - `GET /__agent` returns a bounded scene digest (auth required)
 - `window.__agentlink` counts received envelopes by event type — transport debugging
@@ -110,14 +137,16 @@ See [UPSTREAM.md](./UPSTREAM.md) for the planned `dext serve` native bridge
 ```bash
 npm test                 # node:test — fold equivalence vs mock fold(), store
                          # contract, connection lifecycle, chart spec + math,
-                         # session purge/clear/reconnect against both hosts (78 checks)
+                         # session purge/clear/reconnect against both hosts,
+                         # pack catalog parse/guard/--pack routing (85 checks)
 npm run smoke           # mock host end-to-end (31 checks)
 npm run smoke:agentlinkd # real-host surface with a fake dext (50 checks:
                          # restart/restore, seq replay, cold wake + auto-wake,
                          # todos, auth lockout + 429, digest 4 KiB cap,
                          # html artifacts + file ?t auth)
 npm run smoke:browser    # real-browser checks via agent-browser CLI (composer
-                         # wrap/cap, slash menu, themed charts, rename/delete flows)
+                         # wrap/cap, slash menu, themed charts, rename/delete flows,
+                         # pack gallery → prefill → run → badged runtime_view card)
 ```
 
 `npm run typecheck` and `npm run build` cover protocol → client → web.

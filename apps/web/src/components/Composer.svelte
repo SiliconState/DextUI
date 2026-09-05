@@ -122,6 +122,25 @@
     };
   });
 
+  // Gallery / card actions land here. `n` distinguishes repeated identical
+  // requests; the effect never re-fires on its own text change because the
+  // prefill object is consumed (nulled) synchronously.
+  $effect(() => {
+    const p = app.prefill;
+    if (!p) return;
+    app.prefill = null;
+    text = p.text;
+    menuHidden = false;
+    menuIdx = 0;
+    exitHistory();
+    void tick().then(() => {
+      const el = inputEl;
+      if (!el) return;
+      el.focus();
+      el.setSelectionRange(el.value.length, el.value.length);
+    });
+  });
+
   function loadHistory(sid: string): string[] {
     try {
       const raw: unknown = JSON.parse(localStorage.getItem(`dextui.history.${sid}`) ?? "[]");

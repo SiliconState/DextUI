@@ -48,6 +48,20 @@ const CAPABILITIES = [
   "effort_select",
   "todos_read",
   "session_manage",
+  "packs",
+];
+
+// Fake catalog so the gallery, `/` menu, and pack badges are exercisable
+// without dext. Shapes match agentlinkd's PackInfo exactly.
+const PACKS = [
+  { name: "hello-chart", shelf: "samples", description: "Emit one interactive chart fence. Guaranteed sub-10 s artifact.", source: "bundled", path: "/mock/samples/packs/hello-chart",
+    ui: { starter_prompt: "Run hello-chart", artifact: "chart", time_to_first_artifact: 3, requires: [], gallery: true, tags: ["sample"], icon: "chart" }, unmet: [] },
+  { name: "report", shelf: "research", description: "Generate self-contained interactive HTML5 reports from a small JSON spec.", source: "user:~/.dext/shelves/research", path: "/mock/research/packs/report",
+    ui: { starter_prompt: "Summarise this workspace as an HTML report", artifact: "html", time_to_first_artifact: 45, requires: ["approval:auto-write"], gallery: true, tags: ["research"], icon: "report" }, unmet: ["approval:auto-write"] },
+  { name: "agent_browser", shelf: "engineering", description: "Headless Chromium automation via the agent-browser CLI.", source: "user:~/.dext/shelves/engineering", path: "/mock/engineering/packs/agent_browser",
+    ui: { starter_prompt: "Fetch the title of example.com", artifact: "markdown", time_to_first_artifact: 20, requires: ["chromium"], gallery: true, tags: ["browser"], icon: "browser" }, unmet: ["chromium"] },
+  { name: "mesh", shelf: "orchestration", description: "Peer-to-peer mailbox between independent Dext sessions.", source: "user:~/.dext/shelves/orchestration", path: "/mock/orchestration/packs/mesh",
+    ui: { starter_prompt: "/pack run mesh ", artifact: "markdown", time_to_first_artifact: 0, requires: [], gallery: false, tags: [], }, unmet: [] },
 ];
 
 // Host-driven composer completion (mirrors the slash.* caps above).
@@ -57,6 +71,8 @@ const COMMANDS = [
   { cmd: "/compact", desc: "compact session context" },
   { cmd: "/model", desc: "show or switch model" },
   { cmd: "/todos", desc: "show the todo list" },
+  ...PACKS.map((p) => ({ cmd: `/pack run ${p.name}`, desc: p.description })),
+  { cmd: "/pack list", desc: "list installed packs" },
 ];
 
 // Random per process so clients detect a restarted host and resync from a
@@ -81,6 +97,9 @@ function makeSession({ title, fixture, approvalFlow, live }) {
     model: fixture ? "k3-fixture" : "mock-echo",
     thinkingEffort: "medium",
     modelLocked: false,
+    // Mirrors agentlinkd's default so the pack approval guard is exercisable
+    // in the mock; approval-flow fixtures stay on "ask". `/approval <p>` overrides.
+    approvalProfile: approvalFlow ? null : "auto-read",
     turns: 0,
     cwd: "/tmp/scratch",
     status: live ? "live" : "cold",
@@ -124,7 +143,7 @@ function metaOf(s) {
     provider: s.provider,
     thinking_effort: s.thinkingEffort,
     model_locked: s.modelLocked,
-    approval_profile: s.approvalFlow ? "ask" : "always",
+    approval_profile: s.approvalProfile ?? (s.approvalFlow ? "ask" : "always"),
     status: s.status,
     created_at: s.createdAt,
     updated_at: Date.now(),
@@ -198,6 +217,8 @@ function echoPlan(text) {
   // table/list/link/chart rendering is verifiable end-to-end against a live
   // stream.
   if (/\b(markdown|table|demo)\b/i.test(text)) return demoPlan();
+  const pack = /^\/pack\s+run\s+(\S+)\s*(.*)$/s.exec(text.trim());
+  if (pack) return packPlan(pack[1], pack[2]);
   return [
     { event: "turn_start", delay: 5 },
     { event: "text_delta", data: "Mock agent: ", delay: 12 },
@@ -226,6 +247,21 @@ function echoPlan(text) {
       delay: 4,
     },
     { event: "turn_end", data: { usage: usage(12, 24), failed: false }, delay: 4 },
+  ];
+}
+
+// A pack run: tool activity, then a pack-authored runtime_view card carrying
+// a chart fence — the shape a real pack produces through dext.
+function packPlan(name, task) {
+  const md = `Ran **${name}** on: _${task || "(no task)"}_\n\n\`\`\`chart\n{"type":"bar","title":"${name} result","labels":["a","b","c"],"values":[3,7,5],"unit":""}\n\`\`\``;
+  return [
+    { event: "turn_start", delay: 5 },
+    { event: "tool_call_start", data: { call_id: "p1", name: "bash", summary: `bin/${name} --task` }, delay: 10 },
+    { event: "tool_call_result", data: { call_id: "p1", name: "bash", ok: true, preview: "ok", content: "ok" }, delay: 40 },
+    { event: "runtime_view", data: { pack: name, title: `${name} result`, markdown: md }, delay: 10 },
+    { event: "text_block_complete", data: `Done — the ${name} pack produced one chart.`, delay: 8 },
+    { event: "usage_update", data: { turn: usage(20, 40), session: usage(20, 40) }, delay: 4 },
+    { event: "turn_end", data: { usage: usage(20, 40), failed: false }, delay: 4 },
   ];
 }
 
@@ -478,6 +514,7 @@ function handleCommand(client, frame) {
       model_catalog: MOCK_MODEL_CATALOG,
       effort_options: EFFORT_OPTIONS,
       commands: COMMANDS,
+      packs: PACKS,
     });
     return;
   }
@@ -712,7 +749,41 @@ function handleCommand(client, frame) {
         sendError(client, "no_session", `unknown session ${frame.session}`);
         return;
       }
-      publish(journalData(s, "slash", `[mock] ${String(frame.raw ?? "").slice(0, 200)}`));
+      const raw = String(frame.raw ?? "").trim();
+      const run = /^\/packs?\s+run\s+(\S+)\s*(.*)$/s.exec(raw);
+      if (run) {
+        const pack = PACKS.find((p) => p.name === run[1]);
+        if (!pack) {
+          sendError(client, "no_pack", `unknown pack '${run[1]}'; see /pack list`);
+          return;
+        }
+        const need = pack.ui.requires.find((r) => r.startsWith("approval:"));
+        const profile = s.approvalProfile ?? (s.approvalFlow ? "ask" : "always");
+        if (need && profile !== need.slice(9) && profile !== "always") {
+          sendControl(client, "error", { code: "pack_requires_profile", message: `${pack.name} needs approval profile ${need.slice(9)}; this session is ${profile}`, data: { pack: pack.name, required: need.slice(9), current: profile, session: s.id } });
+          return;
+        }
+        if (s.working) {
+          sendError(client, "busy", "turn in flight");
+          return;
+        }
+        publish(journalData(s, "user_message", { text: raw }));
+        if (s.title === "New session") s.title = raw.slice(0, 60);
+        beginTurn(s, echoPlan(raw));
+        return;
+      }
+      if (/^\/packs?(\s+list)?$/.test(raw)) {
+        publish(journalData(s, "structured_slash", [`packs  ${PACKS.length} installed`, ...PACKS.map((p) => `  ${p.name.padEnd(14)} ${p.shelf}  ${p.description.slice(0, 60)}`)].join("\n")));
+        return;
+      }
+      if (/^\/approval\s+\S+$/.test(raw)) {
+        s.approvalProfile = raw.split(/\s+/)[1];
+        publish(journalData(s, "approval_profile_changed", { profile: s.approvalProfile }));
+        publish(journalData(s, "slash", `approval profile → ${s.approvalProfile} (next turn)`));
+        scheduleList();
+        return;
+      }
+      publish(journalData(s, "slash", `[mock] ${raw.slice(0, 200)}`));
       return;
     }
 

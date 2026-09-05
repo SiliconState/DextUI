@@ -3,7 +3,7 @@
   // web-native content (real markdown, scrollable raw output). Structure rails
   // are CSS borders, never literal glyphs — glyph gutters shred when lines wrap.
   import type { ViewBlock as Block } from "@dextui/client";
-  import { app, copyText } from "../lib/state.svelte";
+  import { app, copyText, packOfPrompt, prefillComposer } from "../lib/state.svelte";
   import { fileUrl, htmlPathIn } from "../lib/files";
   import { prettyPath } from "../lib/markdown";
   import Markdown from "./Markdown.svelte";
@@ -24,6 +24,23 @@
 
   function looksLikeDiff(t: string): boolean {
     return /^[-+]{3} |^@@ |^diff --git /m.test(t);
+  }
+
+  // Pack attribution for a turn comes from its own journaled prompt: the host
+  // accepts `/pack run <name>` only for catalog names, so the prefix is
+  // authoritative and replays on old journals without a new event.
+  const userPack = $derived(block.kind === "user" ? packOfPrompt(block.text) : null);
+  const packMeta = $derived(block.kind === "view" ? app.packs.find((p) => p.name === block.pack) : undefined);
+
+  function editPack(name: string) {
+    const p = app.packs.find((x) => x.name === name);
+    prefillComposer(`Edit the ${name} pack${p ? ` at ${p.path}` : ""}: `);
+  }
+
+  function forkPack(name: string) {
+    const p = app.packs.find((x) => x.name === name);
+    const shelf = p?.shelf ?? "mine";
+    prefillComposer(`Make my own copy of the ${name} pack: run \`dext pack create ${shelf}/${name}-mine\`, copy the files from ${p?.path ?? `the ${name} pack directory`} into it (keep the original untouched), set name: ${name}-mine in PACK.md, then `);
   }
 
   const markerGlyph: Record<string, string> = {
@@ -58,8 +75,9 @@
 </script>
 
 {#if block.kind === "user"}
-  <div class="b-user" data-agent-id="block.user">
+  <div class="b-user" data-agent-id="block.user" data-pack={userPack ?? undefined}>
     <span class="pg">❯</span>
+    {#if userPack}<span class="pack-badge st-magenta" data-agent-id="block.user.pack" title="run through this pack">▣ {userPack}</span>{/if}
     <span class="b-user-text">{block.text}</span>
   </div>
 {:else if block.kind === "text"}
@@ -133,13 +151,22 @@
 {:else if block.kind === "view"}
   <div class="tool view" data-agent-id={`view.${block.pack}`}>
     <div class="tool-head">
-      <span class="st-magenta">{block.pack}</span>
+      <span class="st-magenta">▣ {block.pack}</span>
       <span class="faint">·</span>
       <span class="dim tool-summary">{block.title}</span>
     </div>
     <div class="view-body">
       <Markdown src={block.markdown} sessionId={sessionId} />
     </div>
+    {#if app.caps.includes("packs")}
+      <div class="view-foot" data-agent-id={`view.${block.pack}.actions`}>
+        <button class="act" data-agent-id={`view.${block.pack}.rerun`} onclick={() => prefillComposer(`/pack run ${block.pack} `)}>run again</button>
+        {#if packMeta}
+          <button class="act" data-agent-id={`view.${block.pack}.edit`} title={packMeta.path} onclick={() => editPack(block.pack)}>edit pack</button>
+          <button class="act" data-agent-id={`view.${block.pack}.fork`} onclick={() => forkPack(block.pack)}>make my own</button>
+        {/if}
+      </div>
+    {/if}
   </div>
 {/if}
 
@@ -158,6 +185,19 @@
   .b-user-text {
     white-space: pre-wrap;
     color: var(--fg);
+  }
+  .pack-badge {
+    flex-shrink: 0;
+    font-size: 11px;
+    border: 1px solid var(--line);
+    padding: 0 5px;
+  }
+  .view-foot {
+    display: flex;
+    gap: 12px;
+    padding: 4px 8px 6px;
+    border-top: 1px solid var(--line);
+    font-size: 11px;
   }
   .b-text {
     position: relative;

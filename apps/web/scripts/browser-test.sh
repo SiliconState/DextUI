@@ -1,5 +1,5 @@
 set -uo pipefail
-cd "$(dirname "$0")/../.."
+cd "$(dirname "$0")/../../.."
 PORT="${PORT:-8793}"
 node packages/mock-server/src/server.mjs --port=$PORT --token=browsertest >/tmp/dextui-bt-mock.log 2>&1 &
 SRV=$!
@@ -102,5 +102,34 @@ agent-browser wait '[data-agent-id="session.action.confirm"]' >/dev/null
 agent-browser click '[data-agent-id="session.action.confirm"]' >/dev/null
 wait_js '!document.querySelector(`[data-agent-id="session.sess_002.open"]`)' || { echo "FAIL: removal"; FAIL=1; }
 wait_js 'localStorage.getItem("dextui.draft.sess_002") === null && localStorage.getItem("dextui.history.sess_002") === null && localStorage.getItem("dextui.generation.sess_002") === null' || { echo "FAIL: local purge"; FAIL=1; }
+
+note "packs: gallery in hero, card prefills composer, run → badged turn + runtime_view footer, g overlay"
+agent-browser click '[data-agent-id="session.new"]' >/dev/null
+agent-browser wait '[data-agent-id="composer.input"]' >/dev/null
+sleep 0.6
+wait_js '!!document.querySelector(`[data-agent-id="packs.gallery"][data-state="ready"]`)' || { echo "FAIL: gallery not rendered in empty session"; FAIL=1; }
+wait_js 'document.querySelector(`[data-agent-id="packs.card.report"]`)?.dataset.state === "unmet"' || { echo "FAIL: report card should be greyed (needs auto-write)"; FAIL=1; }
+agent-browser click '[data-agent-id="packs.card.hello-chart"]' >/dev/null
+wait_js 'document.querySelector(`[data-agent-id="composer.input"]`).value.startsWith("/pack run hello-chart")' || { echo "FAIL: card did not prefill"; FAIL=1; }
+agent-browser press Enter >/dev/null
+wait_js '!!document.querySelector(`[data-agent-id="block.user.pack"]`) && document.querySelector(`[data-agent-id="block.user.pack"]`).textContent.includes("hello-chart")' || { echo "FAIL: pack badge on user block"; FAIL=1; }
+wait_js '!!document.querySelector(`[data-agent-id="view.hello-chart.rerun"]`)' || { echo "FAIL: runtime_view footer"; FAIL=1; }
+wait_js 'document.querySelectorAll(`[data-agent-id="view.hello-chart"] .chart-wrap`).length === 1' || { echo "FAIL: chart inside view card"; FAIL=1; }
+agent-browser click '[data-agent-id="view.hello-chart.rerun"]' >/dev/null
+wait_js 'document.querySelector(`[data-agent-id="composer.input"]`).value === "/pack run hello-chart "' || { echo "FAIL: run again prefill"; FAIL=1; }
+agent-browser fill '[data-agent-id="composer.input"]' '/pack run report x' >/dev/null
+agent-browser press Enter >/dev/null
+wait_js '!!document.querySelector(`[data-agent-id^="toast."][data-agent-id$=".action"]`)' || { echo "FAIL: pack_requires_profile toast action"; FAIL=1; }
+agent-browser click '[data-agent-id^="toast."][data-agent-id$=".action"]' >/dev/null
+wait_js 'document.body.textContent.includes("approval profile → auto-write")' || { echo "FAIL: one-click profile switch"; FAIL=1; }
+agent-browser fill '[data-agent-id="composer.input"]' '/pack run report x' >/dev/null
+agent-browser press Enter >/dev/null
+wait_js '!!document.querySelector(`[data-agent-id="view.report.rerun"]`)' || { echo "FAIL: report runs after switch"; FAIL=1; }
+agent-browser fill '[data-agent-id="composer.input"]' '' >/dev/null
+agent-browser eval 'document.activeElement.blur()' >/dev/null
+agent-browser press g >/dev/null
+wait_js '!!document.querySelector(`[data-agent-id="packs.overlay"]`)' || { echo "FAIL: g overlay"; FAIL=1; }
+agent-browser press Escape >/dev/null
+wait_js '!document.querySelector(`[data-agent-id="packs.overlay"]`)' || { echo "FAIL: overlay esc"; FAIL=1; }
 
 if [ $FAIL -eq 0 ]; then echo "ALL BROWSER CHECKS PASSED"; else echo "BROWSER CHECKS FAILED"; exit 1; fi

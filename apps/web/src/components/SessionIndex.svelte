@@ -1,7 +1,7 @@
 <script lang="ts">
   // Session index: a plain text list, like dext's own listings.
   // Status glyphs mirror the TUI: ● live · ● starting (pulse) · ○ cold · ● exited.
-  import { app, activate, newSession, closeSession, wakeSession, requestSessionAction } from "../lib/state.svelte";
+  import { app, activate, newSession, closeSession, wakeSession, requestSessionAction, prefillComposer } from "../lib/state.svelte";
   import SessionAction from "./SessionAction.svelte";
   import ActionQueue from "./ActionQueue.svelte";
 
@@ -13,7 +13,23 @@
 
   let query = $state("");
   let menu = $state("");
+  let packsOpen = $state(localStorage.getItem("dextui.railPacksOpen") === "1");
   const canManage = $derived(app.caps.includes("session_manage"));
+  const hasPacks = $derived(app.caps.includes("packs") && app.packs.length > 0);
+  const packShelves = $derived.by(() => {
+    const by = new Map<string, typeof app.packs>();
+    for (const p of app.packs) {
+      const k = p.shelf ?? "other";
+      if (!by.has(k)) by.set(k, []);
+      by.get(k)!.push(p);
+    }
+    return [...by.entries()].sort(([a], [b]) => a.localeCompare(b));
+  });
+
+  function togglePacks() {
+    packsOpen = !packsOpen;
+    localStorage.setItem("dextui.railPacksOpen", packsOpen ? "1" : "0");
+  }
   const disabled = $derived(app.phase !== "live" || app.sessionPending);
 
   const filtered = $derived(
@@ -108,6 +124,33 @@
       <p class="idx-empty" data-agent-id="session.rail.empty">{app.sessions.length ? "no matches" : "No sessions yet — start with + new."}</p>
     {/each}
   </div>
+  {#if hasPacks}
+    <div class="idx-packs" data-agent-id="rail.packs" data-state={packsOpen ? "open" : "closed"}>
+      <button class="idx-packs-head" aria-expanded={packsOpen} data-agent-id="rail.packs.toggle" onclick={togglePacks}>
+        <span class="faint">{packsOpen ? "▾" : "▸"}</span> <span class="st-magenta">packs</span> <span class="faint">{app.packs.length}</span>
+        <span class="faint idx-packs-g">g</span>
+      </button>
+      {#if packsOpen}
+        <div class="idx-packs-list">
+          {#each packShelves as [shelf, list] (shelf)}
+            <div class="idx-shelf faint">{shelf}</div>
+            {#each list as p (p.name)}
+              <div class="idx-pack">
+                <button class="idx-pack-run" data-agent-id={`rail.packs.${p.name}.run`} title={p.description}
+                  onclick={() => { prefillComposer(p.ui.starter_prompt.startsWith("/pack") ? p.ui.starter_prompt : `/pack run ${p.name} ${p.ui.starter_prompt}`); onPick?.(); }}>
+                  <span class:st-cyan={!p.unmet.length} class:faint={p.unmet.length > 0}>{p.name}</span>
+                  {#if p.unmet.length}<span class="st-warn" title={`needs ${p.unmet.join(", ")}`}>!</span>{/if}
+                </button>
+                <button class="act idx-pack-edit" data-agent-id={`rail.packs.${p.name}.edit`} title={`edit ${p.path}`}
+                  onclick={() => { prefillComposer(`Edit the ${p.name} pack at ${p.path}: `); onPick?.(); }}>edit</button>
+              </div>
+            {/each}
+          {/each}
+          <button class="act idx-pack-new" data-agent-id="rail.packs.new" onclick={() => { prefillComposer("/pack create "); onPick?.(); }}>+ new pack</button>
+        </div>
+      {/if}
+    </div>
+  {/if}
   <div class="idx-foot faint">⌘k finder · a/s/d approve</div>
 </div>
 
@@ -201,6 +244,18 @@
     border-top: 1px solid var(--line);
     font-size: 11px;
   }
+  .idx-packs { border-top: 1px solid var(--line); max-height: 40%; display: flex; flex-direction: column; min-height: 0; }
+  .idx-packs-head { display: flex; gap: 6px; align-items: baseline; width: 100%; padding: 6px 10px; }
+  .idx-packs-head:hover { background: var(--bg2); }
+  .idx-packs-g { margin-left: auto; border: 1px solid var(--line); padding: 0 4px; font-size: 10px; }
+  .idx-packs-list { overflow-y: auto; min-height: 0; padding: 2px 0 6px; }
+  .idx-shelf { padding: 4px 10px 0; font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; }
+  .idx-pack { display: flex; align-items: baseline; }
+  .idx-pack-run { flex: 1; min-width: 0; display: flex; gap: 6px; padding: 2px 10px 2px 18px; text-align: left; overflow: hidden; }
+  .idx-pack-run:hover { background: var(--bg2); }
+  .idx-pack-edit { visibility: hidden; padding: 2px 10px; font-size: 11px; }
+  .idx-pack:hover .idx-pack-edit, .idx-pack:focus-within .idx-pack-edit { visibility: visible; }
+  .idx-pack-new { padding: 4px 10px 0 18px; font-size: 11px; }
   .faint {
     color: var(--faint);
   }

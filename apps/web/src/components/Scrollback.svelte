@@ -3,6 +3,8 @@
   // Web-native where it matters: scroll pinning + jump-to-latest.
   import type { SessionStore, ViewBlock } from "@dextui/client";
   import Block from "./Block.svelte";
+  import PackGallery from "./PackGallery.svelte";
+  import { app } from "../lib/state.svelte";
   import { fmtElapsed } from "../lib/markdown";
   import { useSession } from "../lib/useSession.svelte";
 
@@ -52,8 +54,11 @@
     <div class="sb-axis content-axis">
       {#if view.blocks.length === 0}
         <div class="sb-empty" data-agent-id="transcript.empty">
-          <p><span class="st-green">❯</span> <span class="dim">fresh session — type a request below.</span></p>
-          <p class="faint">journal events replay here on connect · / commands · ⌘k finder</p>
+          <p><span class="st-green">❯</span> <span class="dim">fresh session — type a request below{app.packs.length ? ", or pick a pack:" : "."}</span></p>
+          {#if app.packs.length}
+            <PackGallery compact />
+          {/if}
+          <p class="faint">journal events replay here on connect · / commands · ⌘k finder{app.packs.length ? " · g packs" : ""}</p>
         </div>
       {:else}
         {#each view.blocks as block (block.id)}

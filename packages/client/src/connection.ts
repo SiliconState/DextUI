@@ -9,6 +9,7 @@ import {
   type DeleteScope,
   type HostCommand,
   type ModelGroup,
+  type PackInfo,
   type SessionMeta,
   type ThinkingEffort,
 } from "@dextui/protocol";
@@ -24,7 +25,9 @@ export interface ConnectionOpts {
   onSessionList?: (sessions: SessionMeta[]) => void;
   onSessionRemoved?: (id: string) => void;
   onSessionCleared?: (id: string, generation: number) => void;
-  onControlError?: (code: string, message: string) => void;
+  /** Full catalog replacement (hello_ok and every packs.changed). */
+  onPacksChanged?: (packs: PackInfo[]) => void;
+  onControlError?: (code: string, message: string, data?: Record<string, unknown>) => void;
   onSeqGap?: (sessionId: string, expected: number, got: number) => void;
   /** The host process changed between connections; all session stores were reset. */
   onHostRestart?: (instance: string) => void;
@@ -42,6 +45,7 @@ export class Connection {
   modelCatalog: ModelGroup[] = [];
   effortOptions: ThinkingEffort[] = [];
   commands: HostCommand[] = [];
+  packs: PackInfo[] = [];
   /** Host process identity from the last hello_ok (undefined for legacy hosts). */
   instance?: string;
   sessions = new Map<string, SessionStore>();
@@ -284,11 +288,14 @@ export class Connection {
           model_catalog?: ModelGroup[];
           effort_options?: ThinkingEffort[];
           commands?: HostCommand[];
+          packs?: PackInfo[];
         };
         this.capabilities = d.capabilities;
         this.modelCatalog = d.model_catalog ?? [];
         this.effortOptions = d.effort_options ?? [];
         this.commands = d.commands ?? [];
+        this.packs = d.packs ?? [];
+        this.opts.onPacksChanged?.(this.packs);
         this.attempt = 0;
         // A different host process may reuse session ids and even tail seqs;
         // resuming by seq would splice the old transcript onto the new one.
@@ -341,11 +348,17 @@ export class Connection {
         this.reset(d.id, d.generation, true);
         break;
       }
+      case "packs.changed": {
+        const d = env.data as { packs: PackInfo[] };
+        this.packs = d.packs ?? [];
+        this.opts.onPacksChanged?.(this.packs);
+        break;
+      }
       case "pong":
         return;
       case "error": {
-        const d = env.data as { code: string; message: string };
-        this.opts.onControlError?.(d.code, d.message);
+        const d = env.data as { code: string; message: string; data?: Record<string, unknown> };
+        this.opts.onControlError?.(d.code, d.message, d.data);
         break;
       }
       default:

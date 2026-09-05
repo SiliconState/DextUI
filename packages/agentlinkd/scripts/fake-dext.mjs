@@ -14,6 +14,25 @@ if (process.argv[2] === "auth" && (process.argv[3] === "status" || process.argv[
   );
   process.exit(0);
 }
+// `dext pack list --verbose` shape (see packs.rs render_pack_listing_opts).
+// Paths come from FAKE_PACKS_ROOT so tests can plant PACK.md files.
+if (process.argv[2] === "pack" && (process.argv[3] === "list" || process.argv[3] === undefined)) {
+  const root = process.env.FAKE_PACKS_ROOT || "/nonexistent";
+  process.stdout.write(
+    `Packs  3 found\n  hello-chart\n    Emit one interactive chart fence.\n    source: user:${root}/samples\n    shelf: samples\n    path: ${root}/samples/packs/hello-chart\n\n` +
+    `  report\n    Generate self-contained interactive HTML5 reports from a\n    small JSON spec.\n    source: user:${root}/research\n    shelf: research\n    path: ${root}/research/packs/report\n\n` +
+    `  mesh\n    Peer-to-peer mailbox.\n    source: user:${root}/orchestration\n    shelf: orchestration\n    path: ${root}/orchestration/packs/mesh\n`,
+  );
+  process.exit(0);
+}
+if (process.argv[2] === "pack" && process.argv[3] === "inspect") {
+  process.stdout.write(`pack ${process.argv[4]}\n  fake inspect output\n`);
+  process.exit(0);
+}
+if (process.argv[2] === "pack" && process.argv[3] === "create") {
+  process.stdout.write(`created pack: /fake/${process.argv[4]}\nnext: edit /fake/${process.argv[4]}/PACK.md\n`);
+  process.exit(0);
+}
 
 const prompt = await new Promise((resolve) => {
   let s = "";
@@ -39,12 +58,15 @@ await sleep(180);
 emit("text_delta", "fake ");
 await sleep(180);
 const resumed = process.argv.includes("--resume");
+const packAt = process.argv.indexOf("--pack");
+const pack = packAt >= 0 ? process.argv[packAt + 1] : null;
 const partial = prompt.includes("partial-stream");
-const text = `fake ${prompt.trim()}${resumed ? " [resumed]" : ""} [${provider}/${model}; effort=${effort}]`;
+const text = `fake ${prompt.trim()}${resumed ? " [resumed]" : ""}${pack ? ` [pack=${pack}]` : ""} [${provider}/${model}; effort=${effort}]`;
 if (partial) {
   emit("warn", "provider closed the stream after partial text; preserved partial response instead of replaying the same turn");
 }
 emit("text_block_complete", text);
+if (pack) emit("runtime_view", { pack, title: `${pack} result`, markdown: `ran **${pack}**` });
 emit("thinking_effort_changed", { effort });
 emit("usage_update", { turn: usage, session: usage });
 emit("turn_diagnostics", {

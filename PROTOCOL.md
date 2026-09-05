@@ -12,7 +12,7 @@ Design rules:
 ## Transport
 
 - WebSocket at `/ws` (primary, bidirectional — approvals require it).
-- REST on the same origin: `GET /health`, `GET /sessions`, `GET /sessions/:id`, `GET /sessions/:id/todos`, `GET /sessions/:id/file`, `GET /__agent`. The host also serves the PWA statically from `/`, so API and app share an origin and there is no CORS surface. The app shell and static assets are **unauthenticated** (they contain no data); every data endpoint and the WebSocket require the pairing token.
+- REST on the same origin: `GET /health`, `GET /sessions`, `GET /sessions/:id`, `GET /sessions/:id/todos`, `GET /sessions/:id/file`, `GET /packs`, `GET /packs/:name`, `GET /__agent`. The host also serves the PWA statically from `/`, so API and app share an origin and there is no CORS surface. The app shell and static assets are **unauthenticated** (they contain no data); every data endpoint and the WebSocket require the pairing token.
 - SSE fallback (`GET /sessions/:id/stream?since_seq=N`) is reserved for read-only tailing; not required for conformance v1.
 
 ## Envelope
@@ -48,14 +48,15 @@ Commands are fire-and-forget; effects arrive as events. Only two commands have d
 
 | event | data | meaning |
 |---|---|---|
-| `hello_ok` | `{server, version, protocol, instance?, capabilities[], sessions[], model_catalog?, effort_options?, commands?}` | auth accepted; includes session list and optional host controls |
+| `hello_ok` | `{server, version, protocol, instance?, capabilities[], sessions[], model_catalog?, effort_options?, commands?, packs?}` | auth accepted; includes session list and optional host controls |
 | `hello_fail` | `{reason}` | auth or version rejected; socket closes |
 | `session.list` | `{sessions[]}` | pushed whenever the list changes |
 | `session.removed` | `{id, by?}` | session purged (by any client); drop stores, subscriptions, and local drafts; late tails for `id` must be ignored |
 | `session.cleared` | `{id, generation}` | session history purged in place; drop the store and resubscribe without `since_seq` |
 | `sessions.deleted` | `{ids[], scope}` | summary reply to `session.delete_all` |
+| `packs.changed` | `{packs[]}` | full catalog replacement whenever a pack directory tree changes (host watches its pack roots) |
 | `pong` | `{}` | reply to `ping` |
-| `error` | `{code, message}` | rejected command; no state changed |
+| `error` | `{code, message, data?}` | rejected command; no state changed. `data` carries machine-readable detail for codes that have a follow-up action |
 
 `SessionMeta`: `{id, title, cwd, generation?, agent:{name,version}, ...}`. `title` is host-derived from the first prompt (60 chars); `session.rename` overrides. `generation` increments on every `session.clear` and survives host restarts, so clients detect clears they missed while offline by comparing the list against their remembered generation.
 
@@ -64,6 +65,8 @@ Commands are fire-and-forget; effects arrive as events. Only two commands have d
 `instance` is a random string fixed for the lifetime of the host process. A client that reconnects and sees a **different** `instance` must treat every local session projection as stale: drop its stores and resubscribe without `since_seq` (a restarted host may reuse session ids and even the same tail `seq`). The same `instance` means seq-resume is safe. Hosts that omit `instance` are treated as restarted on every reconnect.
 
 `commands` is the list of slash commands the host itself handles, `[{cmd, desc}]`, and drives the client's `/` completion menu. When absent, clients may fall back to deriving a list from `slash.*` capabilities.
+
+`packs` (capability `packs`) is the host's pack catalog: `[{name, shelf?, description, source, path, ui:{starter_prompt, artifact, time_to_first_artifact, requires[], gallery, tags[], icon?}, unmet[]}]`. `ui` comes from flat `ui-*` keys in the pack's `PACK.md` front matter, falling back to host defaults; `unmet` lists requirements the host cannot satisfy right now (e.g. `approval:auto-write` under a stricter default profile, `chromium` with no browser on PATH). The same shape is served by `GET /packs`; `GET /packs/:name` adds a shallow, read-only `files[]` listing (names and sizes, never contents). Hosts run packs through the ordinary `slash` command: `/pack run <name> <task>` (also `/pack <name> <task>`) journals the prompt as `user_message` verbatim — so the `/pack run <name>` prefix is the turn's pack attribution on replay — and starts the turn with the pack activated. A run whose requirements the session cannot meet is refused before anything is journaled with control `error {code:"pack_requires_profile", data:{pack, required, current, session}}` (approval) or `pack_requires` (anything else). `/pack list`, `/pack inspect <name>`, `/pack create <shelf>/<name>` reply as `structured_slash`/`slash` data events.
 
 ## Data plane (sequenced, journaled)
 
@@ -157,7 +160,7 @@ Tool cards are keyed by `call_id`, and `name`/`summary` are **sticky**: an event
 
 ## Capabilities
 
-Advertised in `hello_ok`: `approvals`, `steering`, `interrupt`, `slash`, `multi_session`, `usage`, `thinking`, `model_select`, `effort_select`, `todos_read`, `files_read`, `session_manage`, `checkpoints`, `seats`, `packs`, `push`. A host without `approvals` never sends `permission.request`; a client without approval UI must not subscribe to sessions that require them. Model/effort controls require both their capability and option data. Extensions are namespaced: `x-<host>.<thing>`.
+Advertised in `hello_ok`: `approvals`, `steering`, `interrupt`, `slash`, `multi_session`, `usage`, `thinking`, `model_select`, `effort_select`, `todos_read`, `files_read`, `session_manage`, `packs`, `checkpoints`, `seats`, `push`. A host without `approvals` never sends `permission.request`; a client without approval UI must not subscribe to sessions that require them. Model/effort controls require both their capability and option data. Extensions are namespaced: `x-<host>.<thing>`.
 
 ## Agent surface
 

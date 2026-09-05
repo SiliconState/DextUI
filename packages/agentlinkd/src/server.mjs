@@ -27,10 +27,11 @@ import fs from "node:fs";
 import path from "node:path";
 import url from "node:url";
 import crypto from "node:crypto";
-import { spawn, spawnSync } from "node:child_process";
+import { spawn, spawnSync, execFile } from "node:child_process";
 import { acceptKey, FrameParser, encodeFrame, OP_PONG, OP_TEXT } from "../../mock-server/src/ws.mjs";
 import { fold, foldMeta } from "../../mock-server/src/fold.mjs";
 import { checkedPath, purgeSeat, seatFiles } from "./session-files.mjs";
+import { APPROVAL_RANK, PACK_NAME_RE, buildCatalog, listPackFiles, packCommands, parsePackSlash, renderPackList, unmetRequirements } from "./packs.mjs";
 
 const here = path.dirname(url.fileURLToPath(import.meta.url));
 const repoRoot = path.join(here, "..", "..", "..");
@@ -205,6 +206,8 @@ const CAPABILITIES = [
   // session.delete / session.clear / session.delete_all: true purge of the
   // journal, index entry, and the dext seat's own state dirs.
   "session_manage",
+  // hello_ok.packs + /pack run|list|create|inspect + GET /packs + packs.changed.
+  "packs",
 ];
 
 // Host-handled slash commands, advertised in hello_ok so the composer's
@@ -217,6 +220,66 @@ const COMMANDS = [
 // Random per process: lets clients tell a reconnect to the same host (resume
 // by seq) from a reconnect to a restarted one (resync from snapshot).
 const INSTANCE = crypto.randomBytes(8).toString("hex");
+
+// ---------- packs ----------
+
+// Boot discovery is sync like models (one extra spawnSync, typically <1 s).
+// Refreshes are async and serialized: a sync spawn on the event loop would
+// stall every WebSocket client for up to 15 s while dext walks the shelves.
+let PACKS = buildCatalog(dextOutput(["pack", "list", "--verbose"]), { approval: DEFAULT_APPROVAL });
+let packRefresh = null;
+let packWatchTimer = null;
+
+function refreshPacks() {
+  if (packRefresh) return packRefresh;
+  packRefresh = new Promise((resolve) => {
+    execFile(DEXT_BIN, ["pack", "list", "--verbose"], { env: { ...process.env, DEXT_NO_TUI: "1" }, timeout: 15_000, maxBuffer: 4 * 1024 * 1024 }, (err, stdout) => {
+      packRefresh = null;
+      if (err) {
+        console.error(`agentlinkd: pack refresh failed: ${err.message}`);
+        resolve(PACKS);
+        return;
+      }
+      const next = buildCatalog(stdout, { approval: DEFAULT_APPROVAL });
+      const changed = JSON.stringify(next) !== JSON.stringify(PACKS);
+      PACKS = next;
+      if (changed) broadcastControl("packs.changed", { packs: PACKS });
+      resolve(PACKS);
+    });
+  });
+  return packRefresh;
+}
+
+function schedulePackRefresh() {
+  clearTimeout(packWatchTimer);
+  packWatchTimer = setTimeout(() => void refreshPacks(), 500);
+}
+
+// Watch every root dext reads packs from. Recursive fs.watch is native on
+// Linux (Node 20+) and macOS; on platforms without it we fall back to the
+// slash-command-driven refresh (create/inspect/run all re-list afterwards).
+function watchPackRoots() {
+  const home = process.env.DEXT_HOME ? path.resolve(process.env.DEXT_HOME) : path.join(process.env.HOME ?? "", ".dext");
+  const roots = [path.join(home, "shelves"), path.join(home, "packs"), path.join(DEFAULT_CWD, ".dext", "shelves"), path.join(DEFAULT_CWD, ".dext", "packs")];
+  for (const root of roots) {
+    try {
+      if (!fs.existsSync(root) || fs.lstatSync(root).isSymbolicLink()) continue;
+      const w = fs.watch(root, { recursive: true, persistent: false }, () => schedulePackRefresh());
+      w.on("error", () => {});
+    } catch (err) {
+      console.error(`agentlinkd: not watching ${root}: ${err.message}`);
+    }
+  }
+}
+
+function packByName(name) {
+  return PACK_NAME_RE.test(name) ? PACKS.find((p) => p.name === name) ?? null : null;
+}
+
+/** Curated-then-alphabetical, exactly what clients see in hello_ok. */
+function hostCommands() {
+  return [...COMMANDS, ...packCommands(PACKS)];
+}
 
 // ---------- state ----------
 
@@ -577,6 +640,15 @@ function runTurn(s, prompt) {
     "--seat",
     s.seat,
   ];
+  // `/pack run <name> <task>` (typed, queued as steering, or from the gallery)
+  // becomes an explicit `--pack` invocation; only the task travels on stdin.
+  // The name was validated against the catalog before the prompt was journaled.
+  const packRun = parsePackSlash(prompt);
+  let stdinText = prompt;
+  if (packRun?.sub === "run" && packByName(packRun.name)) {
+    args.push("--pack", packRun.name);
+    stdinText = packRun.task;
+  }
   if (s.turns > 0) args.push("--resume");
   const childEnv = { ...process.env, DEXT_NO_TUI: "1" };
   if (s.provider && s.model) {
@@ -605,7 +677,7 @@ function runTurn(s, prompt) {
   // A failed spawn (ENOENT etc.) destroys stdin and emits an async stream
   // error; without a listener that unhandled error would crash the server.
   child.stdin.on("error", () => {});
-  child.stdin.write(prompt);
+  child.stdin.write(stdinText);
   child.stdin.end();
 
   const handleLine = (line) => {
@@ -896,6 +968,16 @@ const HOST_HELP = [
 
 function handleSlash(client, s, raw) {
   const trimmed = String(raw ?? "").trim();
+  const pack = parsePackSlash(trimmed);
+  if (pack) {
+    if (pack.sub === "run" && s.working) {
+      // Same semantics as a prompt sent mid-turn: queue for the boundary.
+      if (guardPackRun(client, s, pack)) return;
+      if (!queueSteering(s, `/pack run ${pack.name} ${pack.task}`)) sendError(client, "busy", "steering queue is full (10 messages / 100k chars); interrupt or wait");
+      return;
+    }
+    return handlePackSlash(client, s, pack);
+  }
   if (trimmed === "/help") {
     publish(journalData(s, "slash", HOST_HELP));
     return;
@@ -913,7 +995,107 @@ function handleSlash(client, s, raw) {
     publish(journalData(s, "slash", `approval profile → ${profile} (next turn)`));
     return;
   }
-  sendError(client, "unsupported", `host handles /help and /approval only; '${trimmed.split(/\s/)[0]}' needs interactive dext`);
+  sendError(client, "unsupported", `host handles /help, /approval and /pack; '${trimmed.split(/\s/)[0]}' needs interactive dext`);
+}
+
+// ---------- packs: slash + prompt routing ----------
+
+function dextOutputAsync(args, cwd) {
+  return new Promise((resolve) => {
+    execFile(DEXT_BIN, args, { cwd, env: { ...process.env, DEXT_NO_TUI: "1" }, timeout: 15_000, maxBuffer: 1024 * 1024 }, (err, stdout, stderr) => {
+      resolve({ ok: !err, out: String(stdout ?? ""), err: String(stderr ?? err?.message ?? "") });
+    });
+  });
+}
+
+/** Validate a `/pack run` request against the catalog and the session's
+ *  approval profile. Returns null when it may proceed; otherwise sends the
+ *  error (with `data.required` for a one-click profile switch) and returns it. */
+function guardPackRun(client, s, run) {
+  const pack = packByName(run.name);
+  if (!pack) {
+    sendError(client, "no_pack", `unknown pack '${run.name}'; see /pack list`);
+    return "no_pack";
+  }
+  if (!run.task) {
+    sendError(client, "bad_request", `/pack run ${pack.name} needs a task`);
+    return "bad_request";
+  }
+  const unmet = unmetRequirements(pack.ui.requires, { approval: s.approval });
+  const profile = unmet.find((u) => u.startsWith("approval:"));
+  if (profile) {
+    const required = profile.slice("approval:".length);
+    sendControl(client, "error", {
+      code: "pack_requires_profile",
+      message: `${pack.name} needs approval profile ${required}; this session is ${s.approval}. Headless dext would deny its writes silently.`,
+      data: { pack: pack.name, required, current: s.approval, session: s.id },
+    });
+    return "pack_requires_profile";
+  }
+  if (unmet.length > 0) {
+    sendError(client, "pack_requires", `${pack.name} needs ${unmet.join(", ")} which this host does not have`);
+    return "pack_requires";
+  }
+  return null;
+}
+
+async function handlePackSlash(client, s, cmd) {
+  switch (cmd.sub) {
+    case "list": {
+      const view = PACKS.map((p) => ({ ...p, unmet: unmetRequirements(p.ui.requires, { approval: s.approval }) }));
+      publish(journalData(s, "structured_slash", renderPackList(view)));
+      return;
+    }
+    case "run": {
+      if (guardPackRun(client, s, cmd)) return;
+      submitPrompt(s, `/pack run ${cmd.name} ${cmd.task}`);
+      return;
+    }
+    case "inspect": {
+      const pack = packByName(cmd.name);
+      if (!pack) {
+        sendError(client, "no_pack", `unknown pack '${cmd.name}'; see /pack list`);
+        return;
+      }
+      const r = await dextOutputAsync(["pack", "inspect", pack.name], s.cwd);
+      publish(journalData(s, "structured_slash", (r.ok ? r.out : `[err] ${r.err}`).slice(0, 8000)));
+      return;
+    }
+    case "create": {
+      if (!/^[a-z0-9_-]+\/[a-z0-9_-]+$/.test(cmd.selector)) {
+        sendError(client, "bad_request", "/pack create needs <shelf>/<name> (lowercase letters, digits, - or _)");
+        return;
+      }
+      const r = await dextOutputAsync(["pack", "create", cmd.selector], s.cwd);
+      publish(journalData(s, "slash", (r.ok ? r.out : `[err] ${r.err}`).slice(0, 4000)));
+      if (r.ok) {
+        await refreshPacks();
+        publish(journalData(s, "info", `pack ${cmd.selector} scaffolded — describe what it should do and dext will fill in PACK.md`));
+      }
+      return;
+    }
+    default:
+      sendError(client, "bad_request", `unknown /pack verb '${cmd.verb}'; try /pack list | run <name> <task> | inspect <name> | create <shelf>/<name>`);
+  }
+}
+
+/** Journal + start a turn. Callers have validated text and busy state. */
+function submitPrompt(s, incoming) {
+  let text = incoming;
+  if (s.steeringQueue.length > 0) {
+    // Queued steering that missed its boundary (interrupt/crash/restart)
+    // rides with the next real prompt instead of being lost.
+    text = [...s.steeringQueue, incoming].join("\n\n");
+    s.steeringQueue = [];
+    persistIndex();
+  }
+  if (s.status === "cold") wakeSession(s);
+  publish(journalData(s, "user_message", { text }));
+  if (s.title === "New session") {
+    s.title = text.slice(0, 60);
+    persistIndex();
+  }
+  runTurn(s, text);
 }
 
 async function handleCommand(client, frame) {
@@ -948,7 +1130,8 @@ async function handleCommand(client, frame) {
       sessions: [...sessions.values()].map(metaOf),
       model_catalog: MODEL_CATALOG,
       effort_options: EFFORT_OPTIONS,
-      commands: COMMANDS,
+      commands: hostCommands(),
+      packs: PACKS,
     });
     return;
   }
@@ -1149,21 +1332,11 @@ async function handleCommand(client, frame) {
         }
         return;
       }
-      let text = frame.text;
-      if (s.steeringQueue.length > 0) {
-        // Queued steering that missed its boundary (interrupt/crash/restart)
-        // rides with the next real prompt instead of being lost.
-        text = [...s.steeringQueue, frame.text].join("\n\n");
-        s.steeringQueue = [];
-        persistIndex();
-      }
-      if (s.status === "cold") wakeSession(s);
-      publish(journalData(s, "user_message", { text }));
-      if (s.title === "New session") {
-        s.title = text.slice(0, 60);
-        persistIndex();
-      }
-      runTurn(s, text);
+      // `/pack run` may arrive as a prompt too (agents driving /__agent); the
+      // catalog + profile guard applies before anything is journaled.
+      const packRun = parsePackSlash(frame.text);
+      if (packRun?.sub === "run" && guardPackRun(client, s, packRun)) return;
+      submitPrompt(s, frame.text);
       return;
     }
 
@@ -1504,6 +1677,26 @@ const server = http.createServer((req, res) => {
     res.end(JSON.stringify({ ok: true, server: "agentlinkd", protocol: 1, dext: DEXT_BIN }));
     return;
   }
+  if (pathName === "/packs" || pathName.startsWith("/packs/")) {
+    if (!checkAuth(req, res, false)) return;
+    if (pathName === "/packs") {
+      res.writeHead(200, { "content-type": "application/json", "cache-control": "private, no-store" });
+      res.end(JSON.stringify({ packs: PACKS }));
+      return;
+    }
+    const name = decodeURIComponent(pathName.slice("/packs/".length));
+    const pack = packByName(name);
+    if (!pack) {
+      res.writeHead(404, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "no_pack" }));
+      return;
+    }
+    // Metadata plus a shallow listing: names and sizes only, never contents,
+    // never symlink targets. "Edit pack" needs the path, not the files.
+    res.writeHead(200, { "content-type": "application/json", "cache-control": "private, no-store" });
+    res.end(JSON.stringify({ pack: { ...pack, files: listPackFiles(pack.path) } }));
+    return;
+  }
   if (pathName === "/sessions" || pathName === "/__agent" || pathName.startsWith("/sessions/")) {
     // The file endpoint also accepts ?t=<token> (subresource loads cannot send
     // Authorization headers); every other surface is header-only.
@@ -1655,6 +1848,7 @@ process.once("SIGTERM", shutdown);
 
 initStateDir();
 restoreSessions();
+watchPackRoots();
 
 server.listen(PORT, "127.0.0.1", () => {
   console.log(`agentlinkd listening on http://127.0.0.1:${server.address().port}`);

@@ -26,6 +26,7 @@
   import Toasts from "./components/Toasts.svelte";
   import Todos from "./components/Todos.svelte";
   import Shortcuts from "./components/Shortcuts.svelte";
+  import PackGallery from "./components/PackGallery.svelte";
 
   let tokenInput = $state("");
   let inspect: ViewBlock | null = $state(null);
@@ -47,6 +48,7 @@
   // the raw events drawer.
   const dlgBlock = useDialog(() => !!inspect);
   const dlgEvents = useDialog(() => app.eventsOpen && !!view);
+  const dlgGallery = useDialog(() => app.galleryOpen);
 
   function connectSubmit(e: SubmitEvent) {
     e.preventDefault();
@@ -99,8 +101,10 @@
       }
       dlgBlock.onKey(e);
       dlgEvents.onKey(e);
+      dlgGallery.onKey(e);
       if (e.key === "Escape") {
         if (inspect) inspect = null;
+        else if (app.galleryOpen) app.galleryOpen = false;
         else if (app.eventsOpen) app.eventsOpen = false;
         else if (app.shortcutsOpen) app.shortcutsOpen = false;
         else if (indexOpen) indexOpen = false;
@@ -133,7 +137,7 @@
         }
         return;
       }
-      if (app.paletteOpen || app.shortcutsOpen || inspect || app.eventsOpen) return;
+      if (app.paletteOpen || app.shortcutsOpen || inspect || app.eventsOpen || app.galleryOpen) return;
       const editing = e.target instanceof HTMLElement && (e.target.matches("input, textarea") || e.target.isContentEditable);
       if (!editing && app.activeId && (e.ctrlKey || e.metaKey) && e.key === "Backspace") {
         e.preventDefault();
@@ -152,6 +156,12 @@
       if (e.key === "?") {
         e.preventDefault();
         app.shortcutsOpen = true;
+        return;
+      }
+      // Pack gallery from any session; a printable key, so only outside inputs.
+      if (e.key === "g" && app.caps.includes("packs") && app.packs.length > 0) {
+        e.preventDefault();
+        app.galleryOpen = true;
         return;
       }
       // Approvals: a/s/d act on the globally oldest pending request, whether
@@ -239,11 +249,16 @@
       {:else}
         <div class="hero content-axis" data-state="no_session" data-agent-id="hero">
           <p><span class="st-green">dext</span><span class="blink st-green">▊</span> <span class="dim">web console</span></p>
-          <p class="dim">pick a session from the index, or start one:</p>
-          <p>
-            <button class="act accent" data-agent-id="hero.new" onclick={newSession}>+ new session</button>
-            <span class="faint"> · ⌘k finder</span>
-          </p>
+          {#if app.phase === "live" && app.packs.length > 0}
+            <PackGallery />
+            <p class="faint">or type anything to start a plain session · ⌘k finder</p>
+          {:else}
+            <p class="dim">pick a session from the index, or start one:</p>
+            <p>
+              <button class="act accent" data-agent-id="hero.new" onclick={newSession}>+ new session</button>
+              <span class="faint"> · ⌘k finder</span>
+            </p>
+          {/if}
         </div>
       {/if}
     </main>
@@ -335,6 +350,31 @@
       </span>
     </div>
     <pre class="insp-body" data-agent-id="drawer.events.json">{view.recent.map((e) => JSON.stringify(e)).join("\n")}</pre>
+  </div>
+{/if}
+
+{#if app.galleryOpen}
+  <div class="insp-scrim" data-agent-id="packs.overlay.scrim" onclick={() => (app.galleryOpen = false)} onkeydown={() => {}} role="presentation"></div>
+  <div
+    class="insp gallery-overlay"
+    role="dialog"
+    aria-modal="true"
+    aria-label="packs"
+    tabindex="-1"
+    use:dlgGallery.ref
+    data-agent-id="packs.overlay"
+    data-state="open"
+  >
+    <div class="insp-head">
+      <span class="st-magenta">packs</span>
+      <span class="dim">pick one to prefill the composer</span>
+      <span class="insp-acts">
+        <button class="act" data-agent-id="packs.overlay.close" onclick={() => (app.galleryOpen = false)}>esc</button>
+      </span>
+    </div>
+    <div class="insp-body gallery-body">
+      <PackGallery onPick={() => (app.galleryOpen = false)} />
+    </div>
   </div>
 {/if}
 
@@ -459,6 +499,20 @@
     white-space: pre-wrap;
     color: var(--dim);
     font-size: 12px;
+  }
+  .insp-scrim {
+    position: fixed;
+    inset: 0;
+    z-index: 34;
+    background: color-mix(in srgb, var(--bg) 55%, transparent);
+  }
+  .gallery-overlay {
+    width: min(56rem, 96vw);
+  }
+  .gallery-body {
+    white-space: normal;
+    color: var(--fg);
+    font-size: 13px;
   }
   .st-green {
     color: var(--green);

@@ -145,6 +145,41 @@ export interface HostCommand {
   desc: string;
 }
 
+/** What a pack produces when it runs, as declared by its author. */
+export type PackArtifact = "html" | "chart" | "table" | "markdown" | "file" | "none";
+
+/** Gallery metadata, read by the host from flat `ui-*` keys in the pack's
+ *  `PACK.md` front matter (dext ignores unknown keys) or from host defaults. */
+export interface PackUi {
+  starter_prompt: string;
+  artifact: PackArtifact;
+  /** Seconds to first visible artifact on the reference machine; 0 = unknown. */
+  time_to_first_artifact: number;
+  /** e.g. `approval:auto-write`, `chromium`, `connector:slack`. */
+  requires: string[];
+  gallery: boolean;
+  tags: string[];
+  icon?: string;
+}
+
+/** One entry of the host's pack catalog (`hello_ok.packs`, `GET /packs`). */
+export interface PackInfo {
+  name: string;
+  shelf?: string;
+  description: string;
+  /** `user:~/.dext/shelves/research`, `project:.dext/shelves/x`, `bundled` … */
+  source: string;
+  path: string;
+  ui: PackUi;
+  /** Requirements the host could not satisfy right now (subset of `ui.requires`). */
+  unmet: string[];
+}
+
+/** `GET /packs/:name`: metadata plus a shallow, read-only listing. */
+export interface PackDetail extends PackInfo {
+  files: { name: string; kind: "file" | "dir"; bytes?: number }[];
+}
+
 export interface SessionConfiguredEvent {
   provider?: string;
   model?: string;
@@ -332,6 +367,8 @@ export interface ControlEventMap {
     effort_options?: ThinkingEffort[];
     /** Slash commands the host handles; absent → client derives from `slash.*` caps. */
     commands?: HostCommand[];
+    /** Pack catalog; present when the `packs` capability is advertised. */
+    packs?: PackInfo[];
   };
   hello_fail: { reason: string };
   "session.list": { sessions: SessionMeta[] };
@@ -340,8 +377,11 @@ export interface ControlEventMap {
   "session.removed": { id: string; by?: string };
   "session.cleared": { id: string; generation: number };
   "sessions.deleted": SessionsDeletedEvent;
+  /** Full catalog replacement whenever a pack directory tree changes. */
+  "packs.changed": { packs: PackInfo[] };
   pong: Record<string, never>;
-  error: { code: string; message: string };
+  /** `pack_requires_profile` carries `data.required` (the profile to switch to). */
+  error: { code: string; message: string; data?: Record<string, unknown> };
 }
 
 export type DataEventTag = keyof AgentEventMap | keyof HostEventMap;
@@ -371,6 +411,8 @@ export const CAPABILITIES = [
   "todos_read",
   /** Host honors session.delete / session.clear / session.delete_all. */
   "session_manage",
+  /** Host advertises a pack catalog and runs `/pack run <name> <task>`. */
+  "packs",
 ] as const;
 
 // ---------- helpers ----------

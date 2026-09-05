@@ -15,6 +15,7 @@
         ["⌘/ctrl n", "new session"],
         ["ctrl [ / ]", "previous / next session"],
         ["?", "this overlay"],
+        ["g", "pack gallery (outside inputs; hosts with packs)"],
         ["esc", "close overlay / drawer"],
       ],
     },

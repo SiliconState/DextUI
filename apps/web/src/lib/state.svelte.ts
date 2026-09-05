@@ -1,7 +1,7 @@
 // App-level reactive state bridging the framework-free Connection into Svelte 5 runes.
 
 import { Connection, type ConnPhase, type PendingPermission } from "@dextui/client";
-import type { Envelope, HostCommand, ModelGroup, SessionMeta, ThinkingEffort } from "@dextui/protocol";
+import type { Envelope, HostCommand, ModelGroup, PackInfo, SessionMeta, ThinkingEffort } from "@dextui/protocol";
 import { notifyEvent } from "./notify";
 
 export type Theme = "dark" | "light" | "system";
@@ -12,6 +12,8 @@ export interface Toast {
   id: number;
   kind: "info" | "ok" | "warn" | "err";
   text: string;
+  /** Optional one-click follow-up (e.g. switch approval profile). */
+  action?: { label: string; run: () => void };
 }
 
 export const app = $state({
@@ -43,7 +45,36 @@ export const app = $state({
   sessionAction: null as SessionAction | null,
   sessionPending: false,
   draftRevisions: {} as Record<string, number>,
+  /** Host pack catalog (hello_ok.packs, replaced on packs.changed). */
+  packs: [] as PackInfo[],
+  /** One-shot composer prefill; `n` changes on every request so the same text can be requested twice. */
+  prefill: null as { text: string; n: number } | null,
+  /** Gallery overlay (`g`); the gallery also renders inline in empty sessions and the hero. */
+  galleryOpen: false,
 });
+
+let prefillSeq = 0;
+
+/** Put text in the composer (creating a session first when none is active) and focus it. */
+export function prefillComposer(text: string): void {
+  if (!app.activeId) {
+    app.pendingDraft = text;
+    newSession();
+    return;
+  }
+  app.prefill = { text, n: ++prefillSeq };
+}
+
+/** Gallery-visible packs: curated first, then every other pack the host lists. */
+export function galleryPacks(): PackInfo[] {
+  return app.packs.filter((p) => p.ui.gallery);
+}
+
+/** Pack a turn was run with, derived from its journaled prompt (`/pack run <name>`). */
+export function packOfPrompt(text: string): string | null {
+  const m = /^\/packs?\s+(?:run|use|start)\s+([A-Za-z0-9][A-Za-z0-9_-]{0,63})\b/.exec(text.trim());
+  return m?.[1] ?? null;
+}
 
 // ---------- global action queue ----------
 //
@@ -181,10 +212,10 @@ export function connection(): Connection | null {
   return app.conn;
 }
 
-export function pushToast(kind: Toast["kind"], text: string): void {
-  const t = { id: ++toastSeq, kind, text };
+export function pushToast(kind: Toast["kind"], text: string, action?: Toast["action"]): void {
+  const t: Toast = { id: ++toastSeq, kind, text, ...(action ? { action } : {}) };
   app.toasts.push(t);
-  setTimeout(() => dismissToast(t.id), kind === "err" ? 8000 : 4000);
+  setTimeout(() => dismissToast(t.id), action ? 12000 : kind === "err" ? 8000 : 4000);
 }
 
 export function dismissToast(id: number): void {
@@ -409,7 +440,18 @@ export function start(token: string): void {
       }
       rebuildQueue();
     },
-    onControlError: (code, message) => {
+    onPacksChanged: (packs) => {
+      if (app.conn !== c) return;
+      const before = new Set(app.packs.map((p) => p.name));
+      app.packs = packs.map((p) => ({ ...p, ui: { ...p.ui, requires: [...p.ui.requires], tags: [...p.ui.tags] }, unmet: [...p.unmet] }));
+      // A pack that just appeared (hero flow / `/pack create`) gets a run offer.
+      if (before.size > 0) {
+        for (const p of packs) {
+          if (!before.has(p.name)) pushToast("ok", `New pack: ${p.name}`, { label: "run it", run: () => prefillComposer(`/pack run ${p.name} `) });
+        }
+      }
+    },
+    onControlError: (code, message, data) => {
       if (app.conn !== c) return; // stale connection
       // A failed session.open must not leave the new-session latch armed, nor
       // the hero-typing seed waiting to land in an unrelated session.
@@ -421,6 +463,16 @@ export function start(token: string): void {
       clearTimeout(sessionActionTimer);
       app.sessionPending = false;
       app.lastError = `${code}: ${message}`;
+      if (code === "pack_requires_profile" && typeof data?.required === "string") {
+        const required = data.required;
+        const sid = typeof data.session === "string" ? data.session : app.activeId;
+        const pack = typeof data.pack === "string" ? data.pack : "pack";
+        pushToast("warn", `${pack} needs approval profile ${required}`, {
+          label: `switch to ${required}`,
+          run: () => { if (sid && app.conn === c) c.slash(sid, `/approval ${required}`); },
+        });
+        return;
+      }
       pushToast("err", `${code}: ${message}`);
     },
     onEvent: (env: Envelope, store) => {
