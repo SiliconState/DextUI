@@ -204,8 +204,8 @@
 
     {#if type === "spark"}
       {@const sv = vals(0)}
-      <polyline points={sv.map((v, i) => `${sparkX(i, n).toFixed(1)},${sparkY(v, sv).toFixed(1)}`).join(" ")} fill="none" style="stroke:var(--green,#3fb950)" stroke-width="1.5" />
-      <circle cx={sparkX(n - 1, n)} cy={sparkY(sv[n - 1] ?? 0, sv)} r="2.5" style="fill:var(--green,#3fb950)" />
+      <polyline points={sv.map((v, i) => `${sparkX(i, n).toFixed(1)},${sparkY(v, sv).toFixed(1)}`).join(" ")} fill="none" style="stroke:var(--chart-1,#3fb950)" stroke-width="1.5" />
+      <circle cx={sparkX(n - 1, n)} cy={sparkY(sv[n - 1] ?? 0, sv)} r="2.5" style="fill:var(--chart-1,#3fb950)" />
       {#if hoverI >= 0}<circle cx={sparkX(hoverI, n)} cy={sparkY(sv[hoverI] ?? 0, sv)} r="3.5" fill="none" style="stroke:var(--fg,#e6edf3)" />{/if}
 
     {:else if type === "donut"}
@@ -234,7 +234,7 @@
           <!-- svelte-ignore a11y_click_events_have_key_events -->
           <!-- svelte-ignore a11y_no_static_element_interactions -->
           <text x="118" y="12" text-anchor="end" font-size="11" style="fill:var(--dim,#8b949e); cursor:pointer" onclick={cycleSort}>{(labels[i] ?? "").slice(0, 14)}</text>
-          <rect x={HBAR.x} y="0" width={HBAR.w} height="14" rx="3" style="fill:var(--line,#2a2f37)" opacity="0.35" />
+          <rect x={HBAR.x} y="0" width={HBAR.w} height="14" rx="3" style="fill:var(--chart-grid,#2a2f37)" opacity="0.35" />
           <!-- svelte-ignore a11y_no_static_element_interactions -->
           <rect x={HBAR.x} y="0" width={hbarWidth(v, hiAbs)} height="14" rx="3" style="fill:{v < 0 ? CHART_COLORS[4] : CHART_COLORS[i % 5]}; cursor:ew-resize" opacity={hoverI === i ? 1 : dim(i)} onpointerdown={(e) => startDrag(e, 0, i, "x")} />
           <text x={HBAR.x + HBAR.w + 6} y="12" font-size="11" style="fill:var(--fg,#e6edf3)">{fmt(v)}{unit}</text>
@@ -244,7 +244,7 @@
     {:else}
       {#each [0, 1, 2, 3] as g (g)}
         {@const gy = PLOT.bottom - ((PLOT.bottom - PLOT.top) * g) / 3}
-        <line x1={PLOT.l} y1={gy} x2={PLOT.r} y2={gy} style="stroke:var(--line,#2a2f37)" opacity="0.55" />
+        <line x1={PLOT.l} y1={gy} x2={PLOT.r} y2={gy} style="stroke:var(--chart-grid,#2a2f37)" opacity="0.55" />
         <text x={PLOT.r + 4} y={gy + 3} font-size="10" style="fill:var(--dim,#8b949e)">{fmt(scl.lo + ((scl.hi - scl.lo) * g) / 3)}{unit}</text>
       {/each}
       {#if scl.lo < 0 && scl.hi > 0}
@@ -295,9 +295,9 @@
         {#if showBrush}
           {@const sy = PLOT.bottom + 48}
           <!-- svelte-ignore a11y_no_static_element_interactions -->
-          <rect x={PLOT.l} y={sy} width={PLOT.r - PLOT.l} height="12" rx="2" style="fill:var(--line,#2a2f37); cursor:crosshair" opacity="0.5" onpointerdown={(e) => begin(e, { kind: "brush", a: lineIndexAtX(scl, toSvg(e).x, n), moved: 0 })} />
+          <rect x={PLOT.l} y={sy} width={PLOT.r - PLOT.l} height="12" rx="2" style="fill:var(--chart-grid,#2a2f37); cursor:crosshair" opacity="0.5" onpointerdown={(e) => begin(e, { kind: "brush", a: lineIndexAtX(scl, toSvg(e).x, n), moved: 0 })} />
           {#if link.sel && link.sel.ds === ds}
-            <rect x={lineX(scl, link.sel.lo)} y={sy} width={Math.max(2, lineX(scl, link.sel.hi) - lineX(scl, link.sel.lo))} height="12" rx="2" style="fill:var(--cyan,#39c5cf); pointer-events:none" opacity="0.6" />
+            <rect x={lineX(scl, link.sel.lo)} y={sy} width={Math.max(2, lineX(scl, link.sel.hi) - lineX(scl, link.sel.lo))} height="12" rx="2" style="fill:var(--chart-2,#39c5cf); pointer-events:none" opacity="0.6" />
           {/if}
           <text x={PLOT.l + 4} y={sy + 9} font-size="8" class="brush-hint" style="fill:var(--dim,#8b949e); pointer-events:none">drag to brush → highlights siblings sharing "{spec.dataset}"</text>
         {/if}
@@ -342,7 +342,7 @@
 <style>
   .chart-wrap { position: relative; padding: 2px 0 0; }
   .chart-title { font-size: 11px; color: var(--dim); margin-bottom: 2px; }
-  .chart-tip { position: absolute; pointer-events: none; background: var(--bg3, #161b22); border: 1px solid var(--line); padding: 4px 8px; font-size: 11px; color: var(--fg); z-index: 5; min-width: 110px; }
+  .chart-tip { position: absolute; pointer-events: none; background: var(--bg3, #161b22); border: 1px solid var(--line); box-shadow: 0 2px 8px color-mix(in srgb, var(--bg) 35%, transparent); padding: 4px 8px; font-size: 11px; color: var(--fg); z-index: 5; min-width: 110px; }
   .chart-tip-l { color: var(--dim); margin-bottom: 2px; }
   .chart-tip i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 5px; }
   .chart-tip b { float: right; margin-left: 10px; }

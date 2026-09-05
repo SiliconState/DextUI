@@ -18,6 +18,16 @@
   --red: #e06c75;
   --blue: #61afef;
   --orange: #d19a66;
+  /* Panel above bg2: tooltips, popovers. */
+  --bg3: #1f242c;
+  /* Chart series fills: bright on dark, with enough weight to read as area. */
+  --chart-1: #6fdd8b;
+  --chart-2: #5ccfe6;
+  --chart-3: #e5c07b;
+  --chart-4: #c678dd;
+  --chart-5: #e06c75;
+  --chart-grid: #2a2f38;
+  color-scheme: dark;
   --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   --rail-size: clamp(13rem, 17vw, 19rem);
   --page-gutter: clamp(0.75rem, 1.2vw, 1.25rem);
@@ -38,6 +48,16 @@ html[data-theme="light"] {
   --red: #b3261e;
   --blue: #1d4ed8;
   --orange: #9a5a00;
+  --bg3: #ffffff;
+  /* Mid-lightness, saturated fills: the text accents above are too dark to
+     read as color at bar/line weight on warm paper. */
+  --chart-1: #2f9e5f;
+  --chart-2: #0e8fb0;
+  --chart-3: #d48a1a;
+  --chart-4: #9a4fd1;
+  --chart-5: #d8453d;
+  --chart-grid: #cdc9bb;
+  color-scheme: light;
 }
 
 * {

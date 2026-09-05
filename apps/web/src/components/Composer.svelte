@@ -10,6 +10,8 @@
 
   let text = $state("");
   let menuIdx = $state(0);
+  // Escape hides the slash menu without touching the draft; any edit re-arms it.
+  let menuHidden = $state(false);
   let inputEl: HTMLTextAreaElement | undefined = $state();
   // Per-session prompt history (shell semantics): every submitted line —
   // prompt, steer, slash — newest last, consecutive duplicates collapsed.
@@ -33,7 +35,7 @@
   const commands = $derived<HostCommand[]>(
     app.commands.length > 0 ? app.commands : LEGACY_COMMANDS.filter((c) => app.caps.includes(c.cap)),
   );
-  const slashOpen = $derived(text.startsWith("/") && !text.includes(" "));
+  const slashOpen = $derived(!menuHidden && text.startsWith("/") && !text.includes(" "));
   const slashList = $derived(
     slashOpen ? commands.filter((c) => c.cmd.startsWith(text.trim().toLowerCase())) : [],
   );
@@ -50,8 +52,10 @@
       live &&
       (!view.working || canSteer),
   );
+  // Shortcut glyph for the platform's primary modifier (⌘ on Apple, ^ elsewhere).
+  const MOD = /Mac|iPhone|iPad|iPod/.test(navigator.platform || navigator.userAgent) ? "⌘" : "^";
   const placeholder = $derived.by(() => {
-    if (view.status === "exited") return "session closed — ⌘n for a new one";
+    if (view.status === "exited") return `session closed — ${MOD}n for a new one`;
     if (!live) return "waking session…";
     if (view.working) {
       return canSteer ? "type to queue — delivers as the next turn… (^c to stop)" : "turn running… (^c to stop)";
@@ -61,7 +65,31 @@
     parts.push("↑ history");
     return parts.join("   ");
   });
-  const rows = $derived(Math.min(8, 1 + (text.match(/\n/g)?.length ?? 0)));
+  // Auto-grow by measuring scrollHeight so soft-wrapped lines count too
+  // (a hard-\n count kept the box at 1 row while wrapped text scrolled away).
+  const MAX_ROWS = 8;
+  function fit(el: HTMLTextAreaElement) {
+    el.style.height = "auto";
+    const lh = parseFloat(getComputedStyle(el).lineHeight) || 21;
+    const cap = lh * MAX_ROWS + 4;
+    el.style.height = `${Math.min(el.scrollHeight, cap)}px`;
+    el.style.overflowY = el.scrollHeight > cap ? "auto" : "hidden";
+  }
+  $effect(() => {
+    const el = inputEl;
+    if (!el) return;
+    void text; // re-measure on every edit
+    fit(el);
+  });
+  // Wrap points move with width and font metrics, not just content.
+  $effect(() => {
+    const el = inputEl;
+    if (!el) return;
+    const ro = new ResizeObserver(() => fit(el));
+    ro.observe(el);
+    void document.fonts?.ready.then(() => fit(el));
+    return () => ro.disconnect();
+  });
 
   // Per-session draft persistence: restore on switch, save on leave/send.
   // History rides along; the hero-typing stash seeds a fresh session's text.
@@ -101,9 +129,20 @@
     localStorage.setItem(`dextui.history.${sid}`, JSON.stringify(hist));
   }
 
+  // Any edit while recalling history exits history mode — the edit is the
+  // new draft (standard shell behavior). Programmatic edits call this too,
+  // since they don't fire `input`.
+  function exitHistory() {
+    if (histIdx > 0) {
+      histIdx = 0;
+      stash = "";
+    }
+  }
+
   function complete(c: string) {
     text = `${c} `;
     menuIdx = 0;
+    exitHistory();
     inputEl?.focus();
   }
 
@@ -129,6 +168,8 @@
 
   function onKey(e: KeyboardEvent) {
     const el = e.currentTarget as HTMLTextAreaElement;
+    // IME composition (CJK etc.): Enter/arrows belong to the composer window.
+    if (e.isComposing || e.keyCode === 229) return;
     if (slashOpen && slashList.length > 0) {
       if (e.key === "ArrowDown") {
         e.preventDefault();
@@ -146,8 +187,18 @@
         if (item) complete(item.cmd);
         return;
       }
+      // Enter accepts the highlighted item; an exact match falls through to send.
+      if (e.key === "Enter" && !e.shiftKey) {
+        const item = slashList[menuCur];
+        if (item && item.cmd !== text.trim().toLowerCase()) {
+          e.preventDefault();
+          complete(item.cmd);
+          return;
+        }
+      }
       if (e.key === "Escape") {
-        text = "";
+        e.preventDefault();
+        menuHidden = true;
         return;
       }
     }
@@ -174,34 +225,39 @@
       send();
       return;
     }
-    // History recall (shell semantics): ↑ only from the first line, ↓ only
-    // from the last; editing a recalled line forks the draft (see onInput).
-    if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+    // History recall (shell semantics): ↑ only from the first *visual* row,
+    // ↓ only from the last; editing a recalled line forks the draft (see
+    // onInput). Soft wraps are invisible to string math, so let the browser
+    // move the caret first: a native ↑ on the top row lands at 0 and a native
+    // ↓ on the bottom row lands at the end — anywhere else it stays inside.
+    if ((e.key === "ArrowUp" || e.key === "ArrowDown") && !e.shiftKey && !e.altKey && !e.metaKey && !e.ctrlKey) {
       const caret = el.selectionStart ?? 0;
-      const line = text.slice(0, caret).split("\n").length;
-      const last = text.split("\n").length;
-      if (e.key === "ArrowUp" && (text === "" || line === 1) && hist.length > 0) {
-        e.preventDefault();
-        if (histIdx === 0) stash = text; // first ↑ stashes the working draft
-        histIdx = Math.min(histIdx + 1, hist.length);
-        text = hist[hist.length - histIdx] ?? "";
+      if (el.selectionEnd !== caret) return;
+      const up = e.key === "ArrowUp";
+      const before = text.slice(0, caret);
+      const after = text.slice(caret);
+      if (up ? before.includes("\n") || hist.length === 0 : after.includes("\n") || histIdx === 0) return;
+      const draft = text;
+      requestAnimationFrame(() => {
+        if (el.value !== draft) return; // edited in the meantime
+        const pos = el.selectionStart ?? 0;
+        if (up ? pos !== 0 : pos !== draft.length) return; // caret moved within the box
+        if (up) {
+          if (histIdx === 0) stash = draft; // first ↑ stashes the working draft
+          histIdx = Math.min(histIdx + 1, hist.length);
+          text = hist[hist.length - histIdx] ?? "";
+        } else {
+          histIdx -= 1;
+          text = histIdx === 0 ? stash : (hist[hist.length - histIdx] ?? "");
+        }
         void tick().then(() => el.setSelectionRange(0, 0));
-      } else if (e.key === "ArrowDown" && line === last && histIdx > 0) {
-        e.preventDefault();
-        histIdx -= 1;
-        text = histIdx === 0 ? stash : (hist[hist.length - histIdx] ?? "");
-        void tick().then(() => el.setSelectionRange(0, 0));
-      }
+      });
     }
   }
 
-  // Any edit while recalling history exits history mode — the edit is the
-  // new draft (standard shell behavior).
   function onInput() {
-    if (histIdx > 0) {
-      histIdx = 0;
-      stash = "";
-    }
+    menuHidden = false;
+    exitHistory();
   }
 </script>
 
@@ -232,7 +288,7 @@
       bind:value={text}
       onkeydown={onKey}
       oninput={onInput}
-      {rows}
+      rows="1"
       {placeholder}
       data-agent-id="composer.input"
       data-state={view.working ? "working" : "idle"}

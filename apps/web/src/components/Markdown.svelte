@@ -282,7 +282,10 @@
     width: 100%;
     height: 560px;
     border: 0;
-    background: #0b0d10;
+    /* Follows the app theme; `color-scheme` is inherited from <html>, so an
+       embedded page's prefers-color-scheme resolves to ours, not the OS's. */
+    background: var(--bg);
+    color-scheme: inherit;
   }
   .md-imgmiss {
     display: inline-block;

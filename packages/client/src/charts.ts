@@ -38,11 +38,11 @@ const MAX_POINTS_DENSE = 180;
 const MAX_POINTS = 31;
 const MAX_SERIES = 8;
 export const CHART_COLORS = [
-  "var(--green,#3fb950)",
-  "var(--cyan,#39c5cf)",
-  "var(--yellow,#d29922)",
-  "var(--magenta,#bc8cff)",
-  "var(--red,#f85149)",
+  "var(--chart-1,#3fb950)",
+  "var(--chart-2,#39c5cf)",
+  "var(--chart-3,#d29922)",
+  "var(--chart-4,#bc8cff)",
+  "var(--chart-5,#f85149)",
 ];
 
 function esc(s: string): string {
@@ -139,7 +139,7 @@ function gridY(x0: number, x1: number, top: number, bottom: number, hi: number, 
   for (let i = 0; i <= 3; i++) {
     const y = bottom - ((bottom - top) * i) / 3;
     const val = lo + ((hi - lo) * i) / 3;
-    out += `<line x1="${x0}" y1="${y.toFixed(1)}" x2="${x1}" y2="${y.toFixed(1)}" style="stroke:var(--line,#2a2f37)" stroke-width="1"/>`;
+    out += `<line x1="${x0}" y1="${y.toFixed(1)}" x2="${x1}" y2="${y.toFixed(1)}" style="stroke:var(--chart-grid,#2a2f37)" stroke-width="1"/>`;
     out += `<text x="${x1 + 4}" y="${(y + 3).toFixed(1)}" font-size="10" style="fill:var(--dim,#8b949e)">${esc(`${fmt(val)}${unit ?? ""}`)}</text>`;
   }
   return out;
@@ -183,8 +183,8 @@ export function renderChartSVG(spec: ChartSpec): string {
     const lastY = py(spec.values[spec.values.length - 1] ?? 0);
     return (
       `<svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block" role="img" aria-label="${esc(spec.title ?? "sparkline")}">` +
-      `<polyline points="${pts}" fill="none" style="stroke:var(--green,#3fb950)" stroke-width="1.5"/>` +
-      `<circle cx="${lastX.toFixed(1)}" cy="${lastY.toFixed(1)}" r="2.5" style="fill:var(--green,#3fb950)"/></svg>`
+      `<polyline points="${pts}" fill="none" style="stroke:var(--chart-1,#3fb950)" stroke-width="1.5"/>` +
+      `<circle cx="${lastX.toFixed(1)}" cy="${lastY.toFixed(1)}" r="2.5" style="fill:var(--chart-1,#3fb950)"/></svg>`
     );
   }
 
@@ -231,7 +231,7 @@ export function renderChartSVG(spec: ChartSpec): string {
       const w = Math.max(2, (Math.abs(v) / hi) * trackW);
       const color = v < 0 ? CHART_COLORS[4] : CHART_COLORS[i % CHART_COLORS.length];
       rows += `<text x="${labelW}" y="${y + 12}" text-anchor="end" font-size="11" style="fill:var(--dim,#8b949e)">${esc((labels[i] ?? "").slice(0, 14))}</text>`;
-      rows += `<rect x="${trackX}" y="${y}" width="${trackW}" height="14" rx="3" style="fill:var(--line,#2a2f37)" opacity="0.35"/>`;
+      rows += `<rect x="${trackX}" y="${y}" width="${trackW}" height="14" rx="3" style="fill:var(--chart-grid,#2a2f37)" opacity="0.35"/>`;
       rows += `<rect x="${trackX}" y="${y}" width="${w.toFixed(1)}" height="14" rx="3" style="fill:${color}"/>`;
       rows += `<text x="${trackX + trackW + 6}" y="${y + 12}" font-size="11" style="fill:var(--fg,#e6edf3)">${esc(`${fmt(v)}${unit}`)}</text>`;
     }
@@ -272,10 +272,10 @@ export function renderChartSVG(spec: ChartSpec): string {
     }
   } else {
     const pts = spec.values.map((v, i) => `${px(i).toFixed(1)},${py(v).toFixed(1)}`).join(" ");
-    body += `<polyline points="${pts}" fill="none" style="stroke:var(--green,#3fb950)" stroke-width="2"/>`;
+    body += `<polyline points="${pts}" fill="none" style="stroke:var(--chart-1,#3fb950)" stroke-width="2"/>`;
     for (let i = 0; i < spec.values.length; i++) {
       body +=
-        `<circle cx="${px(i).toFixed(1)}" cy="${py(spec.values[i] ?? 0).toFixed(1)}" r="3" style="fill:var(--green,#3fb950)"><title>${esc(`${labels[i] ?? ""}: ${fmt(spec.values[i] ?? 0)}${unit}`)}</title></circle>`;
+        `<circle cx="${px(i).toFixed(1)}" cy="${py(spec.values[i] ?? 0).toFixed(1)}" r="3" style="fill:var(--chart-1,#3fb950)"><title>${esc(`${labels[i] ?? ""}: ${fmt(spec.values[i] ?? 0)}${unit}`)}</title></circle>`;
     }
   }
   let xLabels = "";
