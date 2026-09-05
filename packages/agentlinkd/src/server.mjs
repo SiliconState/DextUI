@@ -32,6 +32,7 @@ import { acceptKey, FrameParser, encodeFrame, OP_PONG, OP_TEXT } from "../../moc
 import { fold, foldMeta } from "../../mock-server/src/fold.mjs";
 import { checkedPath, purgeSeat, seatFiles } from "./session-files.mjs";
 import { PACK_NAME_RE, buildCatalog, listPackFiles, packCommands, parsePackSlash, renderPackList, unmetRequirements } from "./packs.mjs";
+import { RUN_ID_RE as CREW_RUN_ID_RE, TAIL_MAX_LINES, createCrewAdapter } from "./crew.mjs";
 
 const here = path.dirname(url.fileURLToPath(import.meta.url));
 const repoRoot = path.join(here, "..", "..", "..");
@@ -55,6 +56,16 @@ function resolveDext() {
 const PORT = Number(argValue("port", process.env.AGENTLINKD_PORT ?? 8788));
 const TOKEN = argValue("token", process.env.AGENTLINKD_TOKEN ?? crypto.randomBytes(9).toString("base64url"));
 const DEXT_BIN = resolveDext();
+
+// crew binary: --crew / CREW_BIN / PATH. Absent → no `crew` capability, no crew UI.
+function resolveCrew() {
+  const explicit = argValue("crew", process.env.CREW_BIN);
+  if (explicit) return fs.existsSync(explicit) ? explicit : null;
+  const onPath = (process.env.PATH ?? "").split(path.delimiter).some((d) => d && fs.existsSync(path.join(d, "crew")));
+  return onPath ? "crew" : null;
+}
+const CREW_BIN = resolveCrew();
+const DEXT_HOME = process.env.DEXT_HOME ? path.resolve(process.env.DEXT_HOME) : path.join(process.env.HOME ?? "", ".dext");
 const DEFAULT_CWD = path.resolve(argValue("cwd", process.cwd()));
 const DEFAULT_APPROVAL = argValue("approval", process.env.DEXT_APPROVAL ?? "auto-read");
 const STATIC_DIR = path.resolve(argValue("static", path.join(repoRoot, "apps", "web", "dist")));
@@ -208,6 +219,8 @@ const CAPABILITIES = [
   "session_manage",
   // hello_ok.packs + /pack run|list|create|inspect + GET /packs + packs.changed.
   "packs",
+  // hello_ok.crews + x-agentlinkd.crew.{open,close,tail,file,stop,resume}.
+  ...(CREW_BIN ? ["crew"] : []),
 ];
 
 // Host-handled slash commands, advertised in hello_ok so the composer's
@@ -294,6 +307,81 @@ function hostCommands() {
 let clientCounter = 0;
 const sessions = new Map();
 const clients = new Set();
+
+// ---------- crew ----------
+
+// Runs are global (detached, cwd-keyed), so the adapter lives beside the pack
+// catalog rather than inside any session. Roots: crew's home runs dir plus
+// every project's `.crew/runs` (the default cwd now, session cwds as they open).
+const CREW = CREW_BIN
+  ? createCrewAdapter({
+      roots: [path.join(DEXT_HOME, "crew", "runs"), path.join(DEFAULT_CWD, ".crew", "runs")],
+      crewBin: CREW_BIN,
+      dextBin: DEXT_BIN,
+      onChanged: (payload) => broadcastControl("x-agentlinkd.crew.changed", payload),
+      onRunChanged: (id, detail) => {
+        for (const c of clients) if (c.phase === "live" && c.crewOpen.has(id)) sendControl(c, "x-agentlinkd.crew.run", detail);
+      },
+      isOpen: (id) => [...clients].some((c) => c.phase === "live" && c.crewOpen.has(id)),
+      log: (m) => console.error(`agentlinkd: ${m}`),
+    })
+  : null;
+
+function crewRootFor(cwd) {
+  if (CREW && typeof cwd === "string" && cwd) CREW.addRoot(path.join(cwd, ".crew", "runs"));
+}
+
+async function handleCrewCommand(client, frame) {
+  const verb = frame.cmd.slice("x-agentlinkd.crew.".length);
+  if (!CREW) {
+    sendError(client, "unsupported", "host has no crew binary");
+    return;
+  }
+  const run = typeof frame.run === "string" && CREW_RUN_ID_RE.test(frame.run) ? frame.run : null;
+  if (!run) {
+    sendError(client, "bad_request", "run must match run-<12 hex>");
+    return;
+  }
+  switch (verb) {
+    case "open": {
+      const detail = CREW.detail(run);
+      if (!detail) return sendError(client, "no_run", `unknown run ${run}`);
+      client.crewOpen.add(run);
+      sendControl(client, "x-agentlinkd.crew.run", detail);
+      return;
+    }
+    case "close":
+      client.crewOpen.delete(run);
+      return;
+    case "tail": {
+      const r = CREW.tail(run, frame.worker, Number(frame.lines) || TAIL_MAX_LINES);
+      if (r.error) return sendError(client, r.error, `no log for ${run}/${String(frame.worker)}`);
+      sendControl(client, "x-agentlinkd.crew.tail", r);
+      return;
+    }
+    case "file": {
+      const r = CREW.file(run, frame.path);
+      if (r.error) return sendError(client, r.error, `cannot read ${String(frame.path)} in ${run}`);
+      sendControl(client, "x-agentlinkd.crew.file", r);
+      return;
+    }
+    case "stop": {
+      const r = await CREW.stop(run);
+      broadcastControl("x-agentlinkd.crew.control", { run, verb: "stop", ok: r.ok, by: client.id, message: r.message });
+      return;
+    }
+    case "resume": {
+      const answer = typeof frame.answer === "string" ? frame.answer.trim() : "";
+      if (!answer || answer.length > 20_000) return sendError(client, "bad_request", "answer must be 1..20000 chars");
+      const r = await CREW.resume(run, answer);
+      if (!r.ok) return sendError(client, r.code ?? "crew_failed", r.message);
+      broadcastControl("x-agentlinkd.crew.control", { run, verb: "resume", ok: true, by: client.id, message: r.message });
+      return;
+    }
+    default:
+      sendError(client, "unknown_command", `unsupported cmd ${frame.cmd}`);
+  }
+}
 
 function makeSession({ cwd, approval }) {
   // Never reuse a deleted id after restart (old tabs may still hold drafts).
@@ -1148,7 +1236,9 @@ async function handleCommand(client, frame) {
       effort_options: EFFORT_OPTIONS,
       commands: hostCommands(),
       packs: PACKS,
+      ...(CREW ? { crews: CREW.summaries() } : {}),
     });
+    for (const s of sessions.values()) crewRootFor(s.cwd);
     return;
   }
   if (client.phase !== "live") return;
@@ -1411,6 +1501,10 @@ async function handleCommand(client, frame) {
     }
 
     default:
+      if (typeof frame.cmd === "string" && frame.cmd.startsWith("x-agentlinkd.crew.")) {
+        await handleCrewCommand(client, frame);
+        return;
+      }
       sendError(client, "unknown_command", `unsupported cmd ${String(frame.cmd)}`);
   }
 }
@@ -1504,7 +1598,16 @@ function agentDigest() {
         }),
         { cmd: "session.open", note: "new session" },
         ...(list.length > 0 ? [{ cmd: "session.delete_all", note: "scope: all | cold" }] : []),
+        ...(CREW
+          ? CREW.summaries().runs.flatMap((r) => {
+              const acts = [{ cmd: "x-agentlinkd.crew.open", run: r.id }];
+              if (r.escalation) acts.push({ cmd: "x-agentlinkd.crew.resume", run: r.id, note: "answer: <text>" });
+              if (["running", "pending", "paused"].includes(r.status)) acts.push({ cmd: "x-agentlinkd.crew.stop", run: r.id });
+              return acts;
+            })
+          : []),
       ],
+      ...(CREW ? { crews: CREW.summaries() } : {}),
     };
     if (Buffer.byteLength(JSON.stringify(body)) <= 4096 || list.length === 0) break;
     list = list.slice(1);
@@ -1811,6 +1914,7 @@ server.on("upgrade", (req, socket, head) => {
     id: `c${++clientCounter}`,
     phase: "authing",
     subs: new Set(),
+    crewOpen: new Set(),
     send: (text) => socket.write(encodeFrame(OP_TEXT, Buffer.from(text, "utf8"))),
     close: (code) => {
       try {

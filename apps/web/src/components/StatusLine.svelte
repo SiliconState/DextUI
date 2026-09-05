@@ -4,6 +4,7 @@
   import type { SessionStore } from "@dextui/client";
   import type { ThinkingEffort } from "@dextui/protocol";
   import { app, toggleTheme, rePair, toggleSidebar, queueTotal, jumpToOldestPending, toggleNotify } from "../lib/state.svelte";
+  import { crew, crewLive, crewTop, crewDur, openRun, shortRun } from "../lib/crew.svelte";
   import { fmtTokens, fmtElapsed, prettyPath } from "../lib/markdown";
   import { useSession } from "../lib/useSession.svelte";
 
@@ -14,14 +15,23 @@
   const pendingTotal = $derived(queueTotal());
 
   let now = $state(Date.now());
+  // Tier 0 — crew ticker: ids + counts + wall clock, never prose; only while ≥1 run is live.
+  const liveRuns = $derived(crewLive());
+  const ticker = $derived.by(() => {
+    if (liveRuns.length === 0) return null;
+    const top = crewTop() ?? liveRuns[0]!;
+    const c = liveRuns.reduce((n, r) => ({ run: n.run + r.counts.run, done: n.done + r.counts.done, fail: n.fail + r.counts.fail, paused: n.paused + (r.escalation ? 1 : 0) }), { run: 0, done: 0, fail: 0, paused: 0 });
+    return { top, c, more: liveRuns.length - 1 };
+  });
   $effect(() => {
-    if (!view.working) return;
-    const t = setInterval(() => {
-      now = Date.now();
-    }, 1000);
-    return () => {
-      clearInterval(t);
-    };
+    if (view.working || liveRuns.length > 0) {
+      const t = setInterval(() => {
+        now = Date.now();
+      }, 1000);
+      return () => {
+        clearInterval(t);
+      };
+    }
   });
 
   const ctxWindow = $derived(
@@ -132,6 +142,21 @@
   {#if view.approvalProfile}
     <span class="sep">│</span>
     <span class="st-yellow" data-agent-id="status.profile">approval:{view.approvalProfile}</span>
+  {/if}
+  {#if ticker}
+    <span class="sep">│</span>
+    <button
+      class={`act crew-tick ${ticker.top.status === "paused" ? "st-yellow" : "st-cyan"}`}
+      data-agent-id="status.crew"
+      data-state={ticker.top.state}
+      title={`${ticker.top.task}${ticker.more ? ` (+${ticker.more} more live)` : ""}`}
+      onclick={() => openRun(crew.openId || ticker.top.id)}
+    >
+      <span class="tick-full">crew {shortRun(ticker.top.id)}{ticker.more ? `+${ticker.more}` : ""}
+        {#if ticker.c.paused}⚠{ticker.c.paused}{/if}{#if ticker.c.run} ●{ticker.c.run}{/if}{#if ticker.c.done} ✓{ticker.c.done}{/if}{#if ticker.c.fail} ✗{ticker.c.fail}{/if}
+        · {(void now, crewDur(ticker.top.age_ms + (Date.now() - now)))}</span>
+      <span class="tick-min">crew {ticker.c.paused ? `⚠${ticker.c.paused}` : `●${ticker.c.run}`}</span>
+    </button>
   {/if}
   {#if view.contextChars}
     <span class="sep">│</span>
@@ -287,5 +312,11 @@
     .truncate {
       max-width: 90px;
     }
+  }
+  .crew-tick { white-space: nowrap; }
+  .crew-tick .tick-min { display: none; }
+  @media (max-width: 900px) {
+    .crew-tick .tick-full { display: none; }
+    .crew-tick .tick-min { display: inline; }
   }
 </style>

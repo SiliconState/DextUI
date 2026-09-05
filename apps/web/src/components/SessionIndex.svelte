@@ -4,6 +4,7 @@
   import { app, activate, newSession, closeSession, wakeSession, requestSessionAction, prefillComposer, packStarter, packUnmet } from "../lib/state.svelte";
   import SessionAction from "./SessionAction.svelte";
   import ActionQueue from "./ActionQueue.svelte";
+  import CrewRail from "./CrewRail.svelte";
 
   let {
     onPick,
@@ -72,6 +73,7 @@
   {/if}
   <SessionAction />
   <ActionQueue {onPick} />
+  <CrewRail {onPick} />
   <input
     bind:value={query}
     type="search"

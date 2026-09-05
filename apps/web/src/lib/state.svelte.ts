@@ -3,6 +3,7 @@
 import { Connection, type ConnPhase, type PendingPermission } from "@dextui/client";
 import type { Envelope, HostCommand, ModelGroup, PackInfo, SessionMeta, ThinkingEffort } from "@dextui/protocol";
 import { notifyEvent } from "./notify";
+import { acceptCrews, crewEscalations, onCrewControl } from "./crew.svelte";
 
 export type Theme = "dark" | "light" | "system";
 export type NotifyState = "on" | "off" | "blocked";
@@ -132,8 +133,10 @@ const autoSubscribed = new Set<string>();
  *  working) and must not be mistaken for "went quiet" by the detach mirror. */
 const hydrating = new Set<string>();
 
+/** Decisions only: pending permissions plus open crew escalations. Run
+ *  failures are observation and never count (title badge, rail badge). */
 export function queueTotal(): number {
-  return queue.entries.length + queue.counts.reduce((n, s) => n + s.count, 0);
+  return queue.entries.length + queue.counts.reduce((n, s) => n + s.count, 0) + crewEscalations().length;
 }
 
 function rebuildQueue(): void {
@@ -497,6 +500,10 @@ export function start(token: string): void {
         }
       }
     },
+    onCrewsChanged: (crews) => {
+      if (app.conn !== c) return;
+      acceptCrews(crews);
+    },
     onControlError: (code, message, data) => {
       if (app.conn !== c) return; // stale connection
       // A failed session.open must not leave the new-session latch armed, nor
@@ -546,6 +553,7 @@ export function start(token: string): void {
   });
   c.onControl((env) => {
     if (app.conn !== c) return;
+    onCrewControl(env);
     if (env.event === "sessions.deleted") {
       const d = env.data as { ids: string[] };
       finishSessionAction();

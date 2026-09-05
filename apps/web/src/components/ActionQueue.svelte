@@ -3,6 +3,7 @@
   // oldest first, at the top of the rail. Compact rows only — the full card
   // (diff + note) still lives in the active session's approval dock.
   import { queue, queueTotal, activate, respondGlobal } from "../lib/state.svelte";
+  import { crewEscalations, crewDur, openRun, shortRun } from "../lib/crew.svelte";
 
   let { onPick }: { onPick?: () => void } = $props();
 
@@ -10,6 +11,9 @@
   let now = $state(Date.now());
 
   const total = $derived(queueTotal());
+  // Crew escalations: the one crew decision. [open] only — a/s/d act on the
+  // oldest *permission* and an escalation needs text, so they skip these rows.
+  const escalations = $derived(crewEscalations());
 
   // Coarse relative stamps ("3m") only need a slow clock, and only while rows exist.
   $effect(() => {
@@ -38,6 +42,11 @@
 
   function go(id: string) {
     activate(id);
+    onPick?.();
+  }
+
+  function goRun(id: string) {
+    openRun(id);
     onPick?.();
   }
 </script>
@@ -90,6 +99,15 @@
                 onclick={() => respondGlobal(e.sessionId, e.pending.request_id, "deny")}
               >[d]</button>
             </span>
+          </div>
+        {/each}
+        {#each escalations as r (r.id)}
+          <div class="queue-row count" data-agent-id={`queue.crew.${r.id}`} data-state="awaiting_answer">
+            <span class="st-yellow">⚠</span>
+            <span class="q-tool">crew escalation</span>
+            <span class="dim truncate" title={r.escalation?.question}>{r.escalation?.label ?? r.task}</span>
+            <span class="faint q-meta">{shortRun(r.id)} · {crewDur(r.updated_ms)}</span>
+            <button class="act accent" data-agent-id={`queue.crew.${r.id}.open`} onclick={() => goRun(r.id)}>[open]</button>
           </div>
         {/each}
         {#each queue.counts as s (s.id)}

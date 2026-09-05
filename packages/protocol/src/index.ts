@@ -180,6 +180,126 @@ export interface PackDetail extends PackInfo {
   files: { name: string; kind: "file" | "dir"; bytes?: number }[];
 }
 
+// ---------- crew runs (host extension `x-agentlinkd.crew.*`) ----------
+
+/** Extension prefix. Host-prefixed per the `x-<host>.<thing>` rule until crew
+ *  support is promoted to a standard extension. */
+export const CREW_EXT = "x-agentlinkd.crew";
+
+/** crew 0.1.0 `RunStatus` / `StepStatus`, verbatim (5 variants, no `stopped`). */
+export type CrewStatus = "pending" | "running" | "completed" | "failed" | "paused";
+
+/** Attention-sorted display state: crew's status plus the host-derived
+ *  `stopped` (failed + `pausedReason == "stopped by user"` — a crew stopgap). */
+export type CrewDisplayState = CrewStatus | "stopped";
+
+export interface CrewCounts {
+  pending: number;
+  run: number;
+  done: number;
+  fail: number;
+  paused: number;
+  total: number;
+}
+
+/** The one human decision in a run. Present only while `status == "paused"`
+ *  and a worker's `result.escalation` is set — never from `pausedReason` alone. */
+export interface CrewEscalation {
+  step: number;
+  worker: string;
+  label: string;
+  question: string;
+  reason?: string;
+  file?: string;
+}
+
+/** Summary tier (`hello_ok.crews`, `x-agentlinkd.crew.changed`): ids, counts,
+ *  wall clock — never worker prose. Flat in worker count. */
+export interface CrewRunSummary {
+  id: string;
+  /** Root task, truncated by the host (120 chars). */
+  task: string;
+  status: CrewStatus;
+  state: CrewDisplayState;
+  mode: string;
+  cwd: string;
+  counts: CrewCounts;
+  /** ms since the manifest was created. */
+  age_ms: number;
+  /** ms since the manifest last changed on disk. */
+  updated_ms: number;
+  /** Sum of finished worker durations (crew has no run-level timing). */
+  duration_ms: number;
+  detached: boolean;
+  escalation?: CrewEscalation;
+}
+
+export interface CrewWorker {
+  /** Stable key for tail/agent ids: `<groupIndex>` or `<groupIndex>.<memberIndex>`. */
+  key: string;
+  label: string;
+  agent: string;
+  status: CrewStatus;
+  model?: string;
+  duration_ms?: number;
+  /** Unix ms; present while running (from the `.state` atom). */
+  started_at?: number;
+  /** Truncated to 80 chars at the host. */
+  error?: string;
+  /** Deliverable basename relative to the chain dir (what `x-agentlinkd.crew.file` accepts). */
+  output?: string;
+  escalation?: { question: string; reason?: string; file?: string };
+}
+
+export interface CrewGroup {
+  index: number;
+  kind: "sequential" | "parallel" | "dynamic";
+  label: string;
+  status: CrewStatus;
+  counts: CrewCounts;
+  workers: CrewWorker[];
+}
+
+/** Detail tier: one open sheet. Result text is still stripped — logs ride `tail`. */
+export interface CrewRunDetail extends CrewRunSummary {
+  created_at: number;
+  paused_reason?: string;
+  groups: CrewGroup[];
+  /** Deliverables in the chain dir root (basenames). */
+  files: string[];
+}
+
+export interface CrewsPayload {
+  runs: CrewRunSummary[];
+  /** Runs beyond the cap (8) — oldest terminal runs drop first. */
+  omitted: number;
+}
+
+export interface CrewTailReply {
+  run: string;
+  worker: string;
+  lines: string[];
+  truncated: boolean;
+  bytes: number;
+}
+
+export interface CrewFileReply {
+  run: string;
+  path: string;
+  text: string;
+  truncated: boolean;
+  bytes: number;
+}
+
+/** Result of a control verb, broadcast so every client sees the same truth. */
+export interface CrewControlEvent {
+  run: string;
+  verb: "stop" | "resume";
+  ok: boolean;
+  by?: string;
+  message?: string;
+}
+
 export interface SessionConfiguredEvent {
   provider?: string;
   model?: string;
@@ -293,7 +413,9 @@ export interface AgentDigest {
     pending: { request_id: string; tool: string; summary: string }[];
   }[];
   /** Commands that are valid right now, in machine form (cmd + minimal payload). */
-  actions: { cmd: string; session?: string; request_id?: string; note?: string }[];
+  actions: { cmd: string; session?: string; request_id?: string; run?: string; note?: string }[];
+  /** Present when the `crew` capability is advertised. */
+  crews?: CrewsPayload;
 }
 
 // ---------- event maps (documentation + exhaustiveness) ----------
@@ -369,6 +491,8 @@ export interface ControlEventMap {
     commands?: HostCommand[];
     /** Pack catalog; present when the `packs` capability is advertised. */
     packs?: PackInfo[];
+    /** Crew run summaries; present when the `crew` capability is advertised. */
+    crews?: CrewsPayload;
   };
   hello_fail: { reason: string };
   "session.list": { sessions: SessionMeta[] };
@@ -380,6 +504,15 @@ export interface ControlEventMap {
   /** Full catalog replacement whenever a pack directory tree changes; the
    *  host's slash-command list rides along so `/` completion tracks new packs. */
   "packs.changed": { packs: PackInfo[]; commands?: HostCommand[] };
+  /** Full summary replacement on any manifest change (debounced ~500 ms). */
+  "x-agentlinkd.crew.changed": CrewsPayload;
+  /** Detail snapshot for a run this client opened; re-sent on change while open. */
+  "x-agentlinkd.crew.run": CrewRunDetail;
+  /** Direct replies to `x-agentlinkd.crew.tail` / `.file`. */
+  "x-agentlinkd.crew.tail": CrewTailReply;
+  "x-agentlinkd.crew.file": CrewFileReply;
+  /** Outcome of `.stop` / `.resume`, broadcast to every live client. */
+  "x-agentlinkd.crew.control": CrewControlEvent;
   pong: Record<string, never>;
   /** `pack_requires_profile` carries `data.required` (the profile to switch to). */
   error: { code: string; message: string; data?: Record<string, unknown> };
@@ -414,7 +547,13 @@ export const CAPABILITIES = [
   "session_manage",
   /** Host advertises a pack catalog and runs `/pack run <name> <task>`. */
   "packs",
+  /** Host projects crew runs (`hello_ok.crews`, `x-agentlinkd.crew.*`). */
+  "crew",
 ] as const;
+
+/** Client commands under the crew extension (`cmd: "x-agentlinkd.crew.<verb>"`). */
+export const CREW_COMMANDS = ["open", "close", "tail", "file", "stop", "resume"] as const;
+export const CREW_RUN_ID_RE = /^run-[a-f0-9]{12}$/;
 
 // ---------- helpers ----------
 

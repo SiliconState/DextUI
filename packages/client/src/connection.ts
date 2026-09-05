@@ -4,8 +4,10 @@
 import {
   cmd,
   isSessionRouted,
+  CREW_EXT,
   PROTOCOL_VERSION,
   type Envelope,
+  type CrewsPayload,
   type DeleteScope,
   type HostCommand,
   type ModelGroup,
@@ -27,6 +29,8 @@ export interface ConnectionOpts {
   onSessionCleared?: (id: string, generation: number) => void;
   /** Full catalog replacement (hello_ok and every packs.changed). */
   onPacksChanged?: (packs: PackInfo[]) => void;
+  /** Crew run summaries (hello_ok.crews and every x-agentlinkd.crew.changed). */
+  onCrewsChanged?: (crews: CrewsPayload) => void;
   onControlError?: (code: string, message: string, data?: Record<string, unknown>) => void;
   onSeqGap?: (sessionId: string, expected: number, got: number) => void;
   /** The host process changed between connections; all session stores were reset. */
@@ -46,6 +50,8 @@ export class Connection {
   effortOptions: ThinkingEffort[] = [];
   commands: HostCommand[] = [];
   packs: PackInfo[] = [];
+  /** Last crew summary payload from the host (empty when the capability is absent). */
+  crews: CrewsPayload = { runs: [], omitted: 0 };
   /** Host process identity from the last hello_ok (undefined for legacy hosts). */
   instance?: string;
   sessions = new Map<string, SessionStore>();
@@ -207,6 +213,32 @@ export class Connection {
     this.sendRaw(cmd("session.delete_all", { scope }));
   }
 
+  // ---------- crew extension (host-prefixed until promoted) ----------
+
+  crewOpen(run: string): void {
+    this.sendRaw(cmd(`${CREW_EXT}.open`, { run }));
+  }
+
+  crewClose(run: string): void {
+    this.sendRaw(cmd(`${CREW_EXT}.close`, { run }));
+  }
+
+  crewTail(run: string, worker: string, lines = 80): void {
+    this.sendRaw(cmd(`${CREW_EXT}.tail`, { run, worker, lines }));
+  }
+
+  crewFile(run: string, path: string): void {
+    this.sendRaw(cmd(`${CREW_EXT}.file`, { run, path }));
+  }
+
+  crewStop(run: string): void {
+    this.sendRaw(cmd(`${CREW_EXT}.stop`, { run }));
+  }
+
+  crewResume(run: string, answer: string): void {
+    this.sendRaw(cmd(`${CREW_EXT}.resume`, { run, answer }));
+  }
+
   private forget(id: string): void {
     this.sessions.delete(id);
     this.subscribed.delete(id);
@@ -289,6 +321,7 @@ export class Connection {
           effort_options?: ThinkingEffort[];
           commands?: HostCommand[];
           packs?: PackInfo[];
+          crews?: CrewsPayload;
         };
         this.capabilities = d.capabilities;
         this.modelCatalog = d.model_catalog ?? [];
@@ -296,6 +329,8 @@ export class Connection {
         this.commands = d.commands ?? [];
         this.packs = d.packs ?? [];
         this.opts.onPacksChanged?.(this.packs);
+        this.crews = d.crews ?? { runs: [], omitted: 0 };
+        this.opts.onCrewsChanged?.(this.crews);
         this.attempt = 0;
         // A different host process may reuse session ids and even tail seqs;
         // resuming by seq would splice the old transcript onto the new one.
@@ -357,6 +392,12 @@ export class Connection {
       }
       case "pong":
         return;
+      case `${CREW_EXT}.changed`: {
+        const d = env.data as CrewsPayload | undefined;
+        this.crews = { runs: d?.runs ?? [], omitted: d?.omitted ?? 0 };
+        this.opts.onCrewsChanged?.(this.crews);
+        break;
+      }
       case "error": {
         const d = env.data as { code: string; message: string; data?: Record<string, unknown> };
         this.opts.onControlError?.(d.code, d.message, d.data);

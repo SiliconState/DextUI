@@ -27,6 +27,8 @@
   import Todos from "./components/Todos.svelte";
   import Shortcuts from "./components/Shortcuts.svelte";
   import PackGallery from "./components/PackGallery.svelte";
+  import CrewRun from "./components/CrewRun.svelte";
+  import { crew, closeRun, crewLive, crewTop, openRun } from "./lib/crew.svelte";
 
   let tokenInput = $state("");
   let inspect: ViewBlock | null = $state(null);
@@ -49,6 +51,9 @@
   const dlgBlock = useDialog(() => !!inspect);
   const dlgEvents = useDialog(() => app.eventsOpen && !!view);
   const dlgGallery = useDialog(() => app.galleryOpen);
+  // Crew run sheet: same overlay contract; Esc closes it before the gallery.
+  const dlgCrew = useDialog(() => !!crew.openId);
+  const crewLiveCount = $derived(crewLive().length);
 
   function connectSubmit(e: SubmitEvent) {
     e.preventDefault();
@@ -102,8 +107,10 @@
       dlgBlock.onKey(e);
       dlgEvents.onKey(e);
       dlgGallery.onKey(e);
+      dlgCrew.onKey(e);
       if (e.key === "Escape") {
         if (inspect) inspect = null;
+        else if (crew.openId) closeRun();
         else if (app.galleryOpen) app.galleryOpen = false;
         else if (app.eventsOpen) app.eventsOpen = false;
         else if (app.shortcutsOpen) app.shortcutsOpen = false;
@@ -137,7 +144,9 @@
         }
         return;
       }
-      if (app.paletteOpen || app.shortcutsOpen || inspect || app.eventsOpen || app.galleryOpen) return;
+      // The run sheet owns its keys (j/k/x/a…) so the global a/s/d and
+      // hero-typing handlers below never see them while it is open.
+      if (app.paletteOpen || app.shortcutsOpen || inspect || app.eventsOpen || app.galleryOpen || crew.openId) return;
       const editing = e.target instanceof HTMLElement && (e.target.matches("input, textarea") || e.target.isContentEditable);
       if (!editing && app.activeId && (e.ctrlKey || e.metaKey) && e.key === "Backspace") {
         e.preventDefault();
@@ -294,6 +303,9 @@
             >⚠ {pendingTotal}</button
             >
           {/if}
+          {#if crewLiveCount > 0}
+            <button class="act st-cyan" data-agent-id="status.crew" data-state={crewTop()?.state ?? "running"} onclick={() => openRun(crewTop()!.id)}>crew ●{crewLiveCount}</button>
+          {/if}
           <span class={app.phase === "live" ? "st-green" : app.phase === "failed" ? "st-red" : "st-yellow pulse"}>●</span>
           <span class="dim">{app.phase}{app.phaseDetail ? ` · ${app.phaseDetail}` : ""}</span>
           <button
@@ -350,6 +362,13 @@
       </span>
     </div>
     <pre class="insp-body" data-agent-id="drawer.events.json">{view.recent.map((e) => JSON.stringify(e)).join("\n")}</pre>
+  </div>
+{/if}
+
+{#if crew.openId}
+  <div class="insp-scrim" data-agent-id="crew.overlay.scrim" onclick={closeRun} onkeydown={() => {}} role="presentation"></div>
+  <div class="insp gallery-overlay crew-overlay" use:dlgCrew.ref data-agent-id="crew.overlay" data-state="open">
+    <CrewRun />
   </div>
 {/if}
 
