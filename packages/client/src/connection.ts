@@ -349,8 +349,9 @@ export class Connection {
         break;
       }
       case "packs.changed": {
-        const d = env.data as { packs: PackInfo[] };
+        const d = env.data as { packs: PackInfo[]; commands?: HostCommand[] };
         this.packs = d.packs ?? [];
+        if (d.commands) this.commands = d.commands;
         this.opts.onPacksChanged?.(this.packs);
         break;
       }

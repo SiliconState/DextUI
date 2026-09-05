@@ -24,7 +24,7 @@ export const GALLERY_DEFAULTS = {
     artifact: "html", time_to_first_artifact: 45, requires: ["approval:auto-write"], gallery: true, tags: ["research", "summary"], icon: "report",
   },
   autoresearch: {
-    starter_prompt: "Try 3 variations of the chart style in gen_dashboard.py and keep the fastest",
+    starter_prompt: "Pick one measurable thing in this workspace (a test suite's wall time, a script's runtime, a bundle size), try 3 variations, keep the best, show the numbers as a chart",
     artifact: "chart", time_to_first_artifact: 90, requires: ["approval:auto-write"], gallery: true, tags: ["research", "loop"], icon: "loop",
   },
   crew: {
@@ -178,18 +178,21 @@ export function buildCatalog(listingText, { approval, env = process.env, readUi 
   });
 }
 
-/** Shallow, read-only directory listing (no contents, no symlink targets). */
+/** Shallow, read-only directory listing (no contents, no symlink targets).
+ *  Never throws: a symlinked ancestor yields an empty listing, like readPackUi. */
 export function listPackFiles(packDir) {
-  if (!checkedPath(packDir)) return [];
-  return fs.readdirSync(packDir, { withFileTypes: true })
-    .filter((e) => !e.name.startsWith(".") && !e.isSymbolicLink())
-    .slice(0, 200)
-    .map((e) => {
-      if (e.isDirectory()) return { name: e.name, kind: "dir" };
-      let bytes;
-      try { bytes = fs.lstatSync(path.join(packDir, e.name)).size; } catch { /* listing only */ }
-      return { name: e.name, kind: "file", bytes };
-    });
+  try {
+    if (!checkedPath(packDir)) return [];
+    return fs.readdirSync(packDir, { withFileTypes: true })
+      .filter((e) => !e.name.startsWith(".") && !e.isSymbolicLink())
+      .slice(0, 200)
+      .map((e) => {
+        if (e.isDirectory()) return { name: e.name, kind: "dir" };
+        let bytes;
+        try { bytes = fs.lstatSync(path.join(packDir, e.name)).size; } catch { /* listing only */ }
+        return { name: e.name, kind: "file", bytes };
+      });
+  } catch { return []; }
 }
 
 /** `/` completion entries: one per pack plus the management verbs. */
@@ -210,15 +213,17 @@ export function parsePackSlash(raw) {
   if (!rest || /^(list|ls)$/.test(rest)) return { sub: "list" };
   const words = rest.split(/\s+/);
   const verb = words[0];
+  // Strip tokens positionally (never by search: a name like "un" occurs inside "run").
+  const afterVerb = rest.slice(verb.length).trimStart();
   if (/^(run|use|start)$/.test(verb)) {
     const name = words[1] ?? "";
-    const task = rest.slice(rest.indexOf(name) + name.length).trim();
+    const task = name ? afterVerb.slice(name.length).trim() : "";
     return { sub: "run", name, task };
   }
   if (/^(inspect|info|show)$/.test(verb)) return { sub: "inspect", name: words[1] ?? "" };
   if (/^(create|new)$/.test(verb)) return { sub: "create", selector: words[1] ?? "" };
   // `/pack <name> <task>` shorthand, mirroring the CLI.
-  if (PACK_NAME_RE.test(verb) && words.length > 1) return { sub: "run", name: verb, task: rest.slice(verb.length).trim() };
+  if (PACK_NAME_RE.test(verb) && words.length > 1) return { sub: "run", name: verb, task: afterVerb.trim() };
   return { sub: "unknown", verb };
 }
 

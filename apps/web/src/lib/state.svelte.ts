@@ -70,6 +70,34 @@ export function galleryPacks(): PackInfo[] {
   return app.packs.filter((p) => p.ui.gallery);
 }
 
+/** The text a card/row puts in the composer. Starter prompts that already
+ *  begin with `/pack` are used verbatim; anything else becomes the pack's task. */
+export function packStarter(p: PackInfo): string {
+  const s = p.ui.starter_prompt;
+  return s.trimStart().startsWith("/pack") ? s : `/pack run ${p.name} ${s.trim()}`;
+}
+
+const APPROVAL_RANK: Record<string, number> = { never: 0, ask: 0, "auto-read": 1, "auto-write": 2, always: 3 };
+
+/** Approval profile of the active session, if any. */
+export function activeApproval(): string | undefined {
+  return app.sessions.find((s) => s.id === app.activeId)?.approval_profile;
+}
+
+/** Requirements `p` cannot meet right now. The host computed `unmet` against
+ *  its default profile; approval requirements are re-evaluated here against
+ *  `profile` (the active session) in both directions, so a session that is
+ *  stricter than the default is not shown a green card the host will refuse. */
+export function packUnmet(p: PackInfo, profile = activeApproval()): string[] {
+  const other = p.unmet.filter((u) => !u.startsWith("approval:"));
+  const approval = p.ui.requires.filter((u) => {
+    if (!u.startsWith("approval:")) return false;
+    if (!profile) return p.unmet.includes(u);
+    return (APPROVAL_RANK[u.slice(9)] ?? 99) > (APPROVAL_RANK[profile] ?? 0);
+  });
+  return [...approval, ...other];
+}
+
 /** Pack a turn was run with, derived from its journaled prompt (`/pack run <name>`). */
 export function packOfPrompt(text: string): string | null {
   const m = /^\/packs?\s+(?:run|use|start)\s+([A-Za-z0-9][A-Za-z0-9_-]{0,63})\b/.exec(text.trim());
@@ -443,10 +471,28 @@ export function start(token: string): void {
     onPacksChanged: (packs) => {
       if (app.conn !== c) return;
       const before = new Set(app.packs.map((p) => p.name));
-      app.packs = packs.map((p) => ({ ...p, ui: { ...p.ui, requires: [...p.ui.requires], tags: [...p.ui.tags] }, unmet: [...p.unmet] }));
+      // Wire boundary: copy defensively so a host that omits an array cannot
+      // throw inside a template, and so Svelte owns the reactive objects.
+      app.packs = packs
+        .filter((p) => p && typeof p.name === "string")
+        .map((p) => ({
+          ...p,
+          description: p.description ?? "",
+          ui: {
+            starter_prompt: p.ui?.starter_prompt ?? `/pack run ${p.name} `,
+            artifact: p.ui?.artifact ?? "markdown",
+            time_to_first_artifact: p.ui?.time_to_first_artifact ?? 0,
+            requires: [...(p.ui?.requires ?? [])],
+            gallery: !!p.ui?.gallery,
+            tags: [...(p.ui?.tags ?? [])],
+            ...(p.ui?.icon ? { icon: p.ui.icon } : {}),
+          },
+          unmet: [...(p.unmet ?? [])],
+        }));
+      app.commands = c.commands.map((x) => ({ ...x }));
       // A pack that just appeared (hero flow / `/pack create`) gets a run offer.
       if (before.size > 0) {
-        for (const p of packs) {
+        for (const p of app.packs) {
           if (!before.has(p.name)) pushToast("ok", `New pack: ${p.name}`, { label: "run it", run: () => prefillComposer(`/pack run ${p.name} `) });
         }
       }
@@ -467,9 +513,16 @@ export function start(token: string): void {
         const required = data.required;
         const sid = typeof data.session === "string" ? data.session : app.activeId;
         const pack = typeof data.pack === "string" ? data.pack : "pack";
+        const retry = typeof data.retry === "string" ? data.retry : "";
         pushToast("warn", `${pack} needs approval profile ${required}`, {
           label: `switch to ${required}`,
-          run: () => { if (sid && app.conn === c) c.slash(sid, `/approval ${required}`); },
+          run: () => {
+            if (!sid || app.conn !== c) return;
+            c.slash(sid, `/approval ${required}`);
+            // The composer already cleared the command on send; hand it back
+            // so the user only has to press Enter once the switch lands.
+            if (retry && sid === app.activeId) prefillComposer(retry);
+          },
         });
         return;
       }

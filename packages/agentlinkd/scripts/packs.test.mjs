@@ -7,7 +7,7 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import {
-  buildCatalog, packCommands, parsePackListing, parsePackSlash, parsePackUi, readPackUi, renderPackList, unmetRequirements,
+  buildCatalog, listPackFiles, packCommands, parsePackListing, parsePackSlash, parsePackUi, readPackUi, renderPackList, unmetRequirements,
 } from "../src/packs.mjs";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -103,6 +103,7 @@ test("parsePackSlash + packCommands + renderPackList", () => {
   assert.deepEqual(parsePackSlash("/packs use report x"), { sub: "run", name: "report", task: "x" });
   assert.deepEqual(parsePackSlash("/pack report quick"), { sub: "run", name: "report", task: "quick" });
   assert.deepEqual(parsePackSlash("/pack run report"), { sub: "run", name: "report", task: "" });
+  assert.deepEqual(parsePackSlash("/pack run"), { sub: "run", name: "", task: "" });
   assert.deepEqual(parsePackSlash("/pack"), { sub: "list" });
   assert.deepEqual(parsePackSlash("/pack ls"), { sub: "list" });
   assert.deepEqual(parsePackSlash("/pack inspect mesh"), { sub: "inspect", name: "mesh" });
@@ -116,6 +117,28 @@ test("parsePackSlash + packCommands + renderPackList", () => {
   const text = renderPackList(cat);
   assert.match(text, /^packs {2}2 installed/);
   assert.match(text, /report .*\[gallery, needs approval:auto-write\]/);
+});
+
+test("parsePackSlash: tokens are stripped positionally, never by substring search", () => {
+  // A pack named "un" under verb "run": indexOf("un") === 1 in the verb itself.
+  assert.deepEqual(parsePackSlash("/pack run un do x"), { sub: "run", name: "un", task: "do x" });
+  assert.deepEqual(parsePackSlash("/pack run un"), { sub: "run", name: "un", task: "" });
+  assert.deepEqual(parsePackSlash("/pack use  mesh   two  spaces"), { sub: "run", name: "mesh", task: "two  spaces" });
+  // A pack named "list" is still runnable via the explicit verb.
+  assert.deepEqual(parsePackSlash("/pack run list inventory"), { sub: "run", name: "list", task: "inventory" });
+});
+
+test("listPackFiles: symlinked ancestor yields an empty listing instead of throwing", (t) => {
+  const temp = fs.mkdtempSync(path.join(root, ".packs-test-"));
+  t.after(() => fs.rmSync(temp, { recursive: true, force: true }));
+  const secret = path.join(temp, "secret");
+  fs.mkdirSync(secret);
+  fs.writeFileSync(path.join(secret, "x"), "1");
+  const linked = path.join(temp, "linked");
+  fs.symlinkSync(secret, linked);
+  assert.deepEqual(listPackFiles(linked), []);
+  assert.ok(listPackFiles(secret).length === 1);
+  assert.deepEqual(listPackFiles(path.join(temp, "missing")), []);
 });
 
 // ---------- live host ----------
@@ -195,7 +218,16 @@ test("host: catalog in hello_ok, /pack list, guard, profile switch, --pack reach
   const guard = await c.wait((e) => e.event === "error" && e.data.code === "pack_requires_profile", mark);
   assert.equal(guard.data.data.required, "auto-write");
   assert.equal(guard.data.data.session, id);
+  assert.equal(guard.data.data.retry, "/pack run report summarise", "guard hands back the exact command to re-offer");
   assert.equal(c.events.slice(mark).some((e) => e.event === "user_message"), false, "nothing journaled when refused");
+
+  // Management verbs work through prompt.submit too (agents driving /__agent).
+  mark = c.events.length;
+  c.send("prompt.submit", { session: id, text: "/pack list" });
+  await c.wait((e) => e.session === id && e.event === "structured_slash", mark);
+  assert.equal(c.events.slice(mark).some((e) => e.event === "user_message"), false, "management verbs never journal a user_message");
+  c.send("prompt.submit", { session: id, text: "/pack run" });
+  await c.wait((e) => e.event === "error" && e.data.code === "bad_request", mark);
 
   // Same guard through prompt.submit (agents driving /__agent).
   mark = c.events.length;
@@ -238,6 +270,7 @@ test("host: catalog in hello_ok, /pack list, guard, profile switch, --pack reach
   // Encoded traversal stays under /packs/ on the wire (fetch would normalize a raw ../).
   assert.equal((await h.get("/packs/..%2Fetc")).status, 404);
   assert.equal((await h.get("/packs/report%2FPACK.md")).status, 404, "names only; no path segments");
+  assert.equal((await h.get("/packs/%")).status, 404, "malformed percent-encoding is 404, not a crash");
   const unauth = await fetch(h.base + "/packs");
   assert.equal(unauth.status, 401, "catalog is a data endpoint: bearer required");
 });

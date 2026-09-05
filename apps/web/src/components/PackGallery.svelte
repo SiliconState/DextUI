@@ -4,7 +4,7 @@
   // requirements this host cannot meet are shown greyed with the reason, never
   // hidden: visibility of the catalog is the point.
   import type { PackInfo } from "@dextui/protocol";
-  import { app, galleryPacks, prefillComposer } from "../lib/state.svelte";
+  import { app, galleryPacks, packStarter, packUnmet, prefillComposer } from "../lib/state.svelte";
 
   let { compact = false, onPick }: { compact?: boolean; onPick?: () => void } = $props();
 
@@ -15,26 +15,11 @@
 
   const curated = $derived(galleryPacks());
   const others = $derived(app.packs.filter((p) => !p.ui.gallery));
-  const activeProfile = $derived(app.sessions.find((s) => s.id === app.activeId)?.approval_profile);
 
   const glyph: Record<string, string> = { chart: "▮", html: "▤", table: "☰", markdown: "¶", file: "▫", none: "·" };
 
-  /** Unmet for the *active* session: approval requirements depend on its profile. */
-  function unmet(p: PackInfo): string[] {
-    return p.unmet.filter((u) => {
-      if (!u.startsWith("approval:") || !activeProfile) return true;
-      const rank: Record<string, number> = { never: 0, ask: 0, "auto-read": 1, "auto-write": 2, always: 3 };
-      return (rank[u.slice(9)] ?? 99) > (rank[activeProfile] ?? 0);
-    });
-  }
-
-  function starter(p: PackInfo): string {
-    const s = p.ui.starter_prompt.trim();
-    return s.startsWith("/pack") ? s : `/pack run ${p.name} ${s}`;
-  }
-
   function pick(p: PackInfo) {
-    prefillComposer(starter(p));
+    prefillComposer(packStarter(p));
     onPick?.();
   }
 
@@ -74,9 +59,9 @@
       </button>
 
       {#each curated as p (p.name)}
-        {@const missing = unmet(p)}
+        {@const missing = packUnmet(p)}
         <button class="card" class:greyed={missing.length > 0} data-agent-id={`packs.card.${p.name}`} data-state={missing.length ? "unmet" : "ready"}
-          title={missing.length ? `needs ${missing.join(", ")}` : starter(p)} onclick={() => pick(p)}>
+          title={missing.length ? `needs ${missing.join(", ")}` : packStarter(p)} onclick={() => pick(p)}>
           <span class="card-title"><span class="st-cyan">{glyph[p.ui.artifact] ?? "·"}</span> {p.name}</span>
           <span class="card-desc">{p.description}</span>
           <span class="card-meta faint">

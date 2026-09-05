@@ -750,26 +750,37 @@ function handleCommand(client, frame) {
         return;
       }
       const raw = String(frame.raw ?? "").trim();
-      const run = /^\/packs?\s+run\s+(\S+)\s*(.*)$/s.exec(raw);
-      if (run) {
+      // `/pack run <name> <task>` and the `/pack <name> <task>` shorthand, as agentlinkd.
+      const run = /^\/packs?\s+(?:(?:run|use|start)\s+)?([A-Za-z0-9][A-Za-z0-9_-]*)\s*(.*)$/s.exec(raw);
+      if (run && !/^(list|ls|inspect|info|show|create|new)$/.test(run[1])) {
         const pack = PACKS.find((p) => p.name === run[1]);
         if (!pack) {
           sendError(client, "no_pack", `unknown pack '${run[1]}'; see /pack list`);
           return;
         }
+        const task = run[2].trim();
+        if (!task) {
+          sendError(client, "bad_request", `/pack run ${pack.name} needs a task`);
+          return;
+        }
         const need = pack.ui.requires.find((r) => r.startsWith("approval:"));
         const profile = s.approvalProfile ?? (s.approvalFlow ? "ask" : "always");
         if (need && profile !== need.slice(9) && profile !== "always") {
-          sendControl(client, "error", { code: "pack_requires_profile", message: `${pack.name} needs approval profile ${need.slice(9)}; this session is ${profile}`, data: { pack: pack.name, required: need.slice(9), current: profile, session: s.id } });
+          sendControl(client, "error", {
+            code: "pack_requires_profile",
+            message: `${pack.name} needs approval profile ${need.slice(9)}; this session is ${profile}`,
+            data: { pack: pack.name, required: need.slice(9), current: profile, session: s.id, retry: `/pack run ${pack.name} ${task}` },
+          });
           return;
         }
         if (s.working) {
           sendError(client, "busy", "turn in flight");
           return;
         }
-        publish(journalData(s, "user_message", { text: raw }));
-        if (s.title === "New session") s.title = raw.slice(0, 60);
-        beginTurn(s, echoPlan(raw));
+        const text = `/pack run ${pack.name} ${task}`;
+        publish(journalData(s, "user_message", { text }));
+        if (s.title === "New session") s.title = text.slice(0, 60);
+        beginTurn(s, echoPlan(text));
         return;
       }
       if (/^\/packs?(\s+list)?$/.test(raw)) {
@@ -777,9 +788,14 @@ function handleCommand(client, frame) {
         return;
       }
       if (/^\/approval\s+\S+$/.test(raw)) {
-        s.approvalProfile = raw.split(/\s+/)[1];
-        publish(journalData(s, "approval_profile_changed", { profile: s.approvalProfile }));
-        publish(journalData(s, "slash", `approval profile → ${s.approvalProfile} (next turn)`));
+        const profile = raw.split(/\s+/)[1];
+        if (!["ask", "auto-read", "auto-write", "never", "always"].includes(profile)) {
+          sendError(client, "bad_request", `unknown approval profile '${profile}'`);
+          return;
+        }
+        s.approvalProfile = profile;
+        publish(journalData(s, "approval_profile_changed", { profile }));
+        publish(journalData(s, "slash", `approval profile → ${profile} (next turn)`));
         scheduleList();
         return;
       }

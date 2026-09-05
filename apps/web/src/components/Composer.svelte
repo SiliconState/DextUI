@@ -13,6 +13,7 @@
   // Escape hides the slash menu without touching the draft; any edit re-arms it.
   let menuHidden = $state(false);
   let inputEl: HTMLTextAreaElement | undefined = $state();
+  let menuEl: HTMLDivElement | undefined = $state();
   // Per-session prompt history (shell semantics): every submitted line —
   // prompt, steer, slash — newest last, consecutive duplicates collapsed.
   const HISTORY_CAP = 50;
@@ -35,12 +36,26 @@
   const commands = $derived<HostCommand[]>(
     app.commands.length > 0 ? app.commands : LEGACY_COMMANDS.filter((c) => app.caps.includes(c.cap)),
   );
-  const slashOpen = $derived(!menuHidden && text.startsWith("/") && !text.includes(" "));
+  // The menu stays open while the text is still a prefix of some command —
+  // including multi-word ones like `/pack run re<port>` — and closes once a
+  // command is complete and followed by a space (the task is free text).
+  const slashQuery = $derived(text.trimStart().toLowerCase());
+  const slashOpen = $derived(
+    !menuHidden &&
+      text.startsWith("/") &&
+      !text.includes("\n") &&
+      (!text.includes(" ") || commands.some((c) => c.cmd.toLowerCase().startsWith(slashQuery) && c.cmd.toLowerCase() !== slashQuery.trim())),
+  );
   const slashList = $derived(
-    slashOpen ? commands.filter((c) => c.cmd.startsWith(text.trim().toLowerCase())) : [],
+    slashOpen ? commands.filter((c) => c.cmd.toLowerCase().startsWith(text.trim().toLowerCase())) : [],
   );
   // menuIdx can outlive a shrinking list (typing narrows matches); clamp before use.
   const menuCur = $derived(slashList.length === 0 ? 0 : Math.min(menuIdx, slashList.length - 1));
+  // Keyboard navigation in a scrolling menu keeps the cursor row visible.
+  $effect(() => {
+    void menuCur;
+    menuEl?.querySelector<HTMLElement>(".c-menu-row.cursor")?.scrollIntoView({ block: "nearest" });
+  });
   const live = $derived(view.status === "live");
   // Real hosts may not support mid-turn steering; honor the hello capability
   // (snapshotted into reactive app.caps at phase=live).
@@ -217,10 +232,13 @@
         if (item) complete(item.cmd);
         return;
       }
-      // Enter accepts the highlighted item; an exact match falls through to send.
+      // Enter accepts the highlighted item; an exact match (even when longer
+      // siblings are listed, e.g. `report` vs `report-mine`) falls through to send.
       if (e.key === "Enter" && !e.shiftKey) {
+        const typed = text.trim().toLowerCase();
+        const exact = slashList.some((c) => c.cmd.toLowerCase() === typed);
         const item = slashList[menuCur];
-        if (item && item.cmd !== text.trim().toLowerCase()) {
+        if (item && !exact) {
           e.preventDefault();
           complete(item.cmd);
           return;
@@ -294,7 +312,7 @@
 
 <div class="c-root" data-agent-id="composer.root">
   {#if slashOpen && slashList.length > 0}
-    <div class="c-menu" data-agent-id="composer.menu" data-state="open">
+    <div class="c-menu" data-agent-id="composer.menu" data-state="open" bind:this={menuEl}>
       {#each slashList as c, i (c.cmd)}
         <button
           class="c-menu-row"
@@ -388,6 +406,9 @@
     border: 1px solid var(--line);
     background: var(--bg1);
     z-index: 20;
+    /* A host with many packs lists every `/pack run <name>`; keep it on screen. */
+    max-height: min(50vh, 320px);
+    overflow-y: auto;
   }
   .c-menu-row {
     display: flex;

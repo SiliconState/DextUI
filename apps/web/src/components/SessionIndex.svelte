@@ -1,7 +1,7 @@
 <script lang="ts">
   // Session index: a plain text list, like dext's own listings.
   // Status glyphs mirror the TUI: ● live · ● starting (pulse) · ○ cold · ● exited.
-  import { app, activate, newSession, closeSession, wakeSession, requestSessionAction, prefillComposer } from "../lib/state.svelte";
+  import { app, activate, newSession, closeSession, wakeSession, requestSessionAction, prefillComposer, packStarter, packUnmet } from "../lib/state.svelte";
   import SessionAction from "./SessionAction.svelte";
   import ActionQueue from "./ActionQueue.svelte";
 
@@ -135,11 +135,12 @@
           {#each packShelves as [shelf, list] (shelf)}
             <div class="idx-shelf faint">{shelf}</div>
             {#each list as p (p.name)}
+              {@const missing = packUnmet(p)}
               <div class="idx-pack">
-                <button class="idx-pack-run" data-agent-id={`rail.packs.${p.name}.run`} title={p.description}
-                  onclick={() => { prefillComposer(p.ui.starter_prompt.startsWith("/pack") ? p.ui.starter_prompt : `/pack run ${p.name} ${p.ui.starter_prompt}`); onPick?.(); }}>
-                  <span class:st-cyan={!p.unmet.length} class:faint={p.unmet.length > 0}>{p.name}</span>
-                  {#if p.unmet.length}<span class="st-warn" title={`needs ${p.unmet.join(", ")}`}>!</span>{/if}
+                <button class="idx-pack-run" data-agent-id={`rail.packs.${p.name}.run`} title={missing.length ? `${p.description} — needs ${missing.join(", ")}` : p.description}
+                  onclick={() => { prefillComposer(packStarter(p)); onPick?.(); }}>
+                  <span class:st-cyan={!missing.length} class:faint={missing.length > 0}>{p.name}</span>
+                  {#if missing.length}<span class="st-warn">!</span>{/if}
                 </button>
                 <button class="act idx-pack-edit" data-agent-id={`rail.packs.${p.name}.edit`} title={`edit ${p.path}`}
                   onclick={() => { prefillComposer(`Edit the ${p.name} pack at ${p.path}: `); onPick?.(); }}>edit</button>

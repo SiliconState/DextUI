@@ -158,13 +158,11 @@
     <div class="view-body">
       <Markdown src={block.markdown} sessionId={sessionId} />
     </div>
-    {#if app.caps.includes("packs")}
+    {#if packMeta}
       <div class="view-foot" data-agent-id={`view.${block.pack}.actions`}>
         <button class="act" data-agent-id={`view.${block.pack}.rerun`} onclick={() => prefillComposer(`/pack run ${block.pack} `)}>run again</button>
-        {#if packMeta}
-          <button class="act" data-agent-id={`view.${block.pack}.edit`} title={packMeta.path} onclick={() => editPack(block.pack)}>edit pack</button>
-          <button class="act" data-agent-id={`view.${block.pack}.fork`} onclick={() => forkPack(block.pack)}>make my own</button>
-        {/if}
+        <button class="act" data-agent-id={`view.${block.pack}.edit`} title={packMeta.path} onclick={() => editPack(block.pack)}>edit pack</button>
+        <button class="act" data-agent-id={`view.${block.pack}.fork`} onclick={() => forkPack(block.pack)}>make my own</button>
       </div>
     {/if}
   </div>

@@ -377,8 +377,9 @@ export interface ControlEventMap {
   "session.removed": { id: string; by?: string };
   "session.cleared": { id: string; generation: number };
   "sessions.deleted": SessionsDeletedEvent;
-  /** Full catalog replacement whenever a pack directory tree changes. */
-  "packs.changed": { packs: PackInfo[] };
+  /** Full catalog replacement whenever a pack directory tree changes; the
+   *  host's slash-command list rides along so `/` completion tracks new packs. */
+  "packs.changed": { packs: PackInfo[]; commands?: HostCommand[] };
   pong: Record<string, never>;
   /** `pack_requires_profile` carries `data.required` (the profile to switch to). */
   error: { code: string; message: string; data?: Record<string, unknown> };

@@ -31,7 +31,7 @@ import { spawn, spawnSync, execFile } from "node:child_process";
 import { acceptKey, FrameParser, encodeFrame, OP_PONG, OP_TEXT } from "../../mock-server/src/ws.mjs";
 import { fold, foldMeta } from "../../mock-server/src/fold.mjs";
 import { checkedPath, purgeSeat, seatFiles } from "./session-files.mjs";
-import { APPROVAL_RANK, PACK_NAME_RE, buildCatalog, listPackFiles, packCommands, parsePackSlash, renderPackList, unmetRequirements } from "./packs.mjs";
+import { PACK_NAME_RE, buildCatalog, listPackFiles, packCommands, parsePackSlash, renderPackList, unmetRequirements } from "./packs.mjs";
 
 const here = path.dirname(url.fileURLToPath(import.meta.url));
 const repoRoot = path.join(here, "..", "..", "..");
@@ -228,22 +228,30 @@ const INSTANCE = crypto.randomBytes(8).toString("hex");
 // stall every WebSocket client for up to 15 s while dext walks the shelves.
 let PACKS = buildCatalog(dextOutput(["pack", "list", "--verbose"]), { approval: DEFAULT_APPROVAL });
 let packRefresh = null;
+let packRefreshDirty = false;
 let packWatchTimer = null;
 
 function refreshPacks() {
-  if (packRefresh) return packRefresh;
+  if (packRefresh) {
+    // A change landed while a listing is in flight: run once more afterwards.
+    packRefreshDirty = true;
+    return packRefresh;
+  }
   packRefresh = new Promise((resolve) => {
     execFile(DEXT_BIN, ["pack", "list", "--verbose"], { env: { ...process.env, DEXT_NO_TUI: "1" }, timeout: 15_000, maxBuffer: 4 * 1024 * 1024 }, (err, stdout) => {
       packRefresh = null;
       if (err) {
         console.error(`agentlinkd: pack refresh failed: ${err.message}`);
-        resolve(PACKS);
-        return;
+      } else {
+        const next = buildCatalog(stdout, { approval: DEFAULT_APPROVAL });
+        const changed = JSON.stringify(next) !== JSON.stringify(PACKS);
+        PACKS = next;
+        if (changed) broadcastControl("packs.changed", { packs: PACKS, commands: hostCommands() });
       }
-      const next = buildCatalog(stdout, { approval: DEFAULT_APPROVAL });
-      const changed = JSON.stringify(next) !== JSON.stringify(PACKS);
-      PACKS = next;
-      if (changed) broadcastControl("packs.changed", { packs: PACKS });
+      if (packRefreshDirty) {
+        packRefreshDirty = false;
+        schedulePackRefresh();
+      }
       resolve(PACKS);
     });
   });
@@ -273,7 +281,7 @@ function watchPackRoots() {
 }
 
 function packByName(name) {
-  return PACK_NAME_RE.test(name) ? PACKS.find((p) => p.name === name) ?? null : null;
+  return typeof name === "string" && PACK_NAME_RE.test(name) ? PACKS.find((p) => p.name === name) ?? null : null;
 }
 
 /** Curated-then-alphabetical, exactly what clients see in hello_ok. */
@@ -1012,6 +1020,10 @@ function dextOutputAsync(args, cwd) {
  *  approval profile. Returns null when it may proceed; otherwise sends the
  *  error (with `data.required` for a one-click profile switch) and returns it. */
 function guardPackRun(client, s, run) {
+  if (!run.name) {
+    sendError(client, "bad_request", "/pack run needs <name> <task>; see /pack list");
+    return "bad_request";
+  }
   const pack = packByName(run.name);
   if (!pack) {
     sendError(client, "no_pack", `unknown pack '${run.name}'; see /pack list`);
@@ -1028,7 +1040,8 @@ function guardPackRun(client, s, run) {
     sendControl(client, "error", {
       code: "pack_requires_profile",
       message: `${pack.name} needs approval profile ${required}; this session is ${s.approval}. Headless dext would deny its writes silently.`,
-      data: { pack: pack.name, required, current: s.approval, session: s.id },
+      // `retry` lets the client re-offer the exact command after the switch.
+      data: { pack: pack.name, required, current: s.approval, session: s.id, retry: `/pack run ${pack.name} ${run.task}` },
     });
     return "pack_requires_profile";
   }
@@ -1084,8 +1097,11 @@ function submitPrompt(s, incoming) {
   let text = incoming;
   if (s.steeringQueue.length > 0) {
     // Queued steering that missed its boundary (interrupt/crash/restart)
-    // rides with the next real prompt instead of being lost.
-    text = [...s.steeringQueue, incoming].join("\n\n");
+    // rides with the next real prompt instead of being lost. A pack run goes
+    // first so its `/pack run <name>` prefix still activates the pack; the
+    // queued text becomes part of the task.
+    const packFirst = parsePackSlash(incoming)?.sub === "run";
+    text = (packFirst ? [incoming, ...s.steeringQueue] : [...s.steeringQueue, incoming]).join("\n\n");
     s.steeringQueue = [];
     persistIndex();
   }
@@ -1325,6 +1341,15 @@ async function handleCommand(client, frame) {
         sendError(client, "bad_request", `text exceeds ${MAX_PROMPT_CHARS} characters`);
         return;
       }
+      // `/pack …` may arrive as a prompt too (agents driving /__agent). Management
+      // verbs answer immediately; a run passes the catalog + profile guard before
+      // anything is journaled, then follows the normal prompt/steering path.
+      const packCmd = parsePackSlash(frame.text);
+      if (packCmd && packCmd.sub !== "run") {
+        await handlePackSlash(client, s, packCmd);
+        return;
+      }
+      if (packCmd && guardPackRun(client, s, packCmd)) return;
       if (s.working) {
         // A prompt sent mid-turn is steering: queue it for the turn boundary.
         if (!queueSteering(s, frame.text)) {
@@ -1332,10 +1357,6 @@ async function handleCommand(client, frame) {
         }
         return;
       }
-      // `/pack run` may arrive as a prompt too (agents driving /__agent); the
-      // catalog + profile guard applies before anything is journaled.
-      const packRun = parsePackSlash(frame.text);
-      if (packRun?.sub === "run" && guardPackRun(client, s, packRun)) return;
       submitPrompt(s, frame.text);
       return;
     }
@@ -1385,7 +1406,7 @@ async function handleCommand(client, frame) {
         sendError(client, "no_session", `unknown session ${frame.session}`);
         return;
       }
-      handleSlash(client, s, frame.raw);
+      await handleSlash(client, s, frame.raw);
       return;
     }
 
@@ -1684,7 +1705,12 @@ const server = http.createServer((req, res) => {
       res.end(JSON.stringify({ packs: PACKS }));
       return;
     }
-    const name = decodeURIComponent(pathName.slice("/packs/".length));
+    let name;
+    try {
+      name = decodeURIComponent(pathName.slice("/packs/".length));
+    } catch {
+      name = ""; // malformed percent-encoding is just "no such pack"
+    }
     const pack = packByName(name);
     if (!pack) {
       res.writeHead(404, { "content-type": "application/json" });
