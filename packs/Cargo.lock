@@ -3,9 +3,27 @@
 version = 4
 
 [[package]]
+name = "cashflow"
+version = "0.1.0"
+dependencies = [
+ "dextui_pack_sdk",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "dextui_pack_sdk"
 version = "0.1.0"
 dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "followups"
+version = "0.1.0"
+dependencies = [
+ "dextui_pack_sdk",
  "serde",
  "serde_json",
 ]
@@ -51,6 +69,15 @@ dependencies = [
 
 [[package]]
 name = "receipts"
+version = "0.1.0"
+dependencies = [
+ "dextui_pack_sdk",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "reconcile"
 version = "0.1.0"
 dependencies = [
  "dextui_pack_sdk",
@@ -110,6 +137,15 @@ dependencies = [
  "proc-macro2",
  "quote",
  "unicode-ident",
+]
+
+[[package]]
+name = "taxprep"
+version = "0.1.0"
+dependencies = [
+ "dextui_pack_sdk",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

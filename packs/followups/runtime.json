@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "command": "bin/followups-runtime",
+  "timeout_seconds": 120,
+  "max_continuations": 0,
+  "tools": [
+    { "name": "add_followup", "description": "Track something someone owes the user: a reply, a document, a payment. due defaults to a week from today.", "risk": "write",
+      "input_schema": { "type": "object", "properties": { "who": { "type": "string" }, "what": { "type": "string" }, "due": { "type": "string" }, "source": { "type": "string" }, "note": { "type": "string" } }, "required": ["who", "what"], "additionalProperties": false } },
+    { "name": "list_followups", "description": "Open follow-ups, most overdue first. Overdue unpaid invoices are pulled in automatically.", "risk": "read",
+      "input_schema": { "type": "object", "additionalProperties": false } },
+    { "name": "mark_followup", "description": "Set a follow-up's status: open, sent (reminder went out), done.", "risk": "write",
+      "input_schema": { "type": "object", "properties": { "id": { "type": "string" }, "status": { "type": "string", "enum": ["open", "sent", "done"] }, "note": { "type": "string" } }, "required": ["id", "status"], "additionalProperties": false } },
+    { "name": "draft_reminders", "description": "Draft a reminder message for every overdue follow-up (tone: polite | friendly | firm; sign_as: the user's name). The user copies and sends them; nothing is sent automatically.", "risk": "read",
+      "input_schema": { "type": "object", "properties": { "tone": { "type": "string" }, "sign_as": { "type": "string" } }, "additionalProperties": false } }
+  ]
+}

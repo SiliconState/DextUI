@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "command": "bin/cashflow-runtime",
+  "timeout_seconds": 120,
+  "max_continuations": 0,
+  "tools": [
+    { "name": "set_balance", "description": "Set today's bank balance (the projection's starting point) and optionally the currency symbol.", "risk": "write",
+      "input_schema": { "type": "object", "properties": { "balance": { "description": "number or string" }, "date": { "type": "string" }, "currency": { "type": "string" } }, "required": ["balance"], "additionalProperties": false } },
+    { "name": "add_recurring", "description": "Add or replace a recurring item: negative amount = bill (rent, subscription), positive = income (retainer). every_days default 30; next = first date it lands.", "risk": "write",
+      "input_schema": { "type": "object", "properties": { "name": { "type": "string" }, "amount": { "description": "number or string; negative for bills" }, "every_days": { "type": "integer" }, "next": { "type": "string" } }, "required": ["name", "amount"], "additionalProperties": false } },
+    { "name": "remove_recurring", "description": "Remove a recurring item by name.", "risk": "write",
+      "input_schema": { "type": "object", "properties": { "name": { "type": "string" } }, "required": ["name"], "additionalProperties": false } },
+    { "name": "forecast", "description": "Project the balance week by week (default 13 weeks): typical spend from the ledger, unpaid invoices landing on their due dates, recurring items. Chart is draggable for what-ifs.", "risk": "read",
+      "input_schema": { "type": "object", "properties": { "weeks": { "type": "integer", "minimum": 4, "maximum": 52 } }, "additionalProperties": false } }
+  ]
+}

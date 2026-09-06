@@ -71,6 +71,8 @@ Designed from the driver's seat: what makes a *driving* agent excellent cheaply?
 4. **Frugality.** Seq-delta sync, snapshot-based resync, server-capped payloads, collapsed thinking by default, `?fields=` projections on REST. Respects the human's battery and the supervising agent's context budget equally.
 5. **Self-edit.** DextUI is one of the workspaces the agent can edit. The host runs from the checkout it serves; `scripts/ui-build.mjs` is the single staged-build/atomic-swap/LKG implementation used by the Finder, `/ui build`, and the agent's bash alike; the host *notices* swaps (`dist` watcher → `ui.rebuilt`) rather than needing to be asked; host restarts are requested (command or `restart.request` file) and honored at the next idle boundary — the end of the agent's own turn. `--safe` boots from the LKG. New behaviour lands as extensions under `apps/web/src/ext/` (auto-registered fences, panels, Finder/slash commands, flow nodes), so the agent's edits are additive and a bad one is a folder to delete. Two engines stay separate: dext core owns thinking and tools; agentlinkd owns the control plane (sessions, packs, crews, self-edit, later flows and triggers).
 
+6. **Consumer packs, one folder.** The business packs (`packs/`) are Rust runtimes on a shared SDK (`dextui_pack_sdk`: protocol framing, money as cents, CSV, dates, confined paths, fences, live panels) that read each other's plain files in the user's folder — receipts feed reconciliation, cash flow and tax; invoices feed follow-ups and cash flow. The agent narrates and asks; the runtime owns every number. Flows chain the packs; triggers start flows; crew executes. Nothing new thinks.
+
 ## Repo map
 
 ```
@@ -83,6 +85,8 @@ packages/mock-server   zero-dep Node WS/HTTP reference host; replays real fixtur
   fixtures/            recordings of real dext stream-json runs
 packages/agentlinkd    zero-dep Node host for real dext (one-shot bridge, on-disk journals)
 apps/web               Svelte 5 PWA, hand-rolled terminal design system (the reference client)
+  src/ext/             auto-registered extensions (fences, panels, Finder/slash commands, flow nodes)
+packs/                 consumer packs: sdk-rs, pack-sdk-ts, receipts, invoice, reconcile, cashflow, taxprep, followups, flows/
 .crew/                 project-local crew agents + specs used to build this repo
 ```
 

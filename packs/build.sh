@@ -17,7 +17,7 @@ for arg in "$@"; do
   esac
 done
 
-(cd "$ROOT" && cargo build "${CARGO_ARGS[@]}" -p receipts -p invoice)
+(cd "$ROOT" && cargo build "${CARGO_ARGS[@]}" -p receipts -p invoice -p reconcile -p cashflow -p taxprep -p followups)
 
 # TS panels: typecheck, then bundle each ui/panel.ts into ui/panel.html
 # (self-contained, data placeholder baked per run by the runtime).
@@ -32,7 +32,7 @@ install_pack() {
   local dest="$SHELF_ROOT/business/packs/$pack"
   mkdir -p "$dest/bin" "$dest/ui"
   cp "$ROOT/$pack/PACK.md" "$ROOT/$pack/runtime.json" "$dest/"
-  cp "$ROOT/$pack/ui/panel.html" "$dest/ui/panel.html"
+  [ -f "$ROOT/$pack/ui/panel.html" ] && cp "$ROOT/$pack/ui/panel.html" "$dest/ui/panel.html"
   cp -f "$ROOT/target/release/$bin" "$dest/bin/$bin"
   chmod +x "$dest/bin/$bin"
   echo "installed -> $dest"
@@ -47,11 +47,19 @@ cat > "$SHELF_ROOT/business/shelf.json" <<'JSON'
   "description": "Consumer packs for bookkeepers and small business owners: receipts, invoices, reconciliation, cash flow.",
   "packs": [
     { "id": "receipts", "name": "Receipts & expenses", "description": "Turn a folder of receipts into a sorted expense ledger with monthly totals and spending charts.", "abilities": [{ "ability": "command", "name": "receipts", "usage": "dext pack run receipts scan this folder and record every receipt", "description": "Record receipt files into a categorized ledger and show spending charts." }], "version": "0.1.0" },
-    { "id": "invoice", "name": "Invoices", "description": "Numbered, printable invoices with tax, due dates and aging — who owes what, how late.", "abilities": [{ "ability": "command", "name": "invoice", "usage": "dext pack run invoice create an invoice for my last job", "description": "Create and track invoices and outstanding balances." }], "version": "0.1.0" }
+    { "id": "invoice", "name": "Invoices", "description": "Numbered, printable invoices with tax, due dates and aging — who owes what, how late.", "abilities": [{ "ability": "command", "name": "invoice", "usage": "dext pack run invoice create an invoice for my last job", "description": "Create and track invoices and outstanding balances." }], "version": "0.1.0" },
+    { "id": "reconcile", "name": "Bank reconciliation", "description": "Match a bank statement to receipts and paid invoices; list what does not line up on either side.", "abilities": [{ "ability": "command", "name": "reconcile", "usage": "dext pack run reconcile import my bank statement and show what does not match", "description": "Reconcile a bank statement CSV against the books." }], "version": "0.1.0" },
+    { "id": "cashflow", "name": "Cash-flow forecast", "description": "13-week cash projection from the ledger, unpaid invoices and recurring bills.", "abilities": [{ "ability": "command", "name": "cashflow", "usage": "dext pack run cashflow project my cash for 13 weeks", "description": "Project weekly balances with a draggable chart." }], "version": "0.1.0" },
+    { "id": "taxprep", "name": "Tax prep", "description": "Quarterly estimate and accountant package from the books; arithmetic from the user's own rules, not advice.", "abilities": [{ "ability": "command", "name": "taxprep", "usage": "dext pack run taxprep estimate this quarter and build the package", "description": "Quarterly tax estimate and accountant package." }], "version": "0.1.0" },
+    { "id": "followups", "name": "Follow-ups", "description": "Who owes a reply, a document or a payment; reminder drafts the user sends themselves.", "abilities": [{ "ability": "command", "name": "followups", "usage": "dext pack run followups who owes me something and draft the reminders", "description": "Track follow-ups and draft reminders." }], "version": "0.1.0" }
   ]
 }
 JSON
 
 install_pack receipts receipts-runtime
 install_pack invoice invoice-runtime
+install_pack reconcile reconcile-runtime
+install_pack cashflow cashflow-runtime
+install_pack taxprep taxprep-runtime
+install_pack followups followups-runtime
 echo "business shelf ready under $SHELF_ROOT/business"

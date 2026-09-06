@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "command": "bin/taxprep-runtime",
+  "timeout_seconds": 120,
+  "max_continuations": 0,
+  "tools": [
+    { "name": "set_tax_config", "description": "Save the user's own tax rules: jurisdiction label, flat rate (%) applied to revenue minus deductible expenses, fiscal year start month, non-deductible categories, partially deductible categories (name -> percent). Never guess a rate; ask.", "risk": "write",
+      "input_schema": { "type": "object", "properties": { "jurisdiction": { "type": "string" }, "rate": { "type": "number" }, "currency": { "type": "string" }, "fiscal_year_start_month": { "type": "integer" }, "non_deductible": { "type": "array", "items": { "type": "string" } }, "partial": { "type": "object" } }, "additionalProperties": false } },
+    { "name": "estimate", "description": "Quarterly estimate from the books (revenue received, deductible expenses by category, taxable amount, estimated tax) plus a before-you-file checklist. quarter like 2026-Q3; default current.", "risk": "read",
+      "input_schema": { "type": "object", "properties": { "quarter": { "type": "string" } }, "additionalProperties": false } },
+    { "name": "build_package", "description": "Write the accountant package for a quarter to .taxprep/package-<quarter>/: expenses.csv, invoices.csv, summary.md, summary.json.", "risk": "write",
+      "input_schema": { "type": "object", "properties": { "quarter": { "type": "string" } }, "additionalProperties": false } }
+  ]
+}

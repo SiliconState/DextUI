@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["sdk-rs", "receipts", "invoice"]
+members = ["sdk-rs", "receipts", "invoice", "reconcile", "cashflow", "taxprep", "followups"]
 
 [workspace.package]
 version = "0.1.0"

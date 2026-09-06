@@ -130,6 +130,14 @@ changeable any time from the gallery header). It only decides what you see
 - Personas: `accountant` | `business` | `developer`; a pack lists who it is
   for in `ui-personas` (`everyone` or empty = shown to all).
 
+## Consumer packs (business shelf)
+
+`packs/` holds six "Rust core, TS panel" packs for bookkeepers and small business
+owners — receipts, invoices, bank reconciliation, cash-flow forecast, tax prep,
+follow-ups — built and installed onto `~/.dext/shelves/business` by
+`packs/build.sh`. State is plain files in the user's folder; every tool returns a
+card (charts / sortable tables / live panel) the UI renders. See `packs/README.md`.
+
 ## Flows (drag-and-drop workflows)
 
 Press `f` (or `/flows`, or Finder → "flows") to open the **flow builder**: a
@@ -217,7 +225,9 @@ Both drivers converge on the same primitives, so nothing is special-cased:
   file) is refused-into-a-queue while any turn, crew run or build is live and
   honored at the next idle boundary — which, for an agent editing the host,
   is the end of its own turn. The host exits with status **75**; systemd's
-  `Restart=on-failure` brings it back. `--force` restarts now.
+  `Restart=on-failure` brings it back (the shipped `dext-agentlinkd` unit uses
+  `Restart=on-failure`, `RestartSec=2` — keep it that way, `Restart=no` would
+  strand the UI after a self-restart). `--force` restarts now.
 - **`--safe`** serves `apps/web/dist.lkg` instead of `dist` so a broken build
   can never lock you out of the UI that fixes it; a missing `dist/index.html`
   falls back to the LKG automatically.
