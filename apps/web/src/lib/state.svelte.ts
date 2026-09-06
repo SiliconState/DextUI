@@ -489,7 +489,13 @@ export function start(token: string): void {
             requires: [...(p.ui?.requires ?? [])],
             gallery: !!p.ui?.gallery,
             tags: [...(p.ui?.tags ?? [])],
+            personas: [...(p.ui?.personas ?? [])],
             ...(p.ui?.icon ? { icon: p.ui.icon } : {}),
+            ...(p.ui?.title ? { title: p.ui.title } : {}),
+            ...(p.ui?.panel ? { panel: p.ui.panel } : {}),
+            ...(Array.isArray(p.ui?.actions) && p.ui.actions.length
+              ? { actions: p.ui.actions.filter((a) => a && typeof a.label === "string" && typeof a.prompt === "string").map((a) => ({ label: a.label, prompt: a.prompt })) }
+              : {}),
           },
           unmet: [...(p.unmet ?? [])],
         }));

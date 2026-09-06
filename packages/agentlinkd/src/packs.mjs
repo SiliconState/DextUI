@@ -1,15 +1,19 @@
-// Pack catalog for agentlinkd: parse `dext pack list --verbose`, read the
-// optional `ui-*` front-matter keys from each PACK.md, merge curated day-1
-// defaults, and compute which requirements this host cannot satisfy.
-// Pure functions except readPackUi/listPackFiles (filesystem, symlink-refusing).
+// Pack catalog for agentlinkd: parse `dext pack list --json` (or the older
+// `--verbose` text), read the optional `ui-*` front-matter keys from each
+// PACK.md, merge the curated gallery (gallery.json), and compute which
+// requirements this host cannot satisfy.
+// Pure functions except readPackUi/listPackFiles/loadGallery (filesystem, symlink-refusing).
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
+import { fileURLToPath } from "node:url";
 import { checkedPath } from "./session-files.mjs";
 
 export const PACK_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 const PACK_MD_CAP = 1024 * 1024;
 const ARTIFACTS = new Set(["html", "chart", "table", "markdown", "file", "none"]);
+/** Who a pack is for. `everyone` (or an empty list) shows in every persona's gallery. */
+export const PERSONAS = new Set(["accountant", "business", "developer", "everyone"]);
 /** Sandboxed panel: an .html file inside the pack (no dotfiles/traversal). */
 const PACK_PANEL_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}(?:\/[A-Za-z0-9][A-Za-z0-9_-]{0,63})*\.html$/;
 const MAX_PACK_ACTIONS = 4;
@@ -17,37 +21,64 @@ const MAX_PACK_ACTIONS = 4;
 /** Permissiveness order of dext approval profiles (`ask` behaves like a prompt; headless dext denies). */
 export const APPROVAL_RANK = { never: 0, ask: 0, "auto-read": 1, "auto-write": 2, always: 3 };
 
-/** Curated day-1 gallery. Keyed by pack name; PACK.md `ui-*` keys override. */
-export const GALLERY_DEFAULTS = {
-  "hello-chart": {
-    starter_prompt: "Run hello-chart",
-    artifact: "chart", time_to_first_artifact: 10, requires: [], gallery: true, tags: ["sample"], icon: "chart",
-  },
-  report: {
-    starter_prompt: "Summarise this workspace: what is here, what looks unfinished, top 3 risks — as an HTML report",
-    artifact: "html", time_to_first_artifact: 45, requires: ["approval:auto-write"], gallery: true, tags: ["research", "summary"], icon: "report",
-  },
-  autoresearch: {
-    starter_prompt: "Pick one measurable thing in this workspace (a test suite's wall time, a script's runtime, a bundle size), try 3 variations, keep the best, show the numbers as a chart",
-    artifact: "chart", time_to_first_artifact: 90, requires: ["approval:auto-write"], gallery: true, tags: ["research", "loop"], icon: "loop",
-  },
-  crew: {
-    starter_prompt: "Plan a 3-worker crew to audit this repo for dead code, TODOs and missing tests; show the plan only",
-    artifact: "table", time_to_first_artifact: 40, requires: [], gallery: true, tags: ["orchestration"], icon: "crew",
-  },
-  packopt: {
-    starter_prompt: "Show me what packopt would optimise in the report pack; do not apply changes",
-    artifact: "table", time_to_first_artifact: 60, requires: ["approval:auto-write"], gallery: true, tags: ["optimization", "meta"], icon: "tune",
-  },
-  agent_browser: {
-    starter_prompt: "Fetch the title and first heading of example.com",
-    artifact: "markdown", time_to_first_artifact: 20, requires: ["chromium"], gallery: true, tags: ["engineering", "browser"], icon: "browser",
-  },
-  lightpanda: {
-    starter_prompt: "Fetch the title and first heading of example.com",
-    artifact: "markdown", time_to_first_artifact: 15, requires: ["lightpanda"], gallery: true, tags: ["engineering", "browser"], icon: "browser",
-  },
-};
+/** Default curated gallery file, shipped beside this package. Overridable with
+ *  `--gallery=<file>` / `DEXTUI_GALLERY` so a workspace (or DextUI editing
+ *  itself) can curate without touching code. */
+export const GALLERY_FILE = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "gallery.json");
+const GALLERY_CAP = 512 * 1024;
+
+/** Bound one ui object from any source (gallery.json, `--json` ui block,
+ *  PACK.md) to the wire shape; unknown keys and bad values are dropped. */
+export function sanitizeUi(raw) {
+  if (!raw || typeof raw !== "object") return {};
+  const ui = {};
+  const str = (v, n) => (typeof v === "string" ? v.slice(0, n) : undefined);
+  const list = (v) => (Array.isArray(v) ? v.filter((x) => typeof x === "string" && x).map((x) => x.slice(0, 64)).slice(0, 16) : undefined);
+  const sp = str(raw.starter_prompt, 400);
+  if (sp !== undefined) ui.starter_prompt = sp;
+  if (typeof raw.artifact === "string" && ARTIFACTS.has(raw.artifact.toLowerCase())) ui.artifact = raw.artifact.toLowerCase();
+  if (Number.isFinite(raw.time_to_first_artifact) && raw.time_to_first_artifact >= 0) ui.time_to_first_artifact = Math.round(raw.time_to_first_artifact);
+  const req = list(raw.requires);
+  if (req) ui.requires = req;
+  if (typeof raw.gallery === "boolean") ui.gallery = raw.gallery;
+  const tags = list(raw.tags);
+  if (tags) ui.tags = tags;
+  const icon = str(raw.icon, 32);
+  if (icon) ui.icon = icon;
+  const title = str(raw.title, 48);
+  if (title) ui.title = title;
+  const personas = list(raw.personas);
+  if (personas) ui.personas = personas.map((p) => p.toLowerCase()).filter((p) => PERSONAS.has(p));
+  if (typeof raw.panel === "string" && PACK_PANEL_RE.test(raw.panel)) ui.panel = raw.panel;
+  if (Array.isArray(raw.actions)) {
+    ui.actions = raw.actions
+      .filter((a) => a && typeof a.label === "string" && typeof a.prompt === "string")
+      .map((a) => ({ label: a.label.trim().slice(0, 32), prompt: a.prompt.trim().slice(0, 400) }))
+      .filter((a) => a.label && a.prompt)
+      .slice(0, MAX_PACK_ACTIONS);
+  }
+  return ui;
+}
+
+/** Read + sanitize gallery.json → `{ name: ui }`. Missing/invalid → {} (never throws). */
+export function loadGallery(file = GALLERY_FILE) {
+  try {
+    if (!checkedPath(file)) return {};
+    const st = fs.lstatSync(file);
+    if (!st.isFile() || st.size > GALLERY_CAP) return {};
+    const v = JSON.parse(fs.readFileSync(file, "utf8"));
+    const packs = v && typeof v === "object" && v.packs && typeof v.packs === "object" ? v.packs : {};
+    const out = {};
+    for (const [name, ui] of Object.entries(packs)) if (PACK_NAME_RE.test(name)) out[name] = sanitizeUi(ui);
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+/** Curated gallery, loaded once at import. Kept under the historical export
+ *  name; `buildCatalog({ gallery })` overrides it per call. */
+export const GALLERY_DEFAULTS = loadGallery(process.env.DEXTUI_GALLERY || GALLERY_FILE);
 
 export function defaultUi(name) {
   return {
@@ -57,7 +88,38 @@ export function defaultUi(name) {
     requires: [],
     gallery: false,
     tags: [],
+    personas: [],
   };
+}
+
+/** Parse `dext pack list --json` (one array; `ui` optional per pack). Returns
+ *  null when the text is not that shape so callers can fall back to the
+ *  verbose-text parser for older dext binaries. */
+export function parsePackListingJson(text) {
+  const t = String(text ?? "").trim();
+  if (!t.startsWith("[")) return null;
+  let v;
+  try {
+    v = JSON.parse(t);
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(v)) return null;
+  const packs = [];
+  for (const p of v) {
+    if (!p || typeof p !== "object" || typeof p.name !== "string" || !PACK_NAME_RE.test(p.name) || typeof p.path !== "string" || !p.path) continue;
+    packs.push({
+      name: p.name,
+      description: typeof p.description === "string" ? p.description : "",
+      source: typeof p.source === "string" ? p.source : "",
+      path: p.path,
+      shelf: typeof p.shelf === "string" && p.shelf ? p.shelf : undefined,
+      ...(typeof p.runtime === "string" && p.runtime ? { runtime: p.runtime } : {}),
+      ...(Array.isArray(p.credential_env) ? { credential_env: p.credential_env.filter((e) => typeof e === "string").slice(0, 32) } : {}),
+      ...(p.ui && typeof p.ui === "object" ? { ui: sanitizeUi(p.ui) } : {}),
+    });
+  }
+  return packs;
 }
 
 /** Parse `dext pack list --verbose` (Packs N found / name / wrapped description / source: / shelf: / path:). */
@@ -122,6 +184,8 @@ export function parsePackUi(text) {
       case "ui-icon": ui.icon = yamlScalar(value).slice(0, 32); break;
       case "ui-panel": { const p = yamlScalar(value); if (PACK_PANEL_RE.test(p)) ui.panel = p; break; }
       case "ui-actions": ui.actions = parsePackActions(value); break;
+      case "ui-title": { const t = yamlScalar(value).slice(0, 48); if (t) ui.title = t; break; }
+      case "ui-personas": ui.personas = yamlList(value).map((p) => p.toLowerCase()).filter((p) => PERSONAS.has(p)); break;
       default: break;
     }
   }
@@ -182,12 +246,16 @@ export function unmetRequirements(requires, { approval, env = process.env } = {}
   return out;
 }
 
-/** Full catalog entries from a listing, with defaults and PACK.md overrides merged. */
-export function buildCatalog(listingText, { approval, env = process.env, readUi = readPackUi } = {}) {
-  return parsePackListing(listingText).map((p) => {
-    const ui = { ...defaultUi(p.name), ...(GALLERY_DEFAULTS[p.name] ?? {}), ...readUi(p.path) };
+/** Full catalog entries from a listing (JSON or verbose text), with defaults,
+ *  the curated gallery, dext's own `ui` block and PACK.md overrides merged —
+ *  in that order, later wins. */
+export function buildCatalog(listingText, { approval, env = process.env, readUi = readPackUi, gallery = GALLERY_DEFAULTS } = {}) {
+  const listing = parsePackListingJson(listingText) ?? parsePackListing(listingText);
+  return listing.map((p) => {
+    const { ui: coreUi, ...rest } = p;
+    const ui = { ...defaultUi(p.name), ...(gallery[p.name] ?? {}), ...(coreUi ?? {}), ...readUi(p.path) };
     ui.requires = [...new Set(ui.requires)];
-    return { ...p, ui, unmet: unmetRequirements(ui.requires, { approval, env }) };
+    return { ...rest, ui, unmet: unmetRequirements(ui.requires, { approval, env }) };
   }).sort((a, b) => {
     // Gallery cards first, fastest artifact first; everything else alphabetical.
     if (a.ui.gallery !== b.ui.gallery) return a.ui.gallery ? -1 : 1;
@@ -358,7 +426,7 @@ export function packCommands(catalog) {
   return [
     ...catalog.map((p) => ({ cmd: `/pack run ${p.name}`, desc: p.description.slice(0, 90) })),
     { cmd: "/pack list", desc: "list installed packs" },
-    { cmd: "/pack create", desc: "scaffold <shelf>/<name> (next: describe it in chat)" },
+    { cmd: "/pack create", desc: "scaffold <shelf>/<name>, or copy one with --from <pack>" },
     { cmd: "/pack inspect", desc: "show a pack's PACK.md summary" },
   ];
 }
@@ -379,7 +447,15 @@ export function parsePackSlash(raw) {
     return { sub: "run", name, task };
   }
   if (/^(inspect|info|show)$/.test(verb)) return { sub: "inspect", name: words[1] ?? "" };
-  if (/^(create|new)$/.test(verb)) return { sub: "create", selector: words[1] ?? "" };
+  if (/^(create|new)$/.test(verb)) {
+    // `/pack create <shelf>/<name> [--from <pack>]` (also `--from=<pack>`).
+    let from;
+    for (let i = 2; i < words.length; i++) {
+      if (words[i] === "--from" && words[i + 1]) from = words[++i];
+      else if (words[i].startsWith("--from=")) from = words[i].slice("--from=".length);
+    }
+    return { sub: "create", selector: words[1] ?? "", ...(from ? { from } : {}) };
+  }
   // `/pack <name> <task>` shorthand, mirroring the CLI.
   if (PACK_NAME_RE.test(verb) && words.length > 1) return { sub: "run", name: verb, task: afterVerb.trim() };
   return { sub: "unknown", verb };

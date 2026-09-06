@@ -26,10 +26,11 @@
     return /^[-+]{3} |^@@ |^diff --git /m.test(t);
   }
 
-  // Pack attribution for a turn comes from its own journaled prompt: the host
-  // accepts `/pack run <name>` only for catalog names, so the prefix is
-  // authoritative and replays on old journals without a new event.
-  const userPack = $derived(block.kind === "user" ? packOfPrompt(block.text) : null);
+  // Pack attribution: dext's `pack_start` stamps the turn's prompt block (the
+  // fold does it), which is exact even when dext inferred the pack from plain
+  // text. Older journals fall back to the `/pack run <name>` prefix, which the
+  // host only ever accepts for catalog names.
+  const userPack = $derived(block.kind === "user" ? (block.pack ?? packOfPrompt(block.text)) : null);
   const packMeta = $derived(block.kind === "view" ? app.packs.find((p) => p.name === block.pack) : undefined);
 
   function editPack(name: string) {
@@ -37,10 +38,15 @@
     prefillComposer(`Edit the ${name} pack${p ? ` at ${p.path}` : ""}: `);
   }
 
+  /** Deterministic fork through dext (`pack create --from`): the host copies
+   *  the files, rewrites `name:` and refreshes the catalog; nothing is
+   *  delegated to the model. Shelf `mine` keeps copies out of the originals'
+   *  shelves. */
   function forkPack(name: string) {
-    const p = app.packs.find((x) => x.name === name);
-    const shelf = p?.shelf ?? "mine";
-    prefillComposer(`Make my own copy of the ${name} pack: run \`dext pack create ${shelf}/${name}-mine\`, copy the files from ${p?.path ?? `the ${name} pack directory`} into it (keep the original untouched), set name: ${name}-mine in PACK.md, then `);
+    const sid = app.activeId;
+    const cmd = `/pack create mine/${name}-mine --from ${name}`;
+    if (app.conn && sid) app.conn.slash(sid, cmd);
+    else prefillComposer(cmd);
   }
 
   const markerGlyph: Record<string, string> = {

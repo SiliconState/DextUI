@@ -31,7 +31,7 @@ import { spawn, spawnSync, execFile } from "node:child_process";
 import { acceptKey, FrameParser, encodeFrame, OP_PONG, OP_TEXT } from "../../mock-server/src/ws.mjs";
 import { fold, foldMeta } from "../../mock-server/src/fold.mjs";
 import { checkedPath, purgeSeat, seatFiles } from "./session-files.mjs";
-import { PACK_NAME_RE, buildCatalog, listPackFiles, listPackTree, packCommands, parsePackSlash, readPackFile, renderPackList, unmetRequirements, writePackFile } from "./packs.mjs";
+import { GALLERY_DEFAULTS, PACK_NAME_RE, buildCatalog, listPackFiles, listPackTree, loadGallery, packCommands, parsePackListingJson, parsePackSlash, readPackFile, renderPackList, unmetRequirements, writePackFile } from "./packs.mjs";
 import { RUN_ID_RE as CREW_RUN_ID_RE, TAIL_MAX_LINES, createCrewAdapter } from "./crew.mjs";
 
 const here = path.dirname(url.fileURLToPath(import.meta.url));
@@ -229,10 +229,21 @@ const INSTANCE = crypto.randomBytes(8).toString("hex");
 
 // ---------- packs ----------
 
+// Prefer dext's machine-readable catalog (`pack list --json`, dext ≥ the
+// packs handoff) and fall back to parsing the verbose text on older binaries.
+// Probed once at boot: a fake/old dext that prints text for `--json` still
+// gets a catalog. `--gallery=<file>` / DEXTUI_GALLERY curates without code.
+function probePackListArgs() {
+  const out = dextOutput(["pack", "list", "--json"]);
+  return parsePackListingJson(out) ? ["pack", "list", "--json"] : ["pack", "list", "--verbose"];
+}
+const PACK_LIST_ARGS = probePackListArgs();
+const GALLERY = argValue("gallery", process.env.DEXTUI_GALLERY) ? loadGallery(path.resolve(argValue("gallery", process.env.DEXTUI_GALLERY))) : GALLERY_DEFAULTS;
+
 // Boot discovery is sync like models (one extra spawnSync, typically <1 s).
 // Refreshes are async and serialized: a sync spawn on the event loop would
 // stall every WebSocket client for up to 15 s while dext walks the shelves.
-let PACKS = buildCatalog(dextOutput(["pack", "list", "--verbose"]), { approval: DEFAULT_APPROVAL });
+let PACKS = buildCatalog(dextOutput(PACK_LIST_ARGS), { approval: DEFAULT_APPROVAL, gallery: GALLERY });
 let packRefresh = null;
 let packRefreshDirty = false;
 let packWatchTimer = null;
@@ -264,12 +275,12 @@ function refreshPacks() {
     return packRefresh;
   }
   packRefresh = new Promise((resolve) => {
-    execFile(DEXT_BIN, ["pack", "list", "--verbose"], { env: { ...process.env, DEXT_NO_TUI: "1" }, timeout: 15_000, maxBuffer: 4 * 1024 * 1024 }, (err, stdout) => {
+    execFile(DEXT_BIN, PACK_LIST_ARGS, { env: { ...process.env, DEXT_NO_TUI: "1" }, timeout: 15_000, maxBuffer: 4 * 1024 * 1024 }, (err, stdout) => {
       packRefresh = null;
       if (err) {
         console.error(`agentlinkd: pack refresh failed: ${err.message}`);
       } else {
-        const next = buildCatalog(stdout, { approval: DEFAULT_APPROVAL });
+        const next = buildCatalog(stdout, { approval: DEFAULT_APPROVAL, gallery: GALLERY });
         const changed = JSON.stringify(next) !== JSON.stringify(PACKS);
         PACKS = next;
         if (changed) broadcastControl("packs.changed", { packs: PACKS, commands: hostCommands() });
@@ -1214,14 +1225,27 @@ async function handlePackSlash(client, s, cmd) {
     }
     case "create": {
       if (!/^[a-z0-9_-]+\/[a-z0-9_-]+$/.test(cmd.selector)) {
-        sendError(client, "bad_request", "/pack create needs <shelf>/<name> (lowercase letters, digits, - or _)");
+        sendError(client, "bad_request", "/pack create needs <shelf>/<name> [--from <pack>] (lowercase letters, digits, - or _)");
         return;
       }
-      const r = await dextOutputAsync(["pack", "create", cmd.selector], s.cwd);
+      const args = ["pack", "create", cmd.selector];
+      if (cmd.from) {
+        // Deterministic fork: dext copies the pack (no symlinks, no .env) and
+        // rewrites `name:`; the original is untouched. Never pass free text.
+        const src = packByName(cmd.from);
+        if (!src) {
+          sendError(client, "no_pack", `unknown pack '${cmd.from}' to copy from; see /pack list`);
+          return;
+        }
+        args.push("--from", src.name);
+      }
+      const r = await dextOutputAsync(args, s.cwd);
       publish(journalData(s, "slash", (r.ok ? r.out : `[err] ${r.err}`).slice(0, 4000)));
       if (r.ok) {
         await refreshPacks();
-        publish(journalData(s, "info", `pack ${cmd.selector} scaffolded — describe what it should do and dext will fill in PACK.md`));
+        publish(journalData(s, "info", cmd.from
+          ? `pack ${cmd.selector} is your copy of ${cmd.from} — edit it from the gallery or describe the change here`
+          : `pack ${cmd.selector} scaffolded — describe what it should do and dext will fill in PACK.md`));
       }
       return;
     }

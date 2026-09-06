@@ -84,6 +84,15 @@ export interface RuntimeViewEvent {
   markdown: string;
 }
 
+/** dext `pack_start`: a pack became active for this turn (explicit `--pack`
+ *  or inferred from the prompt). Emitted once per activation, before any
+ *  `runtime_view`. Hosts and clients prefer it over prompt-prefix guesses. */
+export interface PackStartEvent {
+  name: string;
+  /** First 80 chars of the task. */
+  task_preview: string;
+}
+
 export interface RuntimeControlAppliedEvent {
   commands: number;
   model_changed: boolean;
@@ -160,6 +169,11 @@ export interface PackUi {
   gallery: boolean;
   tags: string[];
   icon?: string;
+  /** Plain-language display name (≤ 48 chars); the pack `name` stays the id. */
+  title?: string;
+  /** Who the pack is for: `accountant` | `business` | `developer` | `everyone`.
+   *  Empty means everyone. Drives the onboarding persona filter. */
+  personas?: string[];
   /** Optional sandboxed HTML panel shipped inside the pack (relative path). */
   panel?: string;
   /** Pack-declared quick actions: label plus composer prompt. */
@@ -174,6 +188,8 @@ export interface PackInfo {
   /** `user:~/.dext/shelves/research`, `project:.dext/shelves/x`, `bundled` … */
   source: string;
   path: string;
+  /** Pack Runtime Protocol descriptor (`runtime.json`) when the pack has a native runtime. */
+  runtime?: string;
   ui: PackUi;
   /** Requirements the host could not satisfy right now (subset of `ui.requires`). */
   unmet: string[];
@@ -380,7 +396,7 @@ export type Block =
       content?: string;
       output_tail?: string;
     }
-  | { kind: "user"; text: string }
+  | { kind: "user"; text: string; pack?: string }
   | { kind: "marker"; level: "info" | "warn" | "error" | "note"; text: string }
   | { kind: "slash"; text: string; structured: boolean }
   | { kind: "view"; pack: string; title: string; markdown: string };

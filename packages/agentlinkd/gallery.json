@@ -1,0 +1,101 @@
+{
+  "$schema": "./gallery.schema.md",
+  "_comment": "Curated gallery metadata keyed by pack name. Merge order: defaults < this file < `dext pack list --json` ui block < the pack's own PACK.md ui-* keys. Packs absent here still list; they just are not curated. Personas: accountant | business | developer | everyone (empty = everyone).",
+  "packs": {
+    "hello-chart": {
+      "title": "Hello chart",
+      "starter_prompt": "Run hello-chart",
+      "artifact": "chart", "time_to_first_artifact": 10, "requires": [], "gallery": true, "tags": ["sample"], "icon": "chart",
+      "personas": ["developer"]
+    },
+    "receipts": {
+      "title": "Receipts & expenses",
+      "starter_prompt": "Scan the receipts folder, sort every receipt into a category, and show me this month's spending as a chart",
+      "artifact": "chart", "time_to_first_artifact": 30, "requires": ["approval:auto-write"], "gallery": true, "tags": ["money", "bookkeeping"], "icon": "receipt",
+      "personas": ["accountant", "business"]
+    },
+    "invoice": {
+      "title": "Invoices",
+      "starter_prompt": "Create an invoice for my last job and show who still owes me money",
+      "artifact": "html", "time_to_first_artifact": 30, "requires": ["approval:auto-write"], "gallery": true, "tags": ["money", "clients"], "icon": "invoice",
+      "personas": ["business", "accountant"]
+    },
+    "reconcile": {
+      "title": "Bank reconciliation",
+      "starter_prompt": "Match my bank statement to the ledger and list anything that does not line up",
+      "artifact": "table", "time_to_first_artifact": 40, "requires": ["approval:auto-write"], "gallery": true, "tags": ["money", "month-end"], "icon": "reconcile",
+      "personas": ["accountant", "business"]
+    },
+    "cashflow": {
+      "title": "Cash-flow forecast",
+      "starter_prompt": "Project my cash for the next 13 weeks from the ledger and recurring bills; show it as a chart I can drag",
+      "artifact": "chart", "time_to_first_artifact": 30, "requires": ["approval:auto-write"], "gallery": true, "tags": ["money", "planning"], "icon": "cashflow",
+      "personas": ["business", "accountant"]
+    },
+    "taxprep": {
+      "title": "Tax prep",
+      "starter_prompt": "Estimate this quarter's tax from the ledger and build the package my accountant needs",
+      "artifact": "html", "time_to_first_artifact": 60, "requires": ["approval:auto-write"], "gallery": true, "tags": ["money", "tax"], "icon": "tax",
+      "personas": ["accountant", "business"]
+    },
+    "followups": {
+      "title": "Follow-ups",
+      "starter_prompt": "Who owes me a reply, a payment or a document? Draft the reminders and I will approve each one",
+      "artifact": "table", "time_to_first_artifact": 30, "requires": ["approval:auto-write"], "gallery": true, "tags": ["clients", "tasks"], "icon": "followup",
+      "personas": ["business"]
+    },
+    "crew": {
+      "title": "Team",
+      "starter_prompt": "Plan a 3-worker crew to audit this folder for what is unfinished, risky or missing; show the plan only",
+      "artifact": "table", "time_to_first_artifact": 40, "requires": [], "gallery": true, "tags": ["helpers", "orchestration"], "icon": "crew",
+      "personas": ["everyone"]
+    },
+    "mesh": {
+      "title": "Inbox",
+      "starter_prompt": "Check my inbox for messages from other helpers and summarise anything that needs me",
+      "artifact": "markdown", "time_to_first_artifact": 10, "requires": [], "gallery": true, "tags": ["helpers", "messages"], "icon": "inbox",
+      "personas": ["everyone"]
+    },
+    "report": {
+      "title": "Report",
+      "starter_prompt": "Summarise this workspace: what is here, what looks unfinished, top 3 risks — as an HTML report",
+      "artifact": "html", "time_to_first_artifact": 45, "requires": ["approval:auto-write"], "gallery": true, "tags": ["research", "summary"], "icon": "report",
+      "personas": ["everyone"]
+    },
+    "autoresearch": {
+      "title": "Auto-research",
+      "starter_prompt": "Pick one measurable thing in this workspace (a test suite's wall time, a script's runtime, a bundle size), try 3 variations, keep the best, show the numbers as a chart",
+      "artifact": "chart", "time_to_first_artifact": 90, "requires": ["approval:auto-write"], "gallery": true, "tags": ["research", "loop"], "icon": "loop",
+      "personas": ["developer"]
+    },
+    "packopt": {
+      "title": "Pack optimiser",
+      "starter_prompt": "Show me what packopt would optimise in the report pack; do not apply changes",
+      "artifact": "table", "time_to_first_artifact": 60, "requires": ["approval:auto-write"], "gallery": true, "tags": ["optimization", "meta"], "icon": "tune",
+      "personas": ["developer"]
+    },
+    "edge_browser": {
+      "title": "Browser (Edge)",
+      "starter_prompt": "Open my current Edge tab and summarise the page",
+      "artifact": "markdown", "time_to_first_artifact": 20, "requires": [], "gallery": true, "tags": ["research", "browser"], "icon": "browser",
+      "personas": ["developer", "business"]
+    },
+    "agent_browser": {
+      "title": "Headless browser",
+      "starter_prompt": "Fetch the title and first heading of example.com",
+      "artifact": "markdown", "time_to_first_artifact": 20, "requires": ["chromium"], "gallery": true, "tags": ["engineering", "browser"], "icon": "browser",
+      "personas": ["developer"]
+    },
+    "lightpanda": {
+      "title": "Lightpanda browser",
+      "starter_prompt": "Fetch the title and first heading of example.com",
+      "artifact": "markdown", "time_to_first_artifact": 15, "requires": ["lightpanda"], "gallery": true, "tags": ["engineering", "browser"], "icon": "browser",
+      "personas": ["developer"]
+    },
+    "refactor": { "title": "Refactor", "personas": ["developer"], "tags": ["engineering"] },
+    "realtor_harvest": { "title": "Realtor harvest", "personas": ["developer"], "tags": ["research"] },
+    "stock_deepdive": { "title": "Stock deep-dive", "personas": ["developer", "business"], "tags": ["finance"] },
+    "tradingview": { "title": "TradingView", "personas": ["developer"], "tags": ["finance"] },
+    "x_client": { "title": "X client", "personas": ["developer"], "tags": ["social"] }
+  }
+}

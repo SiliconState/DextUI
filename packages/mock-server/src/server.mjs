@@ -256,6 +256,8 @@ function packPlan(name, task) {
   const md = `Ran **${name}** on: _${task || "(no task)"}_\n\n\`\`\`chart\n{"type":"bar","title":"${name} result","labels":["a","b","c"],"values":[3,7,5],"unit":""}\n\`\`\``;
   return [
     { event: "turn_start", delay: 5 },
+    // dext emits pack_start once per activation, before any runtime_view.
+    { event: "pack_start", data: { name, task_preview: (task || "").slice(0, 80) }, delay: 2 },
     { event: "tool_call_start", data: { call_id: "p1", name: "bash", summary: `bin/${name} --task` }, delay: 10 },
     { event: "tool_call_result", data: { call_id: "p1", name: "bash", ok: true, preview: "ok", content: "ok" }, delay: 40 },
     { event: "runtime_view", data: { pack: name, title: `${name} result`, markdown: md }, delay: 10 },

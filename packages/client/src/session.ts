@@ -12,6 +12,7 @@ import type {
   Envelope,
   HistoryContextUpdatedEvent,
   HttpRetryEvent,
+  PackStartEvent,
   PermissionRequestEvent,
   PermissionResolvedEvent,
   RuntimeControlAppliedEvent,
@@ -64,6 +65,8 @@ export interface SessionState {
   telemetry?: Record<string, number>;
   /** Last provider retry seen during the current turn; cleared on turn_end. */
   retry?: HttpRetryEvent;
+  /** Pack dext activated for the current turn (`pack_start`); cleared on turn_end. */
+  activePack?: string;
   compacting: boolean;
   failed: boolean;
   /** Bounded raw envelope tail for the inspector (deltas excluded). */
@@ -235,6 +238,7 @@ export class SessionStore {
           turnStartedAt: undefined,
           sessionUsage: t.usage,
           retry: undefined,
+          activePack: undefined,
         });
         return;
       }
@@ -421,6 +425,21 @@ export class SessionStore {
       case "runtime_view": {
         const v = d as RuntimeViewEvent;
         this.pushBlock({ kind: "view", pack: v.pack, title: v.title, markdown: v.markdown });
+        return;
+      }
+      case "pack_start": {
+        // dext says which pack became active for this turn: stamp the turn's
+        // prompt so attribution never depends on a `/pack run` prefix guess.
+        const p = d as PackStartEvent;
+        if (typeof p?.name !== "string" || !p.name) return;
+        for (let i = this.state.blocks.length - 1; i >= 0; i--) {
+          const b = this.state.blocks[i];
+          if (b && b.kind === "user") {
+            if (b.pack !== p.name) this.replaceBlock(i, { kind: "user", text: b.text, pack: p.name });
+            break;
+          }
+        }
+        this.bump({ activePack: p.name });
         return;
       }
       case "steering_received": {

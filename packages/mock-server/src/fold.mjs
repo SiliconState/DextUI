@@ -159,6 +159,17 @@ export function fold(journal) {
       case "runtime_view":
         blocks.push({ kind: "view", pack: d.pack, title: d.title, markdown: d.markdown });
         break;
+      case "pack_start": {
+        // Client parity: stamp the most recent user block with the pack dext activated.
+        if (typeof d?.name !== "string" || !d.name) break;
+        for (let i = blocks.length - 1; i >= 0; i--) {
+          if (blocks[i].kind === "user") {
+            if (blocks[i].pack !== d.name) blocks[i] = { kind: "user", text: blocks[i].text, pack: d.name };
+            break;
+          }
+        }
+        break;
+      }
       case "local_auth_prompt":
         blocks.push({ kind: "marker", level: "warn", text: `Credentials requested by ${d.tool}: ${d.message}` });
         break;

@@ -3,11 +3,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import {
-  buildCatalog, listPackFiles, listPackTree, packCommands, parsePackListing, parsePackSlash, parsePackUi, readPackFile, readPackUi, renderPackList, resolvePackPath, unmetRequirements, writePackFile,
+  GALLERY_DEFAULTS, buildCatalog, listPackFiles, listPackTree, loadGallery, packCommands, parsePackListing, parsePackListingJson, parsePackSlash, parsePackUi, readPackFile, readPackUi, renderPackList, resolvePackPath, unmetRequirements, writePackFile,
 } from "../src/packs.mjs";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -74,14 +75,86 @@ test("unmetRequirements: approval rank, PATH probes, connectors never satisfiabl
 test("buildCatalog: defaults < GALLERY_DEFAULTS < PACK.md, gallery first, unmet computed", () => {
   const readUi = (p) => (p.endsWith("/report") ? { starter_prompt: "custom", gallery: false } : {});
   const cat = buildCatalog(LISTING, { approval: "auto-read", env: { PATH: "" }, readUi });
-  assert.deepEqual(cat.map((p) => p.name), ["mesh", "report"], "PACK.md turned report's gallery off, so mesh sorts first alphabetically");
+  assert.deepEqual(cat.map((p) => p.name), ["mesh", "report"], "PACK.md turned report's gallery off; mesh (curated, gallery) sorts first");
   const report = cat.find((p) => p.name === "report");
   assert.equal(report.ui.starter_prompt, "custom");
   assert.deepEqual(report.ui.requires, ["approval:auto-write"], "GALLERY_DEFAULTS requirement survives a partial PACK.md override");
   assert.deepEqual(report.unmet, ["approval:auto-write"]);
+  assert.equal(report.ui.title, "Report", "gallery.json display name");
   const mesh = cat.find((p) => p.name === "mesh");
-  assert.equal(mesh.ui.starter_prompt, "/pack run mesh ");
-  assert.equal(mesh.ui.gallery, false);
+  assert.equal(mesh.ui.title, "Inbox");
+  assert.deepEqual(mesh.ui.personas, ["everyone"]);
+  assert.equal(mesh.ui.gallery, true);
+  // Without a gallery, nothing is curated: plain defaults, alphabetical.
+  const bare = buildCatalog(LISTING, { approval: "auto-read", env: { PATH: "" }, readUi: () => ({}), gallery: {} });
+  assert.equal(bare.find((p) => p.name === "mesh").ui.starter_prompt, "/pack run mesh ");
+  assert.equal(bare.find((p) => p.name === "mesh").ui.gallery, false);
+});
+
+const LISTING_JSON = JSON.stringify([
+  { name: "report", description: "HTML reports.", shelf: "research", source: "user:~/.dext/shelves/research", path: "/x/research/packs/report", pack_md: "/x/research/packs/report/PACK.md", credential_env: [],
+    ui: { starter_prompt: "from core", artifact: "HTML", time_to_first_artifact: 12.6, requires: ["approval:auto-write"], gallery: true, tags: ["research"], icon: "report", bogus: 1 } },
+  { name: "autoresearch", description: "Loops.", shelf: "research", source: "user:~/.dext/shelves/research", path: "/x/research/packs/autoresearch", runtime: "/x/research/packs/autoresearch/runtime.json", credential_env: ["X_TOKEN"] },
+  { name: "bad name!", description: "skip", path: "/x/skip" },
+  { name: "nopath", description: "skip" },
+]);
+
+test("parsePackListingJson: dext's --json array; ui block sanitized; invalid entries skipped; non-JSON → null", () => {
+  const packs = parsePackListingJson(LISTING_JSON);
+  assert.deepEqual(packs.map((p) => p.name), ["report", "autoresearch"]);
+  assert.deepEqual(packs[0].ui, { starter_prompt: "from core", artifact: "html", time_to_first_artifact: 13, requires: ["approval:auto-write"], gallery: true, tags: ["research"], icon: "report" });
+  assert.equal(packs[1].runtime, "/x/research/packs/autoresearch/runtime.json");
+  assert.deepEqual(packs[1].credential_env, ["X_TOKEN"]);
+  assert.equal(packs[1].ui, undefined);
+  assert.equal(parsePackListingJson(LISTING), null, "verbose text is not JSON");
+  assert.equal(parsePackListingJson("[not json"), null);
+  assert.equal(parsePackListingJson('{"name":"x"}'), null, "an object is not the listing shape");
+  assert.deepEqual(parsePackListingJson("[]"), []);
+});
+
+test("buildCatalog: accepts JSON listings; merge order gallery < core ui < PACK.md", () => {
+  const readUi = (p) => (p.endsWith("/report") ? { icon: "mine" } : {});
+  const cat = buildCatalog(LISTING_JSON, { approval: "auto-write", env: { PATH: "" }, readUi });
+  const report = cat.find((p) => p.name === "report");
+  assert.equal(report.ui.starter_prompt, "from core", "core ui beats gallery.json");
+  assert.equal(report.ui.icon, "mine", "PACK.md beats core ui");
+  assert.equal(report.ui.title, "Report", "gallery.json still contributes what nobody overrides");
+  assert.equal(report.ui.bogus, undefined);
+  assert.deepEqual(report.unmet, []);
+  const ar = cat.find((p) => p.name === "autoresearch");
+  assert.equal(ar.runtime, "/x/research/packs/autoresearch/runtime.json", "runtime descriptor rides along");
+  assert.deepEqual(ar.ui.personas, ["developer"]);
+});
+
+test("loadGallery + sanitizeUi: bounded, bad names/values dropped, missing file → {}", (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gal-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, "gallery.json");
+  fs.writeFileSync(file, JSON.stringify({ packs: {
+    ok: { title: "T".repeat(80), personas: ["Business", "nope", "everyone"], artifact: "nope", time_to_first_artifact: -3, requires: ["a", 5, "b"], actions: [{ label: " go ", prompt: " do " }, { label: "" }], panel: "../x.html", gallery: "yes" },
+    "bad name!": { title: "x" },
+  } }));
+  const g = loadGallery(file);
+  assert.deepEqual(Object.keys(g), ["ok"]);
+  assert.equal(g.ok.title.length, 48);
+  assert.deepEqual(g.ok.personas, ["business", "everyone"]);
+  assert.equal(g.ok.artifact, undefined);
+  assert.equal(g.ok.time_to_first_artifact, undefined);
+  assert.deepEqual(g.ok.requires, ["a", "b"]);
+  assert.deepEqual(g.ok.actions, [{ label: "go", prompt: "do" }]);
+  assert.equal(g.ok.panel, undefined);
+  assert.equal(g.ok.gallery, undefined, "gallery must be a boolean");
+  assert.deepEqual(loadGallery(path.join(dir, "missing.json")), {});
+  fs.writeFileSync(file, "{ not json");
+  assert.deepEqual(loadGallery(file), {});
+  assert.ok(Object.keys(GALLERY_DEFAULTS).length >= 10, "shipped gallery.json loads");
+  assert.equal(GALLERY_DEFAULTS.crew.title, "Team");
+});
+
+test("parsePackUi: ui-title and ui-personas", () => {
+  const ui = parsePackUi("---\nname: x\nui-title: My Pack\nui_personas: [Accountant, developer, bogus]\n---\n");
+  assert.equal(ui.title, "My Pack");
+  assert.deepEqual(ui.personas, ["accountant", "developer"]);
 });
 
 test("readPackUi: refuses symlinked PACK.md and unreadable dirs", (t) => {
@@ -108,6 +181,8 @@ test("parsePackSlash + packCommands + renderPackList", () => {
   assert.deepEqual(parsePackSlash("/pack ls"), { sub: "list" });
   assert.deepEqual(parsePackSlash("/pack inspect mesh"), { sub: "inspect", name: "mesh" });
   assert.deepEqual(parsePackSlash("/pack create research/foo"), { sub: "create", selector: "research/foo" });
+  assert.deepEqual(parsePackSlash("/pack create mine/report-mine --from report"), { sub: "create", selector: "mine/report-mine", from: "report" });
+  assert.deepEqual(parsePackSlash("/pack new mine/x --from=mesh"), { sub: "create", selector: "mine/x", from: "mesh" });
   assert.deepEqual(parsePackSlash("/pack frobnicate"), { sub: "unknown", verb: "frobnicate" });
   assert.equal(parsePackSlash("/packrat"), null);
   assert.equal(parsePackSlash("/approval always"), null);

@@ -187,6 +187,28 @@ test("(g) steering_received marker", () => {
   assertEquivalent(journal([{ event: "steering_received", data: { preview: "focus on tests" } }]));
 });
 
+test("(h) pack_start stamps the turn's prompt block; runtime_view keeps its own pack", () => {
+  const envelopes = journal([
+    { event: "user_message", data: { text: "make a report" } },
+    { event: "turn_start" },
+    { event: "pack_start", data: { name: "report", task_preview: "make a report" } },
+    { event: "runtime_view", data: { pack: "report", title: "t", markdown: "m" } },
+    { event: "turn_end", data: { usage: { input: 0, output: 0, cache_create: 0, cache_read: 0, cost_usd: 0 }, failed: false } },
+    // A second turn without a pack must not inherit the first turn's stamp.
+    { event: "user_message", data: { text: "plain" } },
+    { event: "turn_start" },
+    { event: "pack_start", data: { name: "" } },
+    { event: "pack_start", data: {} },
+  ]);
+  const store = assertEquivalent(envelopes);
+  assert.deepStrictEqual(stripIds(store.state.blocks), [
+    { kind: "user", text: "make a report", pack: "report" },
+    { kind: "view", pack: "report", title: "t", markdown: "m" },
+    { kind: "user", text: "plain" },
+  ]);
+  assert.equal(store.state.activePack, undefined, "cleared at turn_end");
+});
+
 test("(g) compact_end and compact_failed markers", () => {
   const envelopes = journal([
     { event: "compact_start" },
