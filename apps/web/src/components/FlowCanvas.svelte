@@ -5,7 +5,7 @@
   // can add a node type without touching this file). Save writes
   // .dext/flows/<name>.flow.json; Run compiles to a crew spec and starts it.
   import type { FlowNode, FlowNodeType } from "@dextui/protocol";
-  import { flows, flowsEnabled, openFlow, newFlow, saveFlow, deleteFlow, runFlow, compileFlow_, closeFlows } from "../lib/flows.svelte";
+  import { flows, flowsEnabled, openFlow, newFlow, saveFlow, deleteFlow, runFlow, compileFlow_, closeFlows, addTrigger, removeTrigger, hookFor } from "../lib/flows.svelte";
   import { flowNodeTypes, flowNode } from "../ext";
   import { app } from "../lib/state.svelte";
   import { useDialog } from "../lib/dialog.svelte";
@@ -170,6 +170,21 @@
 
   const selNode = $derived(draft && selected && !selected.startsWith("edge:") ? draft.nodes.find((n) => n.id === selected) : null);
   const selSpec = $derived(selNode ? flowNode(selNode.type) : null);
+
+  function setTrigger(i: number, key: string, v: string | boolean) {
+    if (!draft?.triggers) return;
+    const t = { ...draft.triggers[i] } as Record<string, unknown>;
+    if (key === "mode") {
+      if (v === "every") { delete t.daily_at; delete t.weekday; t.every = 60; }
+      else { delete t.every; t.daily_at = "09:00"; }
+    } else if (key === "every") t.every = Math.max(15, Math.min(10080, Number(v) || 60));
+    else if (key === "weekday") { if (v === "") delete t.weekday; else t.weekday = Number(v); }
+    else t[key] = v;
+    draft.triggers = draft.triggers.map((x, k) => (k === i ? (t as unknown as typeof x) : x));
+    markDirty();
+  }
+  const armed = $derived(draft ? flows.triggers.filter((t) => t.name === draft.name) : []);
+  const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 </script>
 
 {#if flows.open}
@@ -282,6 +297,50 @@
         {#if showPreview && flows.preview}
           <pre class="preview" data-agent-id="flows.preview">{flows.preview}</pre>
         {/if}
+
+        <!-- triggers: what starts this flow besides ▶ run (validated by the host on save) -->
+        <section class="trig" data-agent-id="flows.triggers">
+          <div class="trig-head">
+            <span class="st-magenta">starts when</span>
+            <span class="faint">manual (▶) always works ·</span>
+            <button class="chip" data-agent-id="flows.trigger.add.schedule" onclick={() => addTrigger("schedule")}>+ on a schedule</button>
+            <button class="chip" data-agent-id="flows.trigger.add.watch" onclick={() => addTrigger("watch")}>+ files change</button>
+            <button class="chip" data-agent-id="flows.trigger.add.mesh" onclick={() => addTrigger("mesh")}>+ message arrives</button>
+            <button class="chip" data-agent-id="flows.trigger.add.webhook" onclick={() => addTrigger("webhook")}>+ web hook</button>
+          </div>
+          {#each draft.triggers ?? [] as t, i (i)}
+            <div class="trig-row" data-agent-id={`flows.trigger.${i}`} data-state={t.enabled === false ? "off" : "on"}>
+              <label class="on"><input type="checkbox" checked={t.enabled !== false} onchange={(e) => setTrigger(i, "enabled", e.currentTarget.checked)} /> {t.kind}</label>
+              {#if t.kind === "schedule"}
+                <select value={t.every ? "every" : "daily"} onchange={(e) => setTrigger(i, "mode", e.currentTarget.value)}>
+                  <option value="daily">daily at</option>
+                  <option value="every">every N minutes</option>
+                </select>
+                {#if t.every}
+                  <input type="number" min="15" max="10080" value={t.every} onchange={(e) => setTrigger(i, "every", e.currentTarget.value)} />
+                {:else}
+                  <input type="time" value={t.daily_at ?? "09:00"} onchange={(e) => setTrigger(i, "daily_at", e.currentTarget.value)} />
+                  <select value={t.weekday === undefined ? "" : String(t.weekday)} onchange={(e) => setTrigger(i, "weekday", e.currentTarget.value)}>
+                    <option value="">every day</option>
+                    {#each DAYS as d, k (k)}<option value={String(k)}>{d}</option>{/each}
+                  </select>
+                {/if}
+              {:else if t.kind === "watch"}
+                <span class="faint">folder</span> <input value={t.path ?? "."} placeholder=". (this folder)" onchange={(e) => setTrigger(i, "path", e.currentTarget.value)} />
+              {:else if t.kind === "mesh"}
+                <span class="faint">as node</span> <input value={t.node ?? ""} onchange={(e) => setTrigger(i, "node", e.currentTarget.value)} />
+                <span class="faint">from</span> <input value={t.from ?? ""} placeholder="anyone" onchange={(e) => setTrigger(i, "from", e.currentTarget.value)} />
+              {:else}
+                {@const hook = hookFor(draft.name)}
+                <span class="faint">POST</span> <code class="hook">{hook ? `${location.origin}${hook}` : "(save to get the URL)"}</code>
+              {/if}
+              <button class="act del" data-agent-id={`flows.trigger.${i}.remove`} onclick={() => removeTrigger(i)}>remove</button>
+            </div>
+          {/each}
+          {#if armed.length}
+            <p class="faint">armed on the host: {armed.map((a) => `${a.detail}${a.last ? ` (last ${new Date(a.last).toLocaleString()})` : ""}`).join(" · ")}</p>
+          {/if}
+        </section>
         {#if flows.started === draft.name}
           <p class="st-green">▶ running — watch the crew rail for progress and checkpoints.</p>
         {/if}
@@ -322,4 +381,12 @@
   .form input, .form textarea, .form select { background: var(--bg0, var(--bg2)); border: 1px solid var(--line); color: var(--fg); font: inherit; padding: 3px 6px; }
   .del { color: var(--yellow, #e3b341); }
   .preview { max-height: 200px; overflow: auto; border: 1px solid var(--line); background: var(--bg1); padding: 8px; font-size: 11px; white-space: pre-wrap; }
+  .trig { display: flex; flex-direction: column; gap: 6px; border-top: 1px solid var(--line); padding-top: 8px; }
+  .trig-head { display: flex; gap: 6px; flex-wrap: wrap; align-items: baseline; }
+  .trig-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; font-size: 12px; padding: 4px 8px; background: var(--bg1); border: 1px solid var(--line); }
+  .trig-row[data-state="off"] { opacity: 0.55; }
+  .trig-row input, .trig-row select { background: var(--bg2); border: 1px solid var(--line); color: var(--fg); font: inherit; padding: 2px 5px; }
+  .trig-row input[type="number"] { width: 6em; }
+  .on { display: flex; gap: 4px; align-items: center; color: var(--cyan); }
+  .hook { user-select: all; font-size: 11px; color: var(--fg); }
 </style>

@@ -23,11 +23,57 @@ const FLOW_FILE_CAP = 256 * 1024;
 export const MAX_FLOW_NODES = 64;
 export const MAX_FLOW_EDGES = 128;
 export const NODE_TYPES = new Set(["pack", "prompt", "gate", "message", "condition"]);
+/** Trigger kinds (P5): what starts a flow besides a click. */
+export const TRIGGER_KINDS = new Set(["schedule", "watch", "mesh", "webhook"]);
+export const MAX_TRIGGERS = 8;
+const WATCH_PATH_RE = /^(?:[A-Za-z0-9][A-Za-z0-9 ._()-]{0,79})(?:\/[A-Za-z0-9][A-Za-z0-9 ._()-]{0,79}){0,7}$/;
 
 const CAPS = { task: 4000, prompt: 4000, question: 500, text: 2000, expr: 500, label: 60, desc: 200 };
 
 function clipped(v, n) {
   return typeof v === "string" ? v.slice(0, n) : undefined;
+}
+
+/** Validate one trigger. Returns the clean trigger or `{ error }`. */
+export function validateTrigger(t, i) {
+  if (!t || typeof t !== "object") return { error: `trigger ${i}: must be an object` };
+  if (!TRIGGER_KINDS.has(t.kind)) return { error: `trigger ${i}: unknown kind '${t.kind}' (schedule | watch | mesh | webhook)` };
+  const out = { kind: t.kind, enabled: t.enabled !== false };
+  switch (t.kind) {
+    case "schedule": {
+      // `every`: minutes (15..10080) OR `daily_at: "HH:MM"` (+ optional weekday 0-6).
+      if (t.every !== undefined) {
+        if (typeof t.every !== "number" || !Number.isInteger(t.every) || t.every < 15 || t.every > 10080) return { error: `trigger ${i}: every must be 15..10080 minutes` };
+        out.every = t.every;
+      } else if (typeof t.daily_at === "string" && /^([01]\d|2[0-3]):[0-5]\d$/.test(t.daily_at)) {
+        out.daily_at = t.daily_at;
+        if (t.weekday !== undefined) {
+          if (!Number.isInteger(t.weekday) || t.weekday < 0 || t.weekday > 6) return { error: `trigger ${i}: weekday must be 0 (Sun) .. 6 (Sat)` };
+          out.weekday = t.weekday;
+        }
+      } else return { error: `trigger ${i}: schedule needs every (minutes) or daily_at (HH:MM)` };
+      break;
+    }
+    case "watch": {
+      const p = typeof t.path === "string" ? t.path.trim().replace(/^\.\/+/, "") : "";
+      if (p === "." || p === "") out.path = ".";
+      else if (WATCH_PATH_RE.test(p) && !p.split("/").some((s) => s.startsWith("."))) out.path = p;
+      else return { error: `trigger ${i}: watch path must be a relative folder without dot-segments` };
+      break;
+    }
+    case "mesh": {
+      if (typeof t.node !== "string" || !MESH_NODE_RE.test(t.node)) return { error: `trigger ${i}: mesh needs a node name to listen as` };
+      out.node = t.node;
+      if (t.from !== undefined) {
+        if (typeof t.from !== "string" || !MESH_NODE_RE.test(t.from)) return { error: `trigger ${i}: mesh from must be a node name` };
+        out.from = t.from;
+      }
+      break;
+    }
+    case "webhook":
+      break; // token is derived by the host, nothing to store
+  }
+  return { ok: true, trigger: out };
 }
 
 /** Validate one flow object (already JSON.parsed). Returns `{ ok, flow }` or
@@ -138,6 +184,17 @@ export function validateFlow(raw) {
   };
   if (typeof raw.title === "string" && raw.title.trim()) flow.title = raw.title.trim().slice(0, 60);
   if (typeof raw.desc === "string" && raw.desc.trim()) flow.desc = raw.desc.trim().slice(0, CAPS.desc);
+  if (raw.triggers !== undefined) {
+    if (!Array.isArray(raw.triggers)) return { error: "triggers must be a list" };
+    if (raw.triggers.length > MAX_TRIGGERS) return { error: `at most ${MAX_TRIGGERS} triggers` };
+    const triggers = [];
+    for (const [i, t] of raw.triggers.entries()) {
+      const v = validateTrigger(t, i);
+      if (!v.ok) return { error: v.error };
+      triggers.push(v.trigger);
+    }
+    if (triggers.length) flow.triggers = triggers;
+  }
   return { ok: true, flow };
 }
 
@@ -293,6 +350,7 @@ export function listFlows(cwd) {
         desc: typeof v.desc === "string" ? v.desc.slice(0, 200) : "",
         nodes: Array.isArray(v.nodes) ? v.nodes.length : 0,
         edges: Array.isArray(v.edges) ? v.edges.length : 0,
+        triggers: Array.isArray(v.triggers) ? v.triggers.length : 0,
         mtime: Math.round(st.mtimeMs),
       });
     } catch {

@@ -36,6 +36,7 @@ import { RUN_ID_RE as CREW_RUN_ID_RE, TAIL_MAX_LINES, createCrewAdapter } from "
 import { createSelfEdit, resolveStaticDir } from "./selfedit.mjs";
 import { createDir, listDirs } from "./dirs.mjs";
 import { compileFlow, deleteFlow, listFlows, readFlow, writeFlow } from "./flows.mjs";
+import { createScheduler } from "./triggers.mjs";
 
 const here = path.dirname(url.fileURLToPath(import.meta.url));
 const repoRoot = path.join(here, "..", "..", "..");
@@ -377,7 +378,22 @@ const CREW = CREW_BIN
 
 function crewRootFor(cwd) {
   if (CREW && typeof cwd === "string" && cwd) CREW.addRoot(path.join(cwd, ".crew", "runs"));
+  if (TRIGGERS && typeof cwd === "string" && cwd) TRIGGERS.addWorkspace(cwd);
 }
+
+// ---------- triggers (what starts a flow besides a click) ----------
+
+// Declared with `let` for the same reason as SELF: crew's constructor fires
+// onChanged synchronously and crewRootFor runs before this is assigned.
+let TRIGGERS = null;
+TRIGGERS = createScheduler({
+  stateDir: STATE_DIR,
+  secret: TOKEN,
+  startRun: (cwd, name, opts) => startFlowRun(cwd, name, opts),
+  meshBin: (() => { const p = PACKS.find((x) => x.name === "mesh"); const b = p?.path ? path.join(p.path, "bin", "mesh") : null; return b && fs.existsSync(b) ? b : "mesh"; })(),
+  log: (m) => console.error(`agentlinkd: ${m}`),
+  broadcast: (event, data) => broadcastControl(event, data),
+});
 
 // ---------- self-edit ----------
 
@@ -1775,15 +1791,53 @@ function compileOrError(client, frame, flow) {
   }
 }
 
+/** Start a flow run: compile to a crew spec, write it once under
+ *  <cwd>/.crew/specs, spawn `crew run --spec` detached. Shared by the
+ *  x-agentlinkd.flows.run command and every trigger. Returns `{ ok, spec_path }`
+ *  or `{ error, code }`; never throws. */
+function startFlowRun(cwd, name, { by = "host", reason = "" } = {}) {
+  if (!CREW_BIN) return { error: "flows run on crew; no crew binary on this host", code: "unsupported" };
+  const r = readFlow(cwd, name);
+  if (r.error) return { error: `flow '${name}': ${r.error}`, code: r.error === "no_flow" ? "no_flow" : "bad_request" };
+  let spec;
+  try {
+    spec = compileFlow(r.flow, { meshBin: meshBin(), packs: new Set(PACKS.map((p) => p.name)) });
+  } catch (e) {
+    return { error: String(e?.message ?? e), code: e?.code === "no_pack" ? "no_pack" : "bad_request" };
+  }
+  const specsDir = path.join(cwd, ".crew", "specs");
+  try {
+    if (!checkedPath(specsDir)) fs.mkdirSync(specsDir, { recursive: true });
+  } catch {
+    return { error: `cannot write ${specsDir}`, code: "bad_path" };
+  }
+  const specPath = path.join(specsDir, `flow-${r.flow.name}-${Date.now().toString(36)}.json`);
+  try {
+    fs.writeFileSync(specPath, JSON.stringify(spec, null, 2) + "\n", { flag: "wx" });
+  } catch {
+    return { error: `cannot write ${specPath}`, code: "write_failed" };
+  }
+  if (CREW) CREW.addRoot(path.join(cwd, ".crew", "runs"));
+  try {
+    const child = spawn(CREW_BIN, ["run", "--spec", specPath, "--cwd", cwd], { cwd, env: { ...process.env, DEXT_NO_TUI: "1" }, detached: process.platform !== "win32", stdio: "ignore" });
+    child.on("error", (err) => broadcastControl("x-agentlinkd.flows.run", { cwd, name: r.flow.name, by, reason, error: `crew failed to start: ${err.message}` }));
+    child.unref();
+  } catch (err) {
+    return { error: String(err?.message ?? err), code: "spawn_failed" };
+  }
+  return { ok: true, spec_path: specPath, name: r.flow.name };
+}
+
 function handleFlowsCommand(client, frame) {
   const { cwd, error } = flowCwd(frame);
   if (error) {
     sendError(client, "bad_request", `flows need an existing folder: ${error}`, frame.cmd);
     return;
   }
+  TRIGGERS.addWorkspace(cwd);
   switch (frame.cmd) {
     case "x-agentlinkd.flows.list":
-      sendControl(client, "x-agentlinkd.flows.list", { cwd, flows: listFlows(cwd) });
+      sendControl(client, "x-agentlinkd.flows.list", { cwd, flows: listFlows(cwd), triggers: TRIGGERS.status(cwd) });
       return;
     case "x-agentlinkd.flows.get": {
       const r = readFlow(cwd, frame.name);
@@ -1796,14 +1850,18 @@ function handleFlowsCommand(client, frame) {
       if (r.error) sendError(client, "bad_request", `flow not saved: ${r.error}`, frame.cmd);
       else {
         sendControl(client, "x-agentlinkd.flows.put", { cwd, flow: r.flow, bytes: r.bytes });
-        broadcastControl("x-agentlinkd.flows.changed", { cwd, flows: listFlows(cwd) });
+        TRIGGERS.reload(cwd);
+        broadcastControl("x-agentlinkd.flows.changed", { cwd, flows: listFlows(cwd), triggers: TRIGGERS.status(cwd) });
       }
       return;
     }
     case "x-agentlinkd.flows.delete": {
       const r = deleteFlow(cwd, frame.name);
       if (r.error) flowErr(client, frame.cmd, r, frame.name);
-      else broadcastControl("x-agentlinkd.flows.changed", { cwd, flows: listFlows(cwd) });
+      else {
+        TRIGGERS.reload(cwd);
+        broadcastControl("x-agentlinkd.flows.changed", { cwd, flows: listFlows(cwd), triggers: TRIGGERS.status(cwd) });
+      }
       return;
     }
     case "x-agentlinkd.flows.compile": {
@@ -1814,40 +1872,9 @@ function handleFlowsCommand(client, frame) {
       return;
     }
     case "x-agentlinkd.flows.run": {
-      if (!CREW_BIN) {
-        sendError(client, "unsupported", "flows run on crew; no crew binary on this host", frame.cmd);
-        return;
-      }
-      const r = readFlow(cwd, frame.name);
-      if (r.error) return flowErr(client, frame.cmd, r, frame.name);
-      const spec = compileOrError(client, frame, r.flow);
-      if (!spec) return;
-      // Spec file under <cwd>/.crew/specs: refuse symlinked ancestors, then
-      // mkdir; write-once (wx), then crew runs it detached (no host blocking).
-      const specsDir = path.join(cwd, ".crew", "specs");
-      try {
-        if (!checkedPath(specsDir)) fs.mkdirSync(specsDir, { recursive: true });
-      } catch {
-        sendError(client, "bad_path", `cannot write ${specsDir}`, frame.cmd);
-        return;
-      }
-      const specPath = path.join(specsDir, `flow-${r.flow.name}-${Date.now().toString(36)}.json`);
-      try {
-        fs.writeFileSync(specPath, JSON.stringify(spec, null, 2) + "\n", { flag: "wx" });
-      } catch {
-        sendError(client, "write_failed", `cannot write ${specPath}`, frame.cmd);
-        return;
-      }
-      if (CREW) CREW.addRoot(path.join(cwd, ".crew", "runs"));
-      try {
-        const child = spawn(CREW_BIN, ["run", "--spec", specPath, "--cwd", cwd], { cwd, env: { ...process.env, DEXT_NO_TUI: "1" }, detached: process.platform !== "win32", stdio: "ignore" });
-        child.on("error", (err) => broadcastControl("x-agentlinkd.flows.run", { cwd, name: r.flow.name, error: `crew failed to start: ${err.message}` }));
-        child.unref();
-      } catch (err) {
-        sendError(client, "spawn_failed", String(err?.message ?? err), frame.cmd);
-        return;
-      }
-      sendControl(client, "x-agentlinkd.flows.run", { cwd, name: r.flow.name, spec_path: specPath, started: true });
+      const r = startFlowRun(cwd, frame.name, { by: `client:${client.id}` });
+      if (r.error) sendError(client, r.code, r.error, frame.cmd);
+      else sendControl(client, "x-agentlinkd.flows.run", { cwd, name: r.name, spec_path: r.spec_path, started: true });
       return;
     }
     default:
@@ -2213,6 +2240,35 @@ const server = http.createServer((req, res) => {
     res.end(JSON.stringify({ pack: { ...pack, files: listPackFiles(pack.path) } }));
     return;
   }
+  if (pathName.startsWith("/hooks/")) {
+    // Webhook trigger: POST /hooks/<token>. The token is derived from the
+    // pairing token + workspace + flow name (HMAC), so it is unguessable and
+    // never stored; no bearer needed (the token *is* the credential).
+    if (req.method !== "POST") {
+      res.writeHead(405, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "method_not_allowed" }));
+      return;
+    }
+    const token = pathName.slice("/hooks/".length);
+    if (!/^[A-Za-z0-9_-]{32}$/.test(token) || authLocked()) {
+      res.writeHead(authLocked() ? 429 : 404, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: authLocked() ? "rate_limited" : "no_hook" }));
+      return;
+    }
+    req.on("data", () => {}); // body ignored (bounded by socket timeout)
+    req.on("end", () => {
+      const r = TRIGGERS.webhook(token);
+      if (r.error) {
+        noteAuthFailure(); // a wrong hook token counts like a wrong bearer
+        res.writeHead(404, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "no_hook" }));
+        return;
+      }
+      res.writeHead(r.fired ? 202 : 200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ ok: true, flow: r.name, fired: r.fired, ...(r.fired ? {} : { note: "cooldown: fired less than a minute ago" }) }));
+    });
+    return;
+  }
   if (pathName === "/__self" || pathName.startsWith("/__self/")) {
     // Self-edit surface for `/__agent` drivers and the agent's own bash:
     // GET status; POST build|rollback|restart|restart_cancel (JSON body optional).
@@ -2406,6 +2462,8 @@ initStateDir();
 restoreSessions();
 watchPackRoots();
 SELF.start();
+TRIGGERS.addWorkspace(DEFAULT_CWD);
+TRIGGERS.start();
 
 server.listen(PORT, "127.0.0.1", () => {
   console.log(`agentlinkd listening on http://127.0.0.1:${server.address().port}`);

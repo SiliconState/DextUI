@@ -272,6 +272,21 @@ export interface FlowNode {
 
 export type FlowEdge = [string, string];
 
+/** What starts a flow besides a click (P5). Lives on the flow file. */
+export interface FlowTrigger {
+  kind: "schedule" | "watch" | "mesh" | "webhook";
+  enabled?: boolean;
+  /** schedule: minutes (15..10080) — or daily_at HH:MM (+ weekday 0-6). */
+  every?: number;
+  daily_at?: string;
+  weekday?: number;
+  /** watch: folder relative to the workspace ("." = the workspace). */
+  path?: string;
+  /** mesh: node name to listen as; optional sender filter. */
+  node?: string;
+  from?: string;
+}
+
 export interface FlowFile {
   version: 1;
   name: string;
@@ -279,6 +294,20 @@ export interface FlowFile {
   desc?: string;
   nodes: FlowNode[];
   edges: FlowEdge[];
+  triggers?: FlowTrigger[];
+}
+
+/** One armed trigger as the host reports it (`flows.list` / `flows.changed`). */
+export interface TriggerStatus {
+  cwd: string;
+  name: string;
+  kind: FlowTrigger["kind"];
+  enabled: boolean;
+  detail: string;
+  /** Last fire, unix ms, or null. */
+  last: number | null;
+  /** webhook only: POST this path (token derived by the host, never stored). */
+  hook?: string;
 }
 
 /** `x-agentlinkd.flows.list` entry. */
@@ -288,12 +317,14 @@ export interface FlowSummary {
   desc: string;
   nodes: number;
   edges: number;
+  triggers?: number;
   mtime: number;
 }
 
 export interface FlowsListReply {
   cwd: string;
   flows: FlowSummary[];
+  triggers?: TriggerStatus[];
 }
 
 export interface FlowRunReply {

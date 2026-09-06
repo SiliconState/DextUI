@@ -162,8 +162,30 @@ Sample: `packs/flows/month-end-close.flow.json` — scan receipts + who-owes-me
 → ledger clean? → summary → your approval → tell the accountant. Copy it into
 a folder's `.dext/flows/` to try it.
 
+### Triggers — what starts a flow besides ▶
+
+Triggers live on the flow file (`flow.triggers[]`, max 8) and are armed by the
+host's scheduler for every workspace it knows (the `--cwd`, every session's
+cwd, every folder the builder touched). The "starts when" strip in the builder
+edits them; the host validates on save and reports what is armed
+(`flows.list` / `flows.changed` carry `triggers[]` with last-fire times).
+
+| Trigger | Config | How it fires |
+|---|---|---|
+| schedule | `every: 15..10080` minutes, or `daily_at: "HH:MM"` (+ `weekday: 0-6`) | 30 s tick, local time; last fire persisted in `<state-dir>/triggers.json` so a restart never double-fires a day |
+| watch | `path` relative folder (`.` = the workspace) | `fs.watch`, 5 s debounce, dot-dirs (`.dext`, `.receipts`…) ignored |
+| mesh | `node` to listen as, optional `from` | `mesh recv --node <node>` polled every 15 s; a matching message fires |
+| webhook | nothing stored | `POST /hooks/<token>`; the token is an HMAC of the pairing token + workspace + flow name — unguessable, never written, shown in the builder after save |
+
+Every fire goes through the same `startFlowRun` as the ▶ button (compile →
+`.crew/specs` → `crew run --spec` detached) and broadcasts
+`x-agentlinkd.flows.trigger {name, kind, reason}`. A flow fired less than a
+minute ago is skipped (cooldown); wrong hook tokens count toward the auth
+lockout like wrong bearers.
+
 Surface: capability `flows`; `x-agentlinkd.flows.{list,get,put,delete,compile,run}`,
-broadcast `x-agentlinkd.flows.changed`. The mock host keeps flows in memory.
+broadcasts `x-agentlinkd.flows.changed` and `x-agentlinkd.flows.trigger`;
+`POST /hooks/<token>`. The mock host keeps flows in memory.
 
 ## Self-editing (workbench)
 

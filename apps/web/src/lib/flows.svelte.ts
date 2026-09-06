@@ -1,7 +1,7 @@
 // Flow builder state: the canvas draft, the flow list for the active
 // workspace, and the host round-trips (x-agentlinkd.flows.*). The host is the
 // source of truth — the draft here is an editor buffer until saved.
-import type { Envelope, FlowFile, FlowSummary } from "@dextui/protocol";
+import type { Envelope, FlowFile, FlowSummary, FlowTrigger, TriggerStatus } from "@dextui/protocol";
 import { app, pushToast } from "./state.svelte";
 
 export interface FlowDraft extends FlowFile {
@@ -13,6 +13,8 @@ export const flows = $state({
   /** Workspace the builder edits (the active session's cwd, or the host's). */
   cwd: "",
   list: [] as FlowSummary[],
+  /** Armed triggers for the workspace (host-reported). */
+  triggers: [] as TriggerStatus[],
   /** The flow being edited (null = the list view). */
   draft: null as FlowDraft | null,
   /** Name pending deletion confirmation. */
@@ -108,14 +110,43 @@ export function runFlow(): void {
   c.flowsRun(d.name, flows.cwd || undefined);
 }
 
+/** Trigger editing on the draft (host validates on save). */
+export function addTrigger(kind: FlowTrigger["kind"]): void {
+  const d = flows.draft;
+  if (!d) return;
+  const t: FlowTrigger = { kind, enabled: true };
+  if (kind === "schedule") t.daily_at = "09:00";
+  if (kind === "watch") t.path = ".";
+  if (kind === "mesh") t.node = d.name;
+  d.triggers = [...(d.triggers ?? []), t];
+  d.dirty = true;
+}
+
+export function removeTrigger(i: number): void {
+  const d = flows.draft;
+  if (!d?.triggers) return;
+  d.triggers = d.triggers.filter((_, k) => k !== i);
+  d.dirty = true;
+}
+
+export function hookFor(name: string): string | undefined {
+  return flows.triggers.find((t) => t.name === name && t.kind === "webhook")?.hook;
+}
+
 /** Control-plane tap (wired from state.svelte.ts). */
 export function onFlowsControl(env: Envelope): void {
   if (env.event === "x-agentlinkd.flows.list" || env.event === "x-agentlinkd.flows.changed") {
-    const d = env.data as { cwd: string; flows: FlowSummary[] };
+    const d = env.data as { cwd: string; flows: FlowSummary[]; triggers?: TriggerStatus[] };
     if (d?.cwd === flows.cwd || !flows.cwd) {
       flows.cwd = d.cwd;
       flows.list = [...(d.flows ?? [])];
+      flows.triggers = [...(d.triggers ?? [])];
     }
+    return;
+  }
+  if (env.event === "x-agentlinkd.flows.trigger") {
+    const d = env.data as { name: string; kind: string; reason: string };
+    pushToast("info", `Flow '${d.name}' started by ${d.kind}: ${d.reason}`);
     return;
   }
   if (env.event === "x-agentlinkd.flows.get") {
