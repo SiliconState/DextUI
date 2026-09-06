@@ -114,7 +114,7 @@
     <div class="tool-head">
       <span class="tool-name">{block.name}</span>
       <span class="faint">·</span>
-      <span class="dim tool-summary">{block.summary}</span>
+      <span class="dim tool-summary" class:cmd={/bash|shell/i.test(block.name)}>{block.summary}</span>
       <span class={`tool-status ${toolClass[block.status] ?? "st-faint"}`} data-agent-id={`tool.${block.call_id}.status`}>
         {toolLabel[block.status] ?? block.status}
       </span>
@@ -278,6 +278,11 @@
     gap: 6px;
     align-items: baseline;
   }
+  /* For shell tools the summary *is* the command — set it in mono. */
+  .tool-summary.cmd {
+    font-family: var(--mono, monospace);
+    color: var(--fg);
+  }
   .tool-name {
     color: var(--cyan);
     font-weight: bold;
@@ -296,12 +301,16 @@
   .tool-pre {
     white-space: pre;
     overflow-x: auto;
-    max-height: 20rem;
+    max-height: 14rem;
     overflow-y: auto;
     color: var(--dim);
     font-size: 12px;
+    line-height: 1.5;
     background: var(--bg1);
-    padding: 4px 8px;
+    border: 1px solid var(--line);
+    border-radius: 3px;
+    padding: 6px 10px;
+    margin: 3px 0 4px;
   }
   .tool-full summary {
     cursor: pointer;

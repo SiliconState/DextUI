@@ -313,12 +313,12 @@
 
 <style>
   .sheet { display: flex; flex-direction: column; min-height: 0; max-height: 100%; outline: none; }
-  .head { display: flex; gap: 10px; align-items: baseline; padding: 8px 12px 4px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  .head { display: flex; gap: 10px; align-items: baseline; padding: 10px 14px 6px; border-bottom: 1px solid var(--line); white-space: nowrap; }
   .head .title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
   .counts { display: flex; gap: 8px; }
-  .task { padding: 2px 12px 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .body { flex: 1; min-height: 0; overflow-y: auto; padding: 4px 12px; }
-  .foot { display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; padding: 6px 12px; border-top: 1px solid var(--line); }
+  .task { padding: 2px 14px 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .body { flex: 1; min-height: 0; overflow-y: auto; padding: 6px 14px 10px; }
+  .foot { display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; padding: 8px 14px; border-top: 1px solid var(--line); }
   .hint { margin-left: auto; font-size: 11px; }
   .sect { display: flex; gap: 6px; align-items: baseline; width: 100%; text-align: left; color: var(--dim); text-transform: lowercase; letter-spacing: .06em; font-size: 12px; margin: 8px 0 2px; }
   .sect:hover { background: var(--bg2); }
@@ -334,10 +334,8 @@
   .tail-act { flex-shrink: 0; font-size: 11px; }
   .fold { display: block; padding: 2px 0 2px 26px; width: 100%; text-align: left; }
   .fold:hover { background: var(--bg2); }
-  .tailpane, .filepane { margin: 2px 0 6px 26px; border-left: 2px solid var(--line); background: var(--bg); }
-  .tail-head { display: flex; gap: 10px; padding: 3px 8px 0; font-size: 11px; }
-  .tail { margin: 0; padding: 4px 8px 6px; font-size: 12px; color: var(--dim); white-space: pre-wrap; word-break: break-word; max-height: 40dvh; overflow: auto; }
-  .tail.file { color: var(--fg); }
+  .tailpane, .filepane { margin: 2px 0 8px 12px; }
+  .tail-head { display: flex; gap: 10px; padding: 4px 12px 4px 14px; font-size: 11px; align-items: baseline; }
   .esc { border-left: 2px solid var(--yellow); background: var(--bg1); padding: 6px 10px; margin: 6px 0 10px; }
   .esc-head { margin-bottom: 4px; }
   .esc textarea { width: 100%; background: var(--bg3); color: var(--fg); border: 1px solid var(--line); font: inherit; padding: 6px; resize: vertical; margin-top: 6px; }

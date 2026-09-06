@@ -516,6 +516,11 @@
       display: none;
     }
   }
+  /* Crew run sheet gets more room than the 30rem drawer: tails and
+     deliverables are the widest content in the app. */
+  .insp.crew-overlay {
+    width: min(46rem, 94vw);
+  }
   /* Shared overlay chrome (.insp*, .gallery-*) and text utilities (.st-*,
      .dim, .faint) live in app.css: FolderPicker, FlowCanvas and PackGallery
      render these classes from their own components, where scoped styles
