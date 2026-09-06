@@ -113,7 +113,7 @@
 
 {#if folders.open}
   <div class="insp-scrim" data-agent-id="folders.scrim" onclick={closeFolderPicker} onkeydown={() => {}} role="presentation"></div>
-  <div class="insp gallery-overlay folders" role="dialog" aria-modal="true" aria-label="choose a folder" tabindex="-1" use:dlg.ref data-agent-id="folders.overlay" data-state={folders.loading ? "loading" : "ready"} onkeydown={onKey}>
+  <div class="insp gallery-overlay folders" role="dialog" aria-modal="true" aria-label="Choose a folder" tabindex="-1" use:dlg.ref data-agent-id="folders.overlay" data-state={folders.loading ? "loading" : "ready"} onkeydown={onKey}>
     <div class="insp-head">
       <span class="st-magenta">Folder</span>
       <span class="dim">Where should this work happen?</span>
@@ -126,7 +126,7 @@
         <div class="tools">
           <input class="filter" bind:this={filterEl} bind:value={filter} placeholder="Filter folders…" spellcheck="false" autocomplete="off" aria-label="Filter folders" data-agent-id="folders.filter" />
           {#if listing.dirs.some((d) => typeof d.mtime === "number")}
-            <button class="act" data-agent-id="folders.sort" title="sort folders by name or last change" onclick={() => (sortRecent = !sortRecent)}>
+            <button class="act" data-agent-id="folders.sort" title="Sort folders by name or last change" onclick={() => (sortRecent = !sortRecent)}>
               {sortRecent ? "▾ Recent" : "a–z"}
             </button>
           {/if}
@@ -140,7 +140,7 @@
               {/each}
             </div>
           {/if}
-          <nav class="crumbs" aria-label="path" data-agent-id="folders.crumbs">
+          <nav class="crumbs" aria-label="Path" data-agent-id="folders.crumbs">
             {#each crumbs as c, i (c.path)}
               {#if i > 0}<span class="faint">/</span>{/if}
               <button class="crumb" class:current={i === crumbs.length - 1} data-agent-id={`folders.crumb.${i}`} onclick={() => navigate(c.path)}>{c.label}</button>
@@ -149,15 +149,18 @@
           </nav>
           <ul class="list" data-agent-id="folders.list">
             {#if listing.parent && !q}
-              <li class="entry"><button class="row" data-agent-id="folders.up" onclick={() => navigate(listing.parent!)}><span class="faint">↑</span> <span class="name">..</span></button></li>
+              <li class="entry">
+                <button class="go" data-agent-id="folders.up" title="Go up one folder" aria-label="Go up one folder" onclick={() => navigate(listing.parent!)}><span class="faint">↑</span></button>
+                <button class="row" onclick={() => navigate(listing.parent!)}><span class="name faint">..</span></button>
+              </li>
             {/if}
             {#each visible as d, i (d.name)}
               <li class="entry" class:cur={i === cursor}>
+                <button class="go" data-agent-id={`folders.go.${d.name}`} title={`Open ${d.name}`} aria-label={`Open ${d.name}`} onclick={() => enter(d)}>▸</button>
                 <button class="row" data-agent-id={`folders.dir.${d.name}`} title={d.name} onclick={() => (cursor = i)} ondblclick={() => enter(d)}>
                   <span class="name">{d.name}</span>
                   {#if typeof d.mtime === "number"}<span class="faint ago">{ago(d.mtime)}</span>{/if}
                 </button>
-                <button class="go" data-agent-id={`folders.go.${d.name}`} title={`Open ${d.name}`} aria-label={`Open ${d.name}`} onclick={() => enter(d)}>▸</button>
               </li>
             {/each}
             {#if visible.length === 0}
@@ -324,14 +327,15 @@
   .entry.cur .name {
     color: var(--cyan);
   }
-  /* Explicit "open" affordance on every row: single click selects, this
-     drills in — the only enter gesture that works on touch. */
+  /* Drill-down gutter on the LEFT of every name (tree convention): click a
+     row selects, ▸ (or double-click, or →) drills in — and works on touch. */
   .go {
     flex-shrink: 0;
     display: flex;
     align-items: center;
-    padding: 0 8px;
-    border-left: 1px solid var(--line);
+    justify-content: center;
+    width: 30px;
+    border-right: 1px solid var(--line);
     background: var(--bg1);
     color: var(--cyan);
     font-size: 11px;

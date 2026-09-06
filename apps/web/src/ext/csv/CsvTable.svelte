@@ -73,7 +73,7 @@
       <thead>
         <tr>
           {#each header as h, ci (ci)}
-            <th class:num={numeric[ci]} class:sorted={sortCol === ci} onclick={() => sortBy(ci)} title="click to sort">
+            <th class:num={numeric[ci]} class:sorted={sortCol === ci} onclick={() => sortBy(ci)} title="Click to sort">
               {h}{#if sortCol === ci}<span class="faint"> {sortDir > 0 ? "▴" : "▾"}</span>{/if}
             </th>
           {/each}

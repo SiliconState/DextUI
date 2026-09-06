@@ -112,13 +112,13 @@ const PACKS = [
 
 // Host-driven composer completion (mirrors the slash.* caps above).
 const COMMANDS = [
-  { cmd: "/help", desc: "list host commands" },
-  { cmd: "/approval", desc: "set dext approval profile" },
-  { cmd: "/compact", desc: "compact session context" },
-  { cmd: "/model", desc: "show or switch model" },
-  { cmd: "/todos", desc: "show the todo list" },
+  { cmd: "/help", desc: "List host commands" },
+  { cmd: "/approval", desc: "Set dext approval profile" },
+  { cmd: "/compact", desc: "Compact session context" },
+  { cmd: "/model", desc: "Show or switch model" },
+  { cmd: "/todos", desc: "Show the todo list" },
   ...PACKS.map((p) => ({ cmd: `/pack run ${p.name}`, desc: p.description })),
-  { cmd: "/pack list", desc: "list installed packs" },
+  { cmd: "/pack list", desc: "List installed packs" },
 ];
 
 // Random per process so clients detect a restarted host and resync from a

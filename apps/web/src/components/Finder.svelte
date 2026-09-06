@@ -51,21 +51,21 @@
         respondGlobal(e.sessionId, e.pending.request_id, choice);
       out.push({
         slug: `approve.${e.sessionId}.${e.pending.request_id}.once`,
-        label: `approve once: ${e.pending.tool}${short}`,
+        label: `Approve once: ${e.pending.tool}${short}`,
         hint: e.sessionTitle,
         group: "appr",
         run: () => respond("once"),
       });
       out.push({
         slug: `approve.${e.sessionId}.${e.pending.request_id}.always`,
-        label: `approve always: ${e.pending.tool}${short}`,
+        label: `Approve always: ${e.pending.tool}${short}`,
         hint: e.sessionTitle,
         group: "appr",
         run: () => respond("always"),
       });
       out.push({
         slug: `approve.${e.sessionId}.${e.pending.request_id}.deny`,
-        label: `deny: ${e.pending.tool}${short}`,
+        label: `Deny: ${e.pending.tool}${short}`,
         hint: e.sessionTitle,
         group: "appr",
         run: () => respond("deny"),
@@ -75,7 +75,7 @@
     for (const s of queue.counts) {
       out.push({
         slug: `approvals.${s.id}.open`,
-        label: `open approvals: ${s.title}`,
+        label: `Open approvals: ${s.title}`,
         hint: `${s.count}`,
         group: "appr",
         run: () => activate(s.id),
@@ -85,7 +85,7 @@
     // runs follow — this is the crews surface on narrow screens (no rail).
     if (crewEnabled()) {
       for (const r of crewEscalations()) {
-        out.push({ slug: `crew.${r.id}.answer`, label: `answer crew escalation: ${r.escalation?.label ?? r.task.slice(0, 40)}`, hint: shortRun(r.id), group: "appr", run: () => openRun(r.id) });
+        out.push({ slug: `crew.${r.id}.answer`, label: `Answer crew escalation: ${r.escalation?.label ?? r.task.slice(0, 40)}`, hint: shortRun(r.id), group: "appr", run: () => openRun(r.id) });
       }
       for (const r of crew.runs) {
         if (r.status === "paused" && r.escalation) continue;
@@ -102,23 +102,23 @@
     if (view?.working) {
       out.push({
         slug: "turn.stop",
-        label: "stop the running turn",
+        label: "Stop the running turn",
         hint: "^c",
         group: "turn",
         run: () => connection()?.interrupt(app.activeId),
       });
     }
-    out.push({ slug: "session.new", label: "new session", hint: "⌘n", group: "sess", run: newSession });
+    out.push({ slug: "session.new", label: "New session", hint: "⌘n", group: "sess", run: newSession });
     if (view) {
       out.push({
         slug: "session.copyid",
-        label: "copy session id",
+        label: "Copy session id",
         group: "sess",
         run: () => copyText(app.activeId, "session id"),
       });
       out.push({
         slug: "session.events",
-        label: "show raw events",
+        label: "Show raw events",
         hint: `${view.recent.length}`,
         group: "sess",
         run: () => (app.eventsOpen = true),
@@ -129,18 +129,18 @@
       const meta = app.sessions.find((s) => s.id === id);
       if (meta) {
         for (const kind of ["rename", "clear", "delete"] as const) {
-          out.push({ slug: `session.${kind}`, label: `${kind} session${kind === "clear" ? " — fresh context" : kind === "delete" ? " — permanent purge" : ""}`, group: "sess", run: () => requestSessionAction({ kind, id }) });
+          out.push({ slug: `session.${kind}`, label: `${kind.charAt(0).toUpperCase()}${kind.slice(1)} session${kind === "clear" ? " — fresh context" : kind === "delete" ? " — permanent purge" : ""}`, group: "sess", run: () => requestSessionAction({ kind, id }) });
         }
-        out.push({ slug: "session.close-wake", label: meta.status === "cold" ? "wake session" : "close session — keep history", group: "sess", run: () => meta.status === "cold" ? wakeSession(id) : closeSession(id) });
+        out.push({ slug: "session.close-wake", label: meta.status === "cold" ? "Wake session" : "Close session — keep history", group: "sess", run: () => meta.status === "cold" ? wakeSession(id) : closeSession(id) });
       }
-      if (app.sessions.length) out.push({ slug: "sessions.delete_all", label: "delete all sessions — permanent purge", group: "sess", run: () => requestSessionAction({ kind: "bulk", scope: "all" }) });
-      if (app.sessions.some((s) => s.status === "cold" || s.status === "exited")) out.push({ slug: "sessions.delete_cold", label: "delete closed sessions — permanent purge", group: "sess", run: () => requestSessionAction({ kind: "bulk", scope: "cold" }) });
+      if (app.sessions.length) out.push({ slug: "sessions.delete_all", label: "Delete all sessions — permanent purge", group: "sess", run: () => requestSessionAction({ kind: "bulk", scope: "all" }) });
+      if (app.sessions.some((s) => s.status === "cold" || s.status === "exited")) out.push({ slug: "sessions.delete_cold", label: "Delete closed sessions — permanent purge", group: "sess", run: () => requestSessionAction({ kind: "bulk", scope: "cold" }) });
     }
     for (const s of app.sessions) {
       if (s.id === app.activeId) continue;
       out.push({
         slug: `goto.${s.id}`,
-        label: `switch: ${s.title}`,
+        label: `Switch: ${s.title}`,
         hint: s.status,
         group: "sess",
         run: () => activate(s.id),
@@ -148,29 +148,29 @@
     }
     out.push({
       slug: "app.shortcuts",
-      label: "show shortcuts",
+      label: "Show shortcuts",
       hint: "?",
       group: "app",
       run: () => (app.shortcutsOpen = true),
     });
     out.push({
       slug: "theme.toggle",
-      label: `theme: ${app.theme} → ${app.theme === "dark" ? "light" : app.theme === "light" ? "system" : "dark"}`,
+      label: `Theme: ${app.theme} → ${app.theme === "dark" ? "light" : app.theme === "light" ? "system" : "dark"}`,
       group: "app",
       run: toggleTheme,
     });
-    out.push({ slug: "pair.reset", label: "re-pair with agent host", hint: "clears token", group: "app", run: rePair });
+    out.push({ slug: "pair.reset", label: "Re-pair with agent host", hint: "Clears token", group: "app", run: rePair });
     if (selfEditEnabled()) {
       // Self-edit: DextUI working on itself. Every action goes through the host.
-      out.push({ slug: "self.workbench", label: "open workbench — edit DextUI itself", hint: "~/DextUI", group: "self", run: openWorkbench });
+      out.push({ slug: "self.workbench", label: "Open workbench — edit DextUI itself", hint: "~/DextUI", group: "self", run: openWorkbench });
       if (selfEdit.build) out.push({ slug: "self.building", label: `UI build running: ${selfEdit.build.step}`, group: "self", run: () => {} });
       else {
-        out.push({ slug: "self.build", label: "rebuild UI — staged, swaps in only if it passes", hint: "/ui build", group: "self", run: () => buildUi() });
-        out.push({ slug: "self.build.tests", label: "rebuild UI with tests", hint: "/ui build --tests", group: "self", run: () => buildUi({ tests: true }) });
+        out.push({ slug: "self.build", label: "Rebuild UI — staged, swaps in only if it passes", hint: "/ui build", group: "self", run: () => buildUi() });
+        out.push({ slug: "self.build.tests", label: "Rebuild UI with tests", hint: "/ui build --tests", group: "self", run: () => buildUi({ tests: true }) });
       }
-      if (selfEdit.status?.lkg) out.push({ slug: "self.rollback", label: `roll back UI to previous build ${selfEdit.status.lkg.id}`, hint: "/ui rollback", group: "self", run: rollbackUi });
-      if (selfEdit.restartPending) out.push({ slug: "self.restart.cancel", label: "cancel pending host restart", group: "self", run: cancelRestart });
-      else out.push({ slug: "self.restart", label: "restart host when idle — picks up host code changes", hint: "/ui restart", group: "self", run: () => restartHost("finder") });
+      if (selfEdit.status?.lkg) out.push({ slug: "self.rollback", label: `Roll back UI to previous build ${selfEdit.status.lkg.id}`, hint: "/ui rollback", group: "self", run: rollbackUi });
+      if (selfEdit.restartPending) out.push({ slug: "self.restart.cancel", label: "Cancel pending host restart", group: "self", run: cancelRestart });
+      else out.push({ slug: "self.restart", label: "Restart host when idle — picks up host code changes", hint: "/ui restart", group: "self", run: () => restartHost("finder") });
     }
     // Extension-registered commands (apps/web/src/ext/*) come last.
     for (const c of activeCommands()) out.push({ slug: `ext.${c.slug}`, label: c.label, hint: c.hint, group: c.group ?? "ext", run: c.run });
@@ -255,7 +255,7 @@
     class="fz fade-in"
     role="dialog"
     aria-modal="true"
-    aria-label="finder"
+    aria-label="Finder"
     tabindex="-1"
     use:dlg.ref
     data-agent-id="palette.root"
@@ -265,7 +265,7 @@
       <span class="st-green">❯</span>
       <input
         bind:value={query}
-        placeholder="command or session…"
+        placeholder="Command or session…"
         data-agent-id="palette.input"
       />
       <span class="faint">esc</span>
@@ -288,7 +288,7 @@
           {/if}
         </button>
       {:else}
-        <p class="fz-empty" data-agent-id="palette.empty">no matches</p>
+        <p class="fz-empty" data-agent-id="palette.empty">No matches</p>
       {/each}
     </div>
   </div>
@@ -352,6 +352,7 @@
     color: var(--faint);
     width: 4ch;
     flex-shrink: 0;
+    text-transform: capitalize;
   }
   .fz-label {
     flex: 1;

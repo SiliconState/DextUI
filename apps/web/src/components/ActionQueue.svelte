@@ -56,7 +56,7 @@
     class="queue"
     data-agent-id="queue.rail"
     data-state={open ? "expanded" : "collapsed"}
-    aria-label="approval queue"
+    aria-label="Approval queue"
   >
     <button class="queue-head" data-agent-id="queue.toggle" aria-expanded={open} onclick={toggle}>
       <span class="faint">{open ? "▾" : "▸"}</span>
@@ -104,10 +104,10 @@
         {#each escalations as r (r.id)}
           <div class="queue-row count" data-agent-id={`queue.crew.${r.id}`} data-state="awaiting_answer">
             <span class="st-yellow">⚠</span>
-            <span class="q-tool">crew escalation</span>
+            <span class="q-tool">Crew escalation</span>
             <span class="dim truncate" title={r.escalation?.question}>{r.escalation?.label ?? r.task}</span>
             <span class="faint q-meta">{shortRun(r.id)} · {(void now, crewDur(crewIdle(r, Date.now())))}</span>
-            <button class="act accent" data-agent-id={`queue.crew.${r.id}.open`} onclick={() => goRun(r.id)}>[open]</button>
+            <button class="act accent" data-agent-id={`queue.crew.${r.id}.open`} onclick={() => goRun(r.id)}>[Open]</button>
           </div>
         {/each}
         {#each queue.counts as s (s.id)}

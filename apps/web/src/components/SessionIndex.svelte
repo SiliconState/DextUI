@@ -3,6 +3,7 @@
   // Status glyphs mirror the TUI: ● live · ● starting (pulse) · ○ cold · ● exited.
   import { app, activate, newSession, closeSession, wakeSession, requestSessionAction, prefillComposer, packStarter, packUnmet } from "../lib/state.svelte";
   import { packTitle } from "../lib/persona.svelte";
+  import { titleCase } from "../lib/display";
   import SessionAction from "./SessionAction.svelte";
   import ActionQueue from "./ActionQueue.svelte";
   import CrewRail from "./CrewRail.svelte";
@@ -70,7 +71,7 @@
     </div>
   {/if}
   {#if app.phase === "live" && !canManage}
-    <p class="idx-note" data-agent-id="session.manage.unavailable">rename/clear/delete hidden: this host doesn't advertise <code>session_manage</code> — restart it on current code</p>
+    <p class="idx-note" data-agent-id="session.manage.unavailable">Rename/clear/delete hidden: this host doesn't advertise <code>session_manage</code> — restart it on current code</p>
   {/if}
   <SessionAction />
   <ActionQueue {onPick} />
@@ -102,7 +103,7 @@
           {/if}
         </span>
         <span class="idx-sub">
-          {s.model ?? s.agent.name} · {s.status}
+          {s.model ?? s.agent.name} · {titleCase(s.status)}
         </span>
       </button>
       {#if canManage}
@@ -130,7 +131,7 @@
   {#if hasPacks}
     <div class="idx-packs" data-agent-id="rail.packs" data-state={packsOpen ? "open" : "closed"}>
       <button class="idx-packs-head" aria-expanded={packsOpen} data-agent-id="rail.packs.toggle" onclick={togglePacks}>
-        <span class="faint">{packsOpen ? "▾" : "▸"}</span> <span class="st-magenta">packs</span> <span class="faint">{app.packs.length}</span>
+        <span class="faint">{packsOpen ? "▾" : "▸"}</span> <span class="st-magenta">Packs</span> <span class="faint">{app.packs.length}</span>
         <span class="faint idx-packs-g">g</span>
       </button>
       {#if packsOpen}
@@ -145,7 +146,7 @@
                   <span class:st-cyan={!missing.length} class:faint={missing.length > 0}>{packTitle(p)}</span>
                   {#if missing.length}<span class="st-warn">!</span>{/if}
                 </button>
-                <button class="act idx-pack-edit" data-agent-id={`rail.packs.${p.name}.edit`} title={`edit ${p.path}`}
+                <button class="act idx-pack-edit" data-agent-id={`rail.packs.${p.name}.edit`} title={`Edit ${p.path}`}
                   onclick={() => { prefillComposer(`Edit the ${p.name} pack at ${p.path}: `); onPick?.(); }}>Edit</button>
               </div>
             {/each}
@@ -155,7 +156,7 @@
       {/if}
     </div>
   {/if}
-  <div class="idx-foot faint">⌘k finder · a/s/d approve</div>
+  <div class="idx-foot faint">⌘k Finder · a/s/d approve</div>
 </div>
 
 <style>

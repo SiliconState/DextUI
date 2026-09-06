@@ -3,5 +3,5 @@
 import { registerFence } from "../registry";
 import CsvTable from "./CsvTable.svelte";
 
-registerFence({ lang: "csv", component: CsvTable, label: "csv table" });
-registerFence({ lang: "tsv", component: CsvTable, label: "tsv table" });
+registerFence({ lang: "csv", component: CsvTable, label: "CSV table" });
+registerFence({ lang: "tsv", component: CsvTable, label: "TSV table" });

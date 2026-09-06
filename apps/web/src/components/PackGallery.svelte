@@ -95,12 +95,12 @@
     <header class="gal-head">
       <span>
         <span class="st-magenta">{consumer ? "Tools" : "Packs"}</span>
-        <span class="faint"> · for <button class="act inline" data-agent-id="persona.change" title="change who this is for" onclick={() => (persona.picking = true)}>{personaTitle(persona.id)} ▾</button></span>
+        <span class="faint"> · for <button class="act inline" data-agent-id="persona.change" title="Change who this is for" onclick={() => (persona.picking = true)}>{personaTitle(persona.id)} ▾</button></span>
         {#if !consumer}<span class="faint"> · workflows you can run, edit and share. They are just files in your workspace.</span>{/if}
       </span>
       <span class="head-acts">
         {#if foldersEnabled()}
-          <button class="act" data-agent-id="packs.folder" title="choose the folder the work happens in" onclick={() => { openFolderPicker(); onPick?.(); }}>▸ Work in a folder…</button>
+          <button class="act" data-agent-id="packs.folder" title="Choose the folder the work happens in" onclick={() => { openFolderPicker(); onPick?.(); }}>▸ Work in a folder…</button>
         {/if}
         <span class="faint">{app.packs.length}</span>
       </span>

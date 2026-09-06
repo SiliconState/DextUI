@@ -94,7 +94,7 @@
     <button class="act rail-restore" data-agent-id="sidebar.restore" onclick={toggleSidebar} title="Show sessions (Ctrl/Cmd+B)">[› sessions]</button>
   {/if}
   <span class={`dot ${dotClass}`} data-agent-id="status.phase" data-state={app.phase}>●</span>
-  <span class="st-green truncate">{view.cwd ? prettyPath(view.cwd, view.cwd) : "dextui"}</span>
+  <span class="st-green truncate">{view.cwd ? prettyPath(view.cwd, view.cwd) : "DextUI"}</span>
   {#if view.title && view.title !== view.id}
     <span class="sep">|</span>
     <span class="dim truncate">{view.title}</span>
@@ -102,7 +102,7 @@
   {#if app.caps.includes("model_select") && app.modelCatalog.length > 0}
     <span class="sep">│</span>
     <label class="ctl" title={view.modelLocked ? "Model is fixed once this session has history. Start a new session to change it." : "Model for this session's first turn"}>
-      <span class="faint">model:</span>
+      <span class="faint">Model:</span>
       <select
         value={modelValue}
         onchange={selectModel}
@@ -127,7 +127,7 @@
   {#if app.caps.includes("effort_select") && app.effortOptions.length > 0}
     <span class="sep">│</span>
     <label class="ctl" title="Reasoning effort for the next turn">
-      <span class="faint">effort:</span>
+      <span class="faint">Effort:</span>
       <select
         value={view.thinkingEffort ?? "medium"}
         onchange={selectEffort}
@@ -143,7 +143,7 @@
   {/if}
   {#if view.approvalProfile}
     <span class="sep">│</span>
-    <span class="st-yellow" data-agent-id="status.profile">approval:{view.approvalProfile}</span>
+    <span class="st-yellow" data-agent-id="status.profile">Approval:{view.approvalProfile}</span>
   {/if}
   {#if ticker}
     <span class="sep">│</span>
@@ -154,21 +154,21 @@
       title={`${ticker.top.task}${ticker.more ? ` (+${ticker.more} more live)` : ""}`}
       onclick={() => openRun(crew.openId || ticker.top.id)}
     >
-      <span class="tick-full">crew {shortRun(ticker.top.id)}{ticker.more ? `+${ticker.more}` : ""}
+      <span class="tick-full">Crew {shortRun(ticker.top.id)}{ticker.more ? `+${ticker.more}` : ""}
         {#if ticker.c.paused}⚠{ticker.c.paused}{/if}{#if ticker.c.run} ●{ticker.c.run}{/if}{#if ticker.c.done} ✓{ticker.c.done}{/if}{#if ticker.c.fail} ✗{ticker.c.fail}{/if}
         · {crewDur(crewAge(ticker.top, now))}</span>
-      <span class="tick-min">crew {ticker.c.paused ? `⚠${ticker.c.paused}` : `●${ticker.c.run}`}</span>
+      <span class="tick-min">Crew {ticker.c.paused ? `⚠${ticker.c.paused}` : `●${ticker.c.run}`}</span>
     </button>
   {/if}
   {#if selfEdit.build}
     <span class="sep">│</span>
-    <span class="st-cyan" data-agent-id="status.ui.build" data-state="building" title={`UI build ${selfEdit.build.id}`}>⟳ ui:{selfEdit.build.step}</span>
+    <span class="st-cyan" data-agent-id="status.ui.build" data-state="building" title={`UI build ${selfEdit.build.id}`}>⟳ UI:{selfEdit.build.step}</span>
   {:else if selfEdit.restartPending}
     <span class="sep">│</span>
-    <button class="act st-yellow" data-agent-id="status.host.restart" data-state="pending" title={`restart queued${selfEdit.restartPending.reason ? `: ${selfEdit.restartPending.reason}` : ""} — click to cancel`} onclick={cancelRestart}>↻ restart when idle</button>
+    <button class="act st-yellow" data-agent-id="status.host.restart" data-state="pending" title={`Restart queued${selfEdit.restartPending.reason ? `: ${selfEdit.restartPending.reason}` : ""} — click to cancel`} onclick={cancelRestart}>↻ Restart when idle</button>
   {:else if selfEdit.restarting}
     <span class="sep">│</span>
-    <span class="st-yellow" data-agent-id="status.host.restart" data-state="restarting">↻ host restarting</span>
+    <span class="st-yellow" data-agent-id="status.host.restart" data-state="restarting">↻ Host restarting</span>
   {/if}
   {#if view.contextChars}
     <span class="sep">│</span>
@@ -191,7 +191,7 @@
   {/if}
   {#if view.retry}
     <span class="sep">│</span>
-    <span class="st-yellow pulse" data-agent-id="status.retry" title={view.retry.reason}>retry #{view.retry.attempt} in {view.retry.wait_secs}s</span>
+    <span class="st-yellow pulse" data-agent-id="status.retry" title={view.retry.reason}>Retry #{view.retry.attempt} in {view.retry.wait_secs}s</span>
   {/if}
   {#if view.failed}
     <span class="sep">│</span>
@@ -212,17 +212,17 @@
       >⚠ {pendingTotal}</button
       >
     {/if}
-    <button class="act" data-agent-id="finder.open" onclick={() => (app.paletteOpen = true)} title="finder (⌘K)">⌘k</button>
+    <button class="act" data-agent-id="finder.open" onclick={() => (app.paletteOpen = true)} title="Finder (⌘K)">⌘k</button>
     <button
       class="act"
       data-agent-id="notify.toggle"
       data-state={app.notify}
       onclick={toggleNotify}
-      title="notify while the tab is hidden"
-    >notify:{app.notify}</button
+      title="Notify while the tab is hidden"
+    >Notify:{app.notify}</button
     >
-    <button class="act" data-agent-id="theme.toggle" onclick={toggleTheme} title="cycle theme: dark → light → system">
-      theme:{app.theme}
+    <button class="act" data-agent-id="theme.toggle" onclick={toggleTheme} title="Cycle theme: dark → light → system">
+      Theme:{app.theme}
     </button>
     <button class="act" data-agent-id="pair.reset" onclick={rePair} title="Clear token and re-pair">Re-pair</button>
   </span>

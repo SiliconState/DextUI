@@ -51,7 +51,7 @@ registerFlowNode({
 
 registerCommand({
   slug: "flows.open",
-  label: "flows — build & run workflows (f)",
+  label: "Flows — build & run workflows (f)",
   hint: "f",
   group: "app",
   run: () => openFlows(),
@@ -59,7 +59,7 @@ registerCommand({
 
 registerSlash({
   cmd: "/flows",
-  desc: "open the flow builder",
+  desc: "Open the flow builder",
   run: () => {
     openFlows();
     return true;

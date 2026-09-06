@@ -425,9 +425,9 @@ export function listPackTree(packDir, { maxEntries = 500, maxDepth = 8 } = {}) {
 export function packCommands(catalog) {
   return [
     ...catalog.map((p) => ({ cmd: `/pack run ${p.name}`, desc: p.description.slice(0, 90) })),
-    { cmd: "/pack list", desc: "list installed packs" },
-    { cmd: "/pack create", desc: "scaffold <shelf>/<name>, or copy one with --from <pack>" },
-    { cmd: "/pack inspect", desc: "show a pack's PACK.md summary" },
+    { cmd: "/pack list", desc: "List installed packs" },
+    { cmd: "/pack create", desc: "Scaffold <shelf>/<name>, or copy one with --from <pack>" },
+    { cmd: "/pack inspect", desc: "Show a pack's PACK.md summary" },
   ];
 }
 

@@ -237,8 +237,8 @@ const DIRS_ROOT = path.resolve(argValue("dirs-root", process.env.DEXTUI_DIRS_ROO
 // Host-handled slash commands, advertised in hello_ok so the composer's
 // completion menu is driven by the host rather than a client-side guess.
 const COMMANDS = [
-  { cmd: "/help", desc: "list host commands" },
-  { cmd: "/approval", desc: `set dext approval profile (${[...APPROVALS].join("|")}) — next turn` },
+  { cmd: "/help", desc: "List host commands" },
+  { cmd: "/approval", desc: `Set dext approval profile (${[...APPROVALS].join("|")}) — next turn` },
 ];
 
 // Random per process: lets clients tell a reconnect to the same host (resume
@@ -422,7 +422,7 @@ SELF = createSelfEdit({
 // hello_ok.self + x-agentlinkd.ui.{build,rollback,status} + x-agentlinkd.host.{restart,restart_cancel} + /ui + GET /__self.
 if (SELF.enabled) {
   CAPABILITIES.push("self_edit");
-  COMMANDS.push({ cmd: "/ui", desc: "self-edit: status | build [--tests] | rollback | restart [why] | cancel" });
+  COMMANDS.push({ cmd: "/ui", desc: "Self-edit: status | build [--tests] | rollback | restart [why] | cancel" });
 }
 
 function restartHost(code) {

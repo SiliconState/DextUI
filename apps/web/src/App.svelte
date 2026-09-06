@@ -99,7 +99,7 @@
     const n = queueTotal();
     const meta = app.sessions.find((s) => s.id === app.activeId);
     const title = meta?.title || (view ? view.title : "");
-    const base = title ? `dext · ${title}` : "dext";
+    const base = title ? `Dext · ${title}` : "Dext";
     document.title = n > 0 ? `(${n}) ${base}` : base;
   });
 
@@ -227,8 +227,8 @@
 {#if app.needsToken}
   <div class="pair" data-state="connect" data-agent-id="app.root">
     <form onsubmit={connectSubmit} class="pair-box" data-agent-id="connect.form">
-      <p class="pair-title"><span class="st-green">dext</span><span class="blink st-green">▊</span> <span class="dim">Web console</span></p>
-      <p class="dim">Pair with the agent host — paste the token printed by <span class="st-cyan">agentlinkd</span></p>
+      <p class="pair-title"><span class="st-green">Dext</span><span class="blink st-green">▊</span> <span class="dim">Web console</span></p>
+      <p class="dim">Pair with the agent host — paste the token printed by <span class="st-cyan">Agentlinkd</span></p>
       <p class="faint">(mock host default: dev-token)</p>
       {#if app.lastError}
         <p class="st-red" data-agent-id="connect.error">✗ {app.lastError}</p>
@@ -276,15 +276,15 @@
         {/if}
       {:else}
         <div class="hero content-axis" data-state="no_session" data-agent-id="hero">
-          <p><span class="st-green">dext</span><span class="blink st-green">▊</span> <span class="dim">Web console</span></p>
+          <p><span class="st-green">Dext</span><span class="blink st-green">▊</span> <span class="dim">Web console</span></p>
           {#if app.phase === "live" && app.packs.length > 0}
             <PackGallery />
-            <p class="faint">or type anything to start a plain session · ⌘k finder</p>
+            <p class="faint">Or type anything to start a plain session · ⌘k Finder</p>
           {:else}
             <p class="dim">pick a session from the index, or start one:</p>
             <p>
-              <button class="act accent" data-agent-id="hero.new" onclick={newSession}>+ new session</button>
-              <span class="faint"> · ⌘k finder</span>
+              <button class="act accent" data-agent-id="hero.new" onclick={newSession}>+ New session</button>
+              <span class="faint"> · ⌘k Finder</span>
             </p>
           {/if}
         </div>
@@ -338,10 +338,10 @@
             data-agent-id="notify.toggle"
             data-state={app.notify}
             onclick={toggleNotify}
-            title="notify while the tab is hidden"
-          >notify:{app.notify}</button
+            title="Notify while the tab is hidden"
+          >Notify:{app.notify}</button
           >
-          <span class="faint sl-min-right">⌘k finder</span>
+          <span class="faint sl-min-right">⌘k Finder</span>
         </div>
       {/if}
     </div>
@@ -353,7 +353,7 @@
     class="insp"
     role="dialog"
     aria-modal="true"
-    aria-label="block inspector"
+    aria-label="Block inspector"
     tabindex="-1"
     use:dlgBlock.ref
     data-agent-id="drawer.block"
@@ -361,7 +361,7 @@
   >
     <div class="insp-head">
       <span class="st-magenta">{inspect.kind}</span>
-      <span class="dim">raw block</span>
+      <span class="dim">Raw block</span>
       <span class="insp-acts">
         <button class="act" data-agent-id="drawer.block.close" onclick={() => (inspect = null)}>esc</button>
       </span>
@@ -373,7 +373,7 @@
     class="insp"
     role="dialog"
     aria-modal="true"
-    aria-label="raw events"
+    aria-label="Raw events"
     tabindex="-1"
     use:dlgEvents.ref
     data-agent-id="drawer.events"
@@ -381,7 +381,7 @@
   >
     <div class="insp-head">
       <span class="st-magenta">Events</span>
-      <span class="dim">last {view.recent.length} envelopes · seq {view.lastSeq}</span>
+      <span class="dim">Last {view.recent.length} envelopes · seq {view.lastSeq}</span>
       <span class="insp-acts">
         <button class="act" data-agent-id="drawer.events.close" onclick={() => (app.eventsOpen = false)}>esc</button>
       </span>
@@ -407,7 +407,7 @@
     class="insp gallery-overlay"
     role="dialog"
     aria-modal="true"
-    aria-label="packs"
+    aria-label="Packs"
     tabindex="-1"
     use:dlgGallery.ref
     data-agent-id="packs.overlay"
@@ -415,7 +415,7 @@
   >
     <div class="insp-head">
       <span class="st-magenta">Packs</span>
-      <span class="dim">pick one to prefill the composer</span>
+      <span class="dim">Pick one to prefill the composer</span>
       <span class="insp-acts">
         <button class="act" data-agent-id="packs.overlay.close" onclick={() => (app.galleryOpen = false)}>esc</button>
       </span>

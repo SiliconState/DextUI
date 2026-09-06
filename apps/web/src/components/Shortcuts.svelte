@@ -96,7 +96,7 @@
     class="sc fade-in"
     role="dialog"
     aria-modal="true"
-    aria-label="keyboard shortcuts"
+    aria-label="Keyboard shortcuts"
     tabindex="-1"
     use:dlg.ref
     data-agent-id="shortcuts.root"

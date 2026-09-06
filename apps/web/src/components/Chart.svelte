@@ -335,7 +335,7 @@
       {#if link.has(ds)}<button class="chart-btn" onclick={() => link.clear(ds)}>Clear highlight</button>{/if}
       {#if iso >= 0}<button class="chart-btn" onclick={() => (iso = -1)}>Show all</button>{/if}
     </span>
-    {#if edited}<span class="chart-badge">edited</span>{/if}
+    {#if edited}<span class="chart-badge">Edited</span>{/if}
   </div>
 </div>
 

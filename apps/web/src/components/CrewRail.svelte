@@ -27,9 +27,9 @@
 
   function meta(r: CrewRun): string {
     const c = r.counts;
-    if (r.status === "paused") return `awaiting answer · ${crewDur(crewIdle(r, now))}`;
+    if (r.status === "paused") return `Awaiting answer · ${crewDur(crewIdle(r, now))}`;
     if (r.status === "running" || r.status === "pending") return `${c.done}/${c.total} · ${crewDur(crewAge(r, now))}`;
-    if (r.state === "stopped") return `stopped · ${c.done}/${c.total}`;
+    if (r.state === "stopped") return `Stopped · ${c.done}/${c.total}`;
     if (r.status === "failed") return `${c.fail} failed · ${c.done}/${c.total}`;
     return `${c.done}/${c.total} · ${crewDur(r.duration_ms)}`;
   }
@@ -41,10 +41,10 @@
 </script>
 
 {#if enabled}
-  <section class="crews" data-agent-id="crew.rail" data-state={crew.railOpen ? "expanded" : "collapsed"} aria-label="crew runs">
+  <section class="crews" data-agent-id="crew.rail" data-state={crew.railOpen ? "expanded" : "collapsed"} aria-label="Crew runs">
     <button class="crews-head" data-agent-id="crew.rail.toggle" aria-expanded={crew.railOpen} onclick={toggleCrewRail}>
       <span class="faint">{crew.railOpen ? "▾" : "▸"}</span>
-      <span class="dim">crews</span>
+      <span class="dim">Crews</span>
       <span class="faint">{crew.runs.length + crew.omitted}</span>
     </button>
     {#if crew.railOpen}
@@ -64,7 +64,7 @@
         {/each}
         {#if hidden > 0 || crew.railAll}
           <button class="crew-more faint" data-agent-id="crew.rail.more" data-state={crew.railAll ? "expanded" : "collapsed"} onclick={() => (crew.railAll = !crew.railAll)}>
-            {crew.railAll ? "▴ fewer" : `▾ ${hidden} more`}{crew.omitted > 0 && crew.railAll ? ` · ${crew.omitted} not listed by host` : ""}
+            {crew.railAll ? "▴ Fewer" : `▾ ${hidden} more`}{crew.omitted > 0 && crew.railAll ? ` · ${crew.omitted} not listed by host` : ""}
           </button>
         {/if}
       </div>

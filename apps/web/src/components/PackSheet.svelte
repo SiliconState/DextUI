@@ -24,7 +24,7 @@
 
 {#if packSheet.open}
   <div class="sheet-scrim" data-agent-id="packs.sheet.scrim" onclick={() => closePackSheet()} onkeydown={() => {}} role="presentation"></div>
-  <div class="sheet" use:dlg.ref role="dialog" aria-label="edit pack files" tabindex="-1"
+  <div class="sheet" use:dlg.ref role="dialog" aria-label="Edit pack files" tabindex="-1"
     data-agent-id="packs.sheet" data-state={packSheet.loading ? "loading" : packSheetDirty() ? "dirty" : "ready"}>
     <header class="head">
       <span><span class="st-magenta">Pack</span> <span class="st-cyan">{packSheet.pack}</span>
@@ -35,8 +35,8 @@
       </span>
     </header>
     <div class="body">
-      <nav class="files" data-agent-id="packs.sheet.files" aria-label="pack files">
-        {#if packSheet.listing}<div class="faint pad">loading…</div>{/if}
+      <nav class="files" data-agent-id="packs.sheet.files" aria-label="Pack files">
+        {#if packSheet.listing}<div class="faint pad">Loading…</div>{/if}
         {#each packSheet.files as f (f.path)}
           {@const depth = f.path.split("/").length - 1}
           <button class="file" class:sel={f.path === packSheet.sel} class:dim={f.kind !== "file" || !f.editable}
@@ -51,18 +51,18 @@
         {#if packSheet.error}<div class="err" data-agent-id="packs.sheet.error">{packSheet.error}</div>{/if}
         {#if packSheet.sel}
           <textarea data-agent-id="packs.sheet.editor" bind:value={packSheet.text} spellcheck="false"
-            disabled={packSheet.loading} placeholder={packSheet.loading ? "loading…" : ""}></textarea>
+            disabled={packSheet.loading} placeholder={packSheet.loading ? "Loading…" : ""}></textarea>
         {:else if !packSheet.listing}
-          <div class="faint pad">select a file</div>
+          <div class="faint pad">Select a file</div>
         {/if}
       </div>
     </div>
     <footer class="foot">
-      <span class="faint truncate">{packSheet.sel || "—"}{#if packSheetDirty()} <span class="st-yellow">· modified</span>{/if}</span>
+      <span class="faint truncate">{packSheet.sel || "—"}{#if packSheetDirty()} <span class="st-yellow">· Modified</span>{/if}</span>
       <button class="act ok" data-agent-id="packs.sheet.save"
         data-state={packSheet.saving ? "saving" : packSheetDirty() ? "ready" : "idle"}
         disabled={!packSheetDirty() || packSheet.saving || packSheet.loading} onclick={savePackFile}>
-        [⏎] {packSheet.saving ? "saving…" : "save"}
+        [⏎] {packSheet.saving ? "Saving…" : "Save"}
       </button>
     </footer>
   </div>
@@ -70,7 +70,7 @@
 
 {#if packSheet.panelOpen}
   <div class="sheet-scrim" data-agent-id="packs.panel.scrim" onclick={closePackPanel} onkeydown={() => {}} role="presentation"></div>
-  <div class="sheet panel" use:dlgPanel.ref role="dialog" aria-label="pack panel" tabindex="-1"
+  <div class="sheet panel" use:dlgPanel.ref role="dialog" aria-label="Pack panel" tabindex="-1"
     data-agent-id="packs.panel" data-state={packSheet.panelLoading ? "loading" : packSheet.error ? "error" : "ready"}>
     <header class="head">
       <span><span class="st-magenta">Panel</span> <span class="st-cyan">{packSheet.pack}</span>
@@ -78,11 +78,11 @@
       <button class="act close" data-agent-id="packs.panel.close" onclick={closePackPanel}>esc</button>
     </header>
     {#if packSheet.panelLoading}
-      <div class="faint pad">loading…</div>
+      <div class="faint pad">Loading…</div>
     {:else if packSheet.error}
       <div class="err" data-agent-id="packs.panel.error">{packSheet.error}</div>
     {:else}
-      <iframe class="pane" title="pack panel" sandbox="" srcdoc={packSheet.panelHtml} data-agent-id="packs.panel.frame"></iframe>
+      <iframe class="pane" title="Pack panel" sandbox="" srcdoc={packSheet.panelHtml} data-agent-id="packs.panel.frame"></iframe>
     {/if}
   </div>
 {/if}

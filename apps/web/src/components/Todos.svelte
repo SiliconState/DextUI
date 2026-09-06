@@ -129,7 +129,7 @@
     {#if open}
       <ul class="todos-list">
         {#if failed && !data}
-          <li class="st-red" data-agent-id="todos.empty">✗ todos unavailable</li>
+          <li class="st-red" data-agent-id="todos.empty">✗ Todos unavailable</li>
         {:else if data && data.items.length > 0}
           {#each data.items as it, i (i)}
             <li class="todo" data-agent-id={`todos.item.${i}`} data-state={it.status}>
@@ -138,7 +138,7 @@
             </li>
           {/each}
         {:else}
-          <li class="faint" data-agent-id="todos.empty">— none</li>
+          <li class="faint" data-agent-id="todos.empty">— None</li>
         {/if}
       </ul>
     {/if}

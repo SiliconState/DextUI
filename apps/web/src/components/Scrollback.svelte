@@ -68,7 +68,7 @@
           <p class="sb-working" data-agent-id="transcript.working" aria-live="polite">
             <span class="st-yellow pulse">●</span>
             <span class="dim">
-              working{view.compacting ? " · compacting" : ""}{view.turnStartedAt ? ` · ${fmtElapsed(now - view.turnStartedAt)}` : ""}
+              Working{view.compacting ? " · compacting" : ""}{view.turnStartedAt ? ` · ${fmtElapsed(now - view.turnStartedAt)}` : ""}
             </span>
           </p>
         {/if}

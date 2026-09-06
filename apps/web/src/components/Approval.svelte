@@ -17,11 +17,11 @@
 
 <div class="appr" data-state="awaiting_approval" data-agent-id={`approval.${pending.request_id}`}>
   <div class="appr-head">
-    <span class="st-yellow bold">approval</span>
+    <span class="st-yellow bold">Approval</span>
     <span class="faint">·</span>
     <span class="st-yellow">{pending.tool}</span>
     {#if pending.risk}
-      <span class="faint">· risk:{pending.risk}</span>
+      <span class="faint">· Risk:{pending.risk}</span>
     {/if}
     <span class="appr-summary dim">{pending.summary}</span>
   </div>
@@ -29,18 +29,18 @@
     <Diff text={pending.diff} />
   {:else if pending.input !== undefined}
     <details class="appr-input">
-      <summary><span class="faint">▸ input</span></summary>
+      <summary><span class="faint">▸ Input</span></summary>
       <pre class="appr-pre" data-agent-id={`approval.${pending.request_id}.input`}>{JSON.stringify(pending.input, null, 2)}</pre>
     </details>
   {/if}
   <div class="appr-actions">
-    <button class="act ok" data-agent-id={`approval.${pending.request_id}.once`} onclick={() => respond("once")}>[a] once</button>
-    <button class="act accent" data-agent-id={`approval.${pending.request_id}.always`} onclick={() => respond("always")}>[s] always</button>
-    <button class="act err" data-agent-id={`approval.${pending.request_id}.deny`} onclick={() => respond("deny")}>[d] deny</button>
+    <button class="act ok" data-agent-id={`approval.${pending.request_id}.once`} onclick={() => respond("once")}>[a] Once</button>
+    <button class="act accent" data-agent-id={`approval.${pending.request_id}.always`} onclick={() => respond("always")}>[s] Always</button>
+    <button class="act err" data-agent-id={`approval.${pending.request_id}.deny`} onclick={() => respond("deny")}>[d] Deny</button>
     <input
       bind:value={note}
       type="text"
-      placeholder="note (optional)"
+      placeholder="Note (optional)"
       class="appr-note"
       data-agent-id={`approval.${pending.request_id}.note`}
     />

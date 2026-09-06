@@ -83,7 +83,7 @@
 {#if block.kind === "user"}
   <div class="b-user" data-agent-id="block.user" data-pack={userPack ?? undefined}>
     <span class="pg">❯</span>
-    {#if userPack}<span class="pack-badge st-magenta" data-agent-id="block.user.pack" title="run through this pack">▣ {userPack}</span>{/if}
+    {#if userPack}<span class="pack-badge st-magenta" data-agent-id="block.user.pack" title="Run through this pack">▣ {userPack}</span>{/if}
     <span class="b-user-text">{block.text}</span>
   </div>
 {:else if block.kind === "text"}
@@ -119,7 +119,7 @@
         {toolLabel[block.status] ?? block.status}
       </span>
       {#if onInspect}
-        <button class="act hover-act" data-agent-id={`tool.${block.call_id}.inspect`} onclick={() => onInspect?.(block)}>raw</button>
+        <button class="act hover-act" data-agent-id={`tool.${block.call_id}.inspect`} onclick={() => onInspect?.(block)}>Raw</button>
       {/if}
     </div>
     {#if block.output_tail}

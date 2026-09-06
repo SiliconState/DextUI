@@ -538,7 +538,7 @@ export function start(token: string): void {
         const pack = typeof data.pack === "string" ? data.pack : "pack";
         const retry = typeof data.retry === "string" ? data.retry : "";
         pushToast("warn", `${pack} needs approval profile ${required}`, {
-          label: `switch to ${required}`,
+          label: `Switch to ${required}`,
           run: () => {
             if (!sid || app.conn !== c) return;
             c.slash(sid, `/approval ${required}`);

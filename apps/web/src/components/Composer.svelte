@@ -24,11 +24,11 @@
 
   // Fallback for hosts that predate hello_ok.commands: derive from slash.* caps.
   const LEGACY_COMMANDS: (HostCommand & { cap: string })[] = [
-    { cmd: "/approval", desc: "set dext approval profile", cap: "slash.approval" },
-    { cmd: "/compact", desc: "compact session context", cap: "slash.compact" },
-    { cmd: "/model", desc: "show or switch model", cap: "slash.model" },
-    { cmd: "/todos", desc: "show the todo list", cap: "slash.todos" },
-    { cmd: "/help", desc: "list host commands", cap: "slash.help" },
+    { cmd: "/approval", desc: "Set dext approval profile", cap: "slash.approval" },
+    { cmd: "/compact", desc: "Compact session context", cap: "slash.compact" },
+    { cmd: "/model", desc: "Show or switch model", cap: "slash.model" },
+    { cmd: "/todos", desc: "Show the todo list", cap: "slash.todos" },
+    { cmd: "/help", desc: "List host commands", cap: "slash.help" },
   ];
 
   const sess = useSession(() => store);

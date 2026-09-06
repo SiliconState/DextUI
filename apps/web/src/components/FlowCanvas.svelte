@@ -190,16 +190,16 @@
 
 {#if flows.open}
   <div class="insp-scrim" data-agent-id="flows.scrim" onclick={closeFlows} onkeydown={() => {}} role="presentation"></div>
-  <div class="insp gallery-overlay flows" role="dialog" aria-modal="true" aria-label="flows" tabindex="-1" use:dlg.ref data-agent-id="flows.overlay" data-state={draft ? "edit" : "list"}>
+  <div class="insp gallery-overlay flows" role="dialog" aria-modal="true" aria-label="Flows" tabindex="-1" use:dlg.ref data-agent-id="flows.overlay" data-state={draft ? "edit" : "list"}>
     <div class="insp-head">
       <span class="st-magenta">Flows</span>
-      <span class="dim">{draft ? (draft.title || draft.name) : "workflows in this folder"}</span>
+      <span class="dim">{draft ? (draft.title || draft.name) : "Workflows in this folder"}</span>
       <span class="insp-acts">
         {#if draft}
-          <button class="act" data-agent-id="flows.back" onclick={() => { flows.draft = null; flows.preview = ""; }}>← flows</button>
-          <button class="act" data-agent-id="flows.save" onclick={saveFlow}>{draft.dirty ? "[⌃s] save*" : "saved"}</button>
+          <button class="act" data-agent-id="flows.back" onclick={() => { flows.draft = null; flows.preview = ""; }}>← Flows</button>
+          <button class="act" data-agent-id="flows.save" onclick={saveFlow}>{draft.dirty ? "[⌃s] Save*" : "Saved"}</button>
           <button class="act" data-agent-id="flows.compile" onclick={() => { showPreview = !showPreview; if (!flows.preview) compileFlow_(); }}>Spec</button>
-          <button class="act accent" data-agent-id="flows.run" onclick={runFlow}>▶ run</button>
+          <button class="act accent" data-agent-id="flows.run" onclick={runFlow}>▶ Run</button>
         {/if}
         <button class="act" data-agent-id="flows.close" onclick={closeFlows}>esc</button>
       </span>
@@ -216,12 +216,12 @@
                 <span class="faint">{f.nodes} nodes</span>
               </button>
               <button class="act del" data-agent-id={`flows.delete.${f.name}`} onclick={() => deleteFlow(f.name)}>
-                {flows.confirmDelete === f.name ? "really delete?" : "delete"}
+                {flows.confirmDelete === f.name ? "Really delete?" : "Delete"}
               </button>
             </li>
           {/each}
         </ul>
-        <button class="act accent" data-agent-id="flows.new" onclick={newFlow}>+ new flow</button>
+        <button class="act accent" data-agent-id="flows.new" onclick={newFlow}>+ New flow</button>
         {#if !flowsEnabled()}<p class="dim">Flows need a host with the flows capability.</p>{/if}
         {#if flows.list.length === 0}<p class="dim">No flows in this folder yet. A flow is a small graph of steps — packs, prompts, checkpoints — saved as <span class="st-cyan">.dext/flows/*.flow.json</span> and run by the crew engine.</p>{/if}
       {:else}
@@ -234,14 +234,14 @@
           {#each types as t (t.type)}
             <button class="chip" title={t.desc} data-agent-id={`flows.add.${t.type}`} onclick={() => addNode(t.type as FlowNodeType)}>+ {GYPH[t.type] ?? "·"} {t.label}</button>
           {/each}
-          <span class="faint ph">drag nodes · drag ○→ to connect · click to edit · Del removes</span>
+          <span class="faint ph">Drag nodes · drag ○→ to connect · click to edit · Del removes</span>
         </div>
 
         <div class="work">
           <!-- svelte-ignore a11y_no_static_element_interactions -->
           <svg bind:this={svgEl} class="canvas" data-agent-id="flows.canvas"
             onpointerdown={onCanvasDown} onpointermove={onMove} onpointerup={onUp} onwheel={onWheel}
-            tabindex="-1" role="application" aria-label="flow canvas">
+            tabindex="-1" role="application" aria-label="Flow canvas">
             <g transform={`translate(${pan.x} ${pan.y}) scale(${zoom})`}>
               {#each draft.edges as [a, b] (a + ":" + b)}
                 {@const sel = selected === `edge:${a}:${b}`}
@@ -274,7 +274,7 @@
           {#if selNode && selSpec}
             <aside class="form" data-agent-id="flows.form">
               <div class="f-head"><span class="st-cyan">{selSpec.label}</span> <span class="faint">{selNode.id}</span></div>
-              <label>label <input value={selNode.label ?? ""} oninput={(e) => setField("label", e.currentTarget.value)} data-agent-id="flows.field.label" /></label>
+              <label>Label <input value={selNode.label ?? ""} oninput={(e) => setField("label", e.currentTarget.value)} data-agent-id="flows.field.label" /></label>
               {#each Object.entries(selSpec.fields) as [key, kind] (key)}
                 {#if kind === "textarea"}
                   <label>{key} <textarea rows="3" value={(selNode as unknown as Record<string, string>)[key] ?? ""} oninput={(e) => setField(key, e.currentTarget.value)} data-agent-id={`flows.field.${key}`}></textarea></label>
@@ -303,47 +303,47 @@
         <section class="trig" data-agent-id="flows.triggers">
           <div class="trig-head">
             <span class="st-magenta">Starts when</span>
-            <span class="faint">manual (▶) always works ·</span>
-            <button class="chip" data-agent-id="flows.trigger.add.schedule" onclick={() => addTrigger("schedule")}>+ on a schedule</button>
-            <button class="chip" data-agent-id="flows.trigger.add.watch" onclick={() => addTrigger("watch")}>+ files change</button>
-            <button class="chip" data-agent-id="flows.trigger.add.mesh" onclick={() => addTrigger("mesh")}>+ message arrives</button>
-            <button class="chip" data-agent-id="flows.trigger.add.webhook" onclick={() => addTrigger("webhook")}>+ web hook</button>
+            <span class="faint">Manual (▶) always works ·</span>
+            <button class="chip" data-agent-id="flows.trigger.add.schedule" onclick={() => addTrigger("schedule")}>+ On a schedule</button>
+            <button class="chip" data-agent-id="flows.trigger.add.watch" onclick={() => addTrigger("watch")}>+ Files change</button>
+            <button class="chip" data-agent-id="flows.trigger.add.mesh" onclick={() => addTrigger("mesh")}>+ Message arrives</button>
+            <button class="chip" data-agent-id="flows.trigger.add.webhook" onclick={() => addTrigger("webhook")}>+ Web hook</button>
           </div>
           {#each draft.triggers ?? [] as t, i (i)}
             <div class="trig-row" data-agent-id={`flows.trigger.${i}`} data-state={t.enabled === false ? "off" : "on"}>
               <label class="on"><input type="checkbox" checked={t.enabled !== false} onchange={(e) => setTrigger(i, "enabled", e.currentTarget.checked)} /> {t.kind}</label>
               {#if t.kind === "schedule"}
                 <select value={t.every ? "every" : "daily"} onchange={(e) => setTrigger(i, "mode", e.currentTarget.value)}>
-                  <option value="daily">daily at</option>
-                  <option value="every">every N minutes</option>
+                  <option value="daily">Daily at</option>
+                  <option value="every">Every N minutes</option>
                 </select>
                 {#if t.every}
                   <input type="number" min="15" max="10080" value={t.every} onchange={(e) => setTrigger(i, "every", e.currentTarget.value)} />
                 {:else}
                   <input type="time" value={t.daily_at ?? "09:00"} onchange={(e) => setTrigger(i, "daily_at", e.currentTarget.value)} />
                   <select value={t.weekday === undefined ? "" : String(t.weekday)} onchange={(e) => setTrigger(i, "weekday", e.currentTarget.value)}>
-                    <option value="">every day</option>
+                    <option value="">Every day</option>
                     {#each DAYS as d, k (k)}<option value={String(k)}>{d}</option>{/each}
                   </select>
                 {/if}
               {:else if t.kind === "watch"}
-                <span class="faint">folder</span> <input value={t.path ?? "."} placeholder=". (this folder)" onchange={(e) => setTrigger(i, "path", e.currentTarget.value)} />
+                <span class="faint">Folder</span> <input value={t.path ?? "."} placeholder=". (this folder)" onchange={(e) => setTrigger(i, "path", e.currentTarget.value)} />
               {:else if t.kind === "mesh"}
-                <span class="faint">as node</span> <input value={t.node ?? ""} onchange={(e) => setTrigger(i, "node", e.currentTarget.value)} />
+                <span class="faint">As node</span> <input value={t.node ?? ""} onchange={(e) => setTrigger(i, "node", e.currentTarget.value)} />
                 <span class="faint">From</span> <input value={t.from ?? ""} placeholder="anyone" onchange={(e) => setTrigger(i, "from", e.currentTarget.value)} />
               {:else}
                 {@const hook = hookFor(draft.name)}
-                <span class="faint">POST</span> <code class="hook">{hook ? `${location.origin}${hook}` : "(save to get the URL)"}</code>
+                <span class="faint">POST</span> <code class="hook">{hook ? `${location.origin}${hook}` : "(Save to get the URL)"}</code>
               {/if}
               <button class="act del" data-agent-id={`flows.trigger.${i}.remove`} onclick={() => removeTrigger(i)}>Remove</button>
             </div>
           {/each}
           {#if armed.length}
-            <p class="faint">armed on the host: {armed.map((a) => `${a.detail}${a.last ? ` (last ${new Date(a.last).toLocaleString()})` : ""}`).join(" · ")}</p>
+            <p class="faint">Armed on the host: {armed.map((a) => `${a.detail}${a.last ? ` (last ${new Date(a.last).toLocaleString()})` : ""}`).join(" · ")}</p>
           {/if}
         </section>
         {#if flows.started === draft.name}
-          <p class="st-green">▶ running — watch the crew rail for progress and checkpoints.</p>
+          <p class="st-green">▶ Running — watch the crew rail for progress and checkpoints.</p>
         {/if}
       {/if}
     </div>
