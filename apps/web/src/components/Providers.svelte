@@ -19,7 +19,7 @@
 
   // Markers that mean no usable credential: dext can say failed/expired when
   // a stored login stopped working — those rows get "Sign in" back.
-  const NOT_SIGNED = new Set(["", "none", "failed", "expired", "missing", "absent", "disabled"]);
+  const NOT_SIGNED = new Set(["", "none", "failed", "expired", "missing", "absent", "disabled", "unknown", "off"]);
   function signedIn(auth: string): boolean {
     return !NOT_SIGNED.has(auth);
   }
@@ -27,7 +27,7 @@
   // render as nothing — never echo raw marker text into the page.
   function method(auth: string): string {
     if (auth === "key" || auth === "token") return "API key";
-    if (auth === "auth" || auth === "web" || auth === "oauth" || auth === "session") return "session";
+    if (auth === "auth" || auth === "web" || auth === "oauth" || auth === "session" || auth === "present") return "session";
     return "";
   }
   function subline(p: ProviderAuth): string {

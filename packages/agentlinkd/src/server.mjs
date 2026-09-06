@@ -213,7 +213,7 @@ function parseProviderStatus(text) {
   for (const line of text.split("\n")) {
     const m = /^\s*(\*)?\s*(\S+)\s+(.*?)\s+model=(\S+)(.*)$/.exec(line);
     if (!m || !PROVIDER_ID_RE.test(m[2])) continue;
-    const raw = /\bauth=(\S+)/.exec(m[5])?.[1] ?? "none";
+    const raw = (/\bauth=(\S+)/.exec(m[5])?.[1] ?? "none").replace(/^[^\w]+|[^\w]+$/g, "").toLowerCase();
     providers.push({ id: m[2], label: m[3].trim() || m[2], model: m[4], auth: AUTH_MARKERS.has(raw) ? raw : "key", active: !!m[1] || m[2] === active });
   }
   return { active, providers };

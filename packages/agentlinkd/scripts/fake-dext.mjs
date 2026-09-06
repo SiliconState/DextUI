@@ -25,7 +25,7 @@ if (process.argv[2] === "auth" && process.argv[3] === "models") {
 if (process.argv[2] === "auth" && (process.argv[3] === "status" || process.argv[3] === "providers")) {
   const a = readAuth();
   process.stdout.write(
-    `active provider: fake-a\n* fake-a Fake A model=alpha contract=fake api=fake spec=model auth=${a["fake-a"] ?? "none"} base=http://fake\n  fake-b Fake B model=beta contract=fake api=fake spec=model auth=${a["fake-b"] ?? "none"} base=http://fake\n  fake-c Fake C model=gamma contract=fake api=fake spec=model auth=sk-fake-9f2a7b1c3d4e base=http://fake\n`,
+    `active provider: fake-a\n* fake-a Fake A model=alpha contract=fake api=fake spec=model auth=${a["fake-a"] ?? "none"} base=http://fake\n  fake-b Fake B model=beta contract=fake api=fake spec=model auth=${a["fake-b"] ?? "None."} base=http://fake\n  fake-c Fake C model=gamma contract=fake api=fake spec=model auth=sk-fake-9f2a7b1c3d4e base=http://fake\n`,
   );
   process.exit(0);
 }
