@@ -4,6 +4,7 @@
   // are CSS borders, never literal glyphs — glyph gutters shred when lines wrap.
   import type { ViewBlock as Block } from "@dextui/client";
   import { app, copyText, packOfPrompt, prefillComposer } from "../lib/state.svelte";
+  import { humanizeTool, humanizeLabel } from "../lib/display";
   import { fileUrl, htmlPathIn } from "../lib/files";
   import { prettyPath } from "../lib/markdown";
   import Markdown from "./Markdown.svelte";
@@ -55,6 +56,18 @@
     warn: "⚠",
     error: "✗",
   };
+  // Batch start markers carry "Batch: label · label · …"; the failure marker
+  // ("Batch: N tool call(s) failed.") must never parse as a label list.
+  function batchLabels(text: string): string[] | null {
+    if (!text.startsWith("Batch: ")) return null;
+    const rest = text.slice(7);
+    return /^[a-z_][\w-]*: /i.test(rest) ? rest.split(" · ") : null;
+  }
+  function batchFail(text: string): number | null {
+    const m = text.match(/^Batch: (\d+) tool call\(s\) failed\.?$/);
+    return m ? Number(m[1]) : null;
+  }
+  const isShell = (n: string): boolean => /^(bash|sh|shell)$/i.test(n);
   const markerClass: Record<string, string> = {
     info: "st-faint",
     note: "st-cyan",
@@ -156,7 +169,7 @@
     <div class="tool-head">
       <span class="tool-name">{block.name}</span>
       <span class="faint">·</span>
-      <span class="dim tool-summary" class:cmd={/bash|shell/i.test(block.name)}>{block.summary}</span>
+      <span class="dim tool-summary" class:cmd={isShell(block.name)}>{humanizeTool(block.name, block.summary)}</span>
       <span class={`tool-status ${toolClass[block.status] ?? "st-faint"}`} data-agent-id={`tool.${block.call_id}.status`}>
         {toolLabel[block.status] ?? block.status}
       </span>
@@ -188,9 +201,30 @@
     {/if}
   </div>
 {:else if block.kind === "marker"}
-  <div class={`b-marker ${markerClass[block.level] ?? "st-faint"}`} data-agent-id="block.marker">
-    {markerGlyph[block.level] ?? "·"} {block.text}
-  </div>
+  {#if batchLabels(block.text)}
+    {@const labels = batchLabels(block.text)!}
+    <details class="b-marker batch" data-agent-id="block.marker.batch" data-state={block.level}>
+      <summary>
+        <span class={markerClass[block.level] ?? "st-faint"}>{markerGlyph[block.level] ?? "•"}</span>
+        <span class="dim">Batch · {labels.length} {labels.length === 1 ? "call" : "calls"}</span>
+        <span class="dim batch-first">— {humanizeLabel(labels[0] ?? "")}</span>
+        {#if labels.length > 1}<span class="faint">+{labels.length - 1} more</span>{/if}
+        <span class="faint batch-raw">raw</span>
+      </summary>
+      <ul class="batch-list" data-agent-id="block.marker.batch.raw">
+        {#each labels as l, i (i)}<li>{l}</li>{/each}
+      </ul>
+    </details>
+  {:else if batchFail(block.text) !== null}
+    {@const n = batchFail(block.text)!}
+    <div class={`b-marker ${markerClass[block.level] ?? "st-faint"}`} data-agent-id="block.marker">
+      {markerGlyph[block.level] ?? "⚠"} Batch · {n} {n === 1 ? "call" : "calls"} failed
+    </div>
+  {:else}
+    <div class={`b-marker ${markerClass[block.level] ?? "st-faint"}`} data-agent-id="block.marker">
+      {markerGlyph[block.level] ?? "·"} {block.text}
+    </div>
+  {/if}
 {:else if block.kind === "slash"}
   <div class="b-slash" data-agent-id="block.slash">
     <pre class="slash-pre">{block.text}</pre>
@@ -444,6 +478,50 @@
   .b-marker {
     width: 100%;
     white-space: pre-wrap;
+  }
+  /* Batch markers: one natural-language line; opening it swaps in the raw
+     per-call list, one label per line, mono. */
+  .b-marker.batch {
+    width: 100%;
+  }
+  .b-marker.batch summary {
+    display: flex;
+    gap: 8px;
+    align-items: baseline;
+    width: 100%;
+    cursor: pointer;
+    user-select: none;
+    list-style: none;
+  }
+  .b-marker.batch summary::-webkit-details-marker {
+    display: none;
+  }
+  .batch-first {
+    min-width: 0;
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .batch-raw {
+    flex-shrink: 0;
+    font-size: 10px;
+    letter-spacing: 0.05em;
+  }
+  .batch-list {
+    margin: 2px 0 4px;
+    padding: 2px 8px;
+    list-style: none;
+    border-left: 2px solid var(--line);
+    display: grid;
+    gap: 1px;
+  }
+  .batch-list li {
+    font-family: var(--mono, monospace);
+    font-size: 11.5px;
+    color: var(--dim);
+    white-space: pre-wrap;
+    word-break: break-word;
   }
   .b-slash {
     position: relative;

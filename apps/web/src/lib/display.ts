@@ -21,3 +21,62 @@ export function titleCase(s: string): string {
 export function packTitle(p: Pick<PackInfo, "name" | "ui">): string {
   return titleCase(p.ui.title ?? p.name.replace(/[-_]+/g, " "));
 }
+
+/** Natural-language tool summaries. Dext's technical forms — "rg: /re/ in
+ * /abs/path (+3 args)", "read_file: /abs/path (offset=1)" — become "Search
+ * for re in ~/…/src"; shell commands stay verbatim. Raw always keeps the
+ * original, so this only buys readability. */
+const VERBS: Record<string, string> = {
+  rg: "Search",
+  grep: "Search",
+  glob: "Find",
+  find: "Find",
+  read: "Read",
+  read_file: "Read",
+  cat: "Read",
+  ls: "List",
+  list_dir: "List",
+  write: "Write",
+  write_file: "Write",
+  edit: "Edit",
+};
+/** Tools whose summary is a state blob (todo_write's JSON) — the summary is
+ * noise, so these render as a plain phrase and nothing else. */
+const ALONE: Record<string, string> = {
+  todo_write: "Update the todo list",
+  todo_read: "Check the todo list",
+};
+
+function shortToken(s: string, n = 24): string {
+  const t = s.trim();
+  return t.length > n ? `${t.slice(0, n - 1)}…` : t;
+}
+
+/** "~" for home, and past three segments keep only the last two. */
+export function shortPath(p: string): string {
+  const t = p.trim().replace(/^\/home\/[^/]+/, "~");
+  const segs = t.split("/").filter(Boolean);
+  return segs.length > 3 ? `${segs[0]}/…/${segs.slice(-2).join("/")}` : t;
+}
+
+export function humanizeTool(name: string, summary: string): string {
+  const raw = (summary ?? "").trim();
+  if (!raw) return raw;
+  if (/^(bash|sh|shell)$/i.test(name)) return raw; // the command is the summary
+  const alone = ALONE[name.toLowerCase()];
+  if (alone) return alone;
+  // Drop the trailing args hint ("(+3 args)", "(offset=1, limit=30)") and
+  // any mid-truncation ellipsis the host already applied.
+  const body = raw.replace(/\s*\([^()]{0,60}\)\s*$/, "").replace(/…$/, "").trim();
+  const verb = VERBS[name.toLowerCase()];
+  const m = body.match(/^\/(.+)\/\s+in\s+(\S.*)$/);
+  if (m?.[1] !== undefined && m[2] !== undefined) return `${verb ?? "Search"} for ${shortToken(m[1])} in ${shortPath(m[2])}`;
+  if (body.startsWith("/") && !body.includes(" ")) return `${verb ?? "Read"} ${shortPath(body)}`;
+  return shortToken(raw, 72);
+}
+
+/** Batch labels carry their tool name ("rg: /re/ in /p"); split it off. */
+export function humanizeLabel(l: string): string {
+  const i = l.indexOf(": ");
+  return i > 0 ? humanizeTool(l.slice(0, i), l.slice(i + 2)) : humanizeTool("", l);
+}
