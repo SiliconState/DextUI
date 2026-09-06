@@ -112,7 +112,7 @@ export function onDirsControl(env: Envelope): void {
 /** Short display of a path relative to the picker root. */
 export function shortFolder(p: string): string {
   const home = app.conn?.home ?? "";
-  if (home && p === home) return "home";
+  if (home && p === home) return "Home";
   if (home && p.startsWith(home + "/")) return p.slice(home.length + 1);
   return p;
 }

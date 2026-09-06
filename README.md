@@ -113,8 +113,8 @@ dext pack create samples/hello-chart && cp packages/agentlinkd/sample-packs/hell
 The first visit asks one question — **I keep the books / I run a business /
 I build software** — and remembers the answer per browser (`dextui.persona`,
 changeable any time from the gallery header). It only decides what you see
-*first*: nothing is hidden, the rest folds under "developer tools" (or
-"business tools" for developers) and "all packs".
+*first*: nothing is hidden, the rest folds under "Developer tools" (or
+"Business tools" for developers) and "All packs".
 
 - Cards show plain-language titles (`ui-title`, e.g. `crew` → **Team**,
   `mesh` → **Inbox**) and requirements in words ("needs permission to write

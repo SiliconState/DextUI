@@ -330,10 +330,10 @@
     <span class="chart-stats">n {stats.n} · min {fmt(stats.min)} · max {fmt(stats.max)} · μ {fmt(stats.mean)} · Σ {fmt(stats.sum)}{unit}</span>
     <span class="chart-btns">
       {#if type === "bar" || type === "hbar"}<button class="chart-btn" onclick={cycleSort}>sort {["off", "desc", "asc"][sortMode]}</button>{/if}
-      {#if edited}<button class="chart-btn" onclick={() => (edit = {})}>reset edits</button>{/if}
-      {#if zoom}<button class="chart-btn" onclick={() => (zoom = null)}>reset zoom</button>{/if}
-      {#if link.has(ds)}<button class="chart-btn" onclick={() => link.clear(ds)}>clear highlight</button>{/if}
-      {#if iso >= 0}<button class="chart-btn" onclick={() => (iso = -1)}>show all</button>{/if}
+      {#if edited}<button class="chart-btn" onclick={() => (edit = {})}>Reset edits</button>{/if}
+      {#if zoom}<button class="chart-btn" onclick={() => (zoom = null)}>Reset zoom</button>{/if}
+      {#if link.has(ds)}<button class="chart-btn" onclick={() => link.clear(ds)}>Clear highlight</button>{/if}
+      {#if iso >= 0}<button class="chart-btn" onclick={() => (iso = -1)}>Show all</button>{/if}
     </span>
     {#if edited}<span class="chart-badge">edited</span>{/if}
   </div>

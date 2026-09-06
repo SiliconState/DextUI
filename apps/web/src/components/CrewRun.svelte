@@ -224,7 +224,7 @@
             bind:this={answerEl}
             bind:value={answer}
             rows="3"
-            placeholder="your answer — ⏎ submits, shift+⏎ newline"
+            placeholder="Your answer — ⏎ submits, shift+⏎ newline"
             disabled={crew.answering}
             data-agent-id={`crew.run.${run.id}.answer`}
           ></textarea>
@@ -262,7 +262,7 @@
                 <span class="dur dim">{dur(w)}</span>
                 <span class="extra truncate">
                   {#if w.status === "failed" && w.error}<span class="st-red">{w.error}</span>
-                  {:else if w.status === "paused"}<span class="st-yellow">awaiting answer</span>
+                  {:else if w.status === "paused"}<span class="st-yellow">Awaiting answer</span>
                   {:else if w.output}<button class="act" data-agent-id={`crew.run.${run.id}.w.${w.key}.file`} onclick={() => openFile(w.output!)}>{base(w.output)}</button>{/if}
                 </span>
                 <button class="act tail-act" data-agent-id={`crew.run.${run.id}.w.${w.key}.tail`} data-state={crew.tailWorker === w.key ? "shown" : "hidden"} onclick={() => { focus = w.key; requestTail(w.key); }}>{crew.tailWorker === w.key ? "[⏎] hide" : "[⏎] tail"}</button>
@@ -288,7 +288,7 @@
       {#if crew.file}
         <div class="filepane" data-agent-id={`crew.run.${run.id}.file`} data-state="shown">
           <div class="tail-head faint">{crew.file.path} · {crew.file.bytes} B{crew.file.truncated ? " (truncated)" : ""}
-            <button class="act" onclick={() => (crew.file = null)}>close</button></div>
+            <button class="act" onclick={() => (crew.file = null)}>Close</button></div>
           <pre class="tail file">{crew.file.text}</pre>
         </div>
       {/if}

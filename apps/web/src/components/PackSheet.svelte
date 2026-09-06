@@ -27,10 +27,10 @@
   <div class="sheet" use:dlg.ref role="dialog" aria-label="edit pack files" tabindex="-1"
     data-agent-id="packs.sheet" data-state={packSheet.loading ? "loading" : packSheetDirty() ? "dirty" : "ready"}>
     <header class="head">
-      <span><span class="st-magenta">pack</span> <span class="st-cyan">{packSheet.pack}</span>
+      <span><span class="st-magenta">Pack</span> <span class="st-cyan">{packSheet.pack}</span>
         <span class="faint">· {fileCount} file{fileCount === 1 ? "" : "s"} · files in your workspace</span></span>
       <span class="row">
-        {#if packSheet.sel}<button class="act" data-agent-id="packs.sheet.run" onclick={runWithPack}>run with this</button>{/if}
+        {#if packSheet.sel}<button class="act" data-agent-id="packs.sheet.run" onclick={runWithPack}>Run with this</button>{/if}
         <button class="act close" data-agent-id="packs.sheet.close" onclick={() => closePackSheet()}>esc</button>
       </span>
     </header>
@@ -73,7 +73,7 @@
   <div class="sheet panel" use:dlgPanel.ref role="dialog" aria-label="pack panel" tabindex="-1"
     data-agent-id="packs.panel" data-state={packSheet.panelLoading ? "loading" : packSheet.error ? "error" : "ready"}>
     <header class="head">
-      <span><span class="st-magenta">panel</span> <span class="st-cyan">{packSheet.pack}</span>
+      <span><span class="st-magenta">Panel</span> <span class="st-cyan">{packSheet.pack}</span>
         <span class="faint">· {packSheet.panelFile} · sandboxed (no scripts, no network)</span></span>
       <button class="act close" data-agent-id="packs.panel.close" onclick={closePackPanel}>esc</button>
     </header>

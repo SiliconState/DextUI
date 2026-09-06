@@ -192,13 +192,13 @@
   <div class="insp-scrim" data-agent-id="flows.scrim" onclick={closeFlows} onkeydown={() => {}} role="presentation"></div>
   <div class="insp gallery-overlay flows" role="dialog" aria-modal="true" aria-label="flows" tabindex="-1" use:dlg.ref data-agent-id="flows.overlay" data-state={draft ? "edit" : "list"}>
     <div class="insp-head">
-      <span class="st-magenta">flows</span>
+      <span class="st-magenta">Flows</span>
       <span class="dim">{draft ? (draft.title || draft.name) : "workflows in this folder"}</span>
       <span class="insp-acts">
         {#if draft}
           <button class="act" data-agent-id="flows.back" onclick={() => { flows.draft = null; flows.preview = ""; }}>← flows</button>
           <button class="act" data-agent-id="flows.save" onclick={saveFlow}>{draft.dirty ? "[⌃s] save*" : "saved"}</button>
-          <button class="act" data-agent-id="flows.compile" onclick={() => { showPreview = !showPreview; if (!flows.preview) compileFlow_(); }}>spec</button>
+          <button class="act" data-agent-id="flows.compile" onclick={() => { showPreview = !showPreview; if (!flows.preview) compileFlow_(); }}>Spec</button>
           <button class="act accent" data-agent-id="flows.run" onclick={runFlow}>▶ run</button>
         {/if}
         <button class="act" data-agent-id="flows.close" onclick={closeFlows}>esc</button>
@@ -228,7 +228,7 @@
         <div class="meta">
           <input class="m-in" value={draft.name} placeholder="flow-name" oninput={(e) => renameMeta("name", e.currentTarget.value)} data-agent-id="flows.meta.name" />
           <input class="m-in grow" value={draft.title ?? ""} placeholder="Title (shown to you)" oninput={(e) => renameMeta("title", e.currentTarget.value)} data-agent-id="flows.meta.title" />
-          <input class="m-in grow" value={draft.desc ?? ""} placeholder="one line: what it does" oninput={(e) => renameMeta("desc", e.currentTarget.value)} data-agent-id="flows.meta.desc" />
+          <input class="m-in grow" value={draft.desc ?? ""} placeholder="One line: what it does" oninput={(e) => renameMeta("desc", e.currentTarget.value)} data-agent-id="flows.meta.desc" />
         </div>
         <div class="palette" data-agent-id="flows.palette">
           {#each types as t (t.type)}
@@ -288,10 +288,10 @@
                   <label>{key} <input value={(selNode as unknown as Record<string, string>)[key] ?? ""} oninput={(e) => setField(key, e.currentTarget.value)} data-agent-id={`flows.field.${key}`} /></label>
                 {/if}
               {/each}
-              <button class="act del" data-agent-id="flows.node.delete" onclick={removeSelected}>delete node</button>
+              <button class="act del" data-agent-id="flows.node.delete" onclick={removeSelected}>Delete node</button>
             </aside>
           {:else if selected?.startsWith("edge:")}
-            <aside class="form"><p class="dim">connection</p><button class="act del" data-agent-id="flows.edge.delete" onclick={removeSelected}>remove connection</button></aside>
+            <aside class="form"><p class="dim">Connection</p><button class="act del" data-agent-id="flows.edge.delete" onclick={removeSelected}>Remove connection</button></aside>
           {/if}
         </div>
 
@@ -302,7 +302,7 @@
         <!-- triggers: what starts this flow besides ▶ run (validated by the host on save) -->
         <section class="trig" data-agent-id="flows.triggers">
           <div class="trig-head">
-            <span class="st-magenta">starts when</span>
+            <span class="st-magenta">Starts when</span>
             <span class="faint">manual (▶) always works ·</span>
             <button class="chip" data-agent-id="flows.trigger.add.schedule" onclick={() => addTrigger("schedule")}>+ on a schedule</button>
             <button class="chip" data-agent-id="flows.trigger.add.watch" onclick={() => addTrigger("watch")}>+ files change</button>
@@ -330,12 +330,12 @@
                 <span class="faint">folder</span> <input value={t.path ?? "."} placeholder=". (this folder)" onchange={(e) => setTrigger(i, "path", e.currentTarget.value)} />
               {:else if t.kind === "mesh"}
                 <span class="faint">as node</span> <input value={t.node ?? ""} onchange={(e) => setTrigger(i, "node", e.currentTarget.value)} />
-                <span class="faint">from</span> <input value={t.from ?? ""} placeholder="anyone" onchange={(e) => setTrigger(i, "from", e.currentTarget.value)} />
+                <span class="faint">From</span> <input value={t.from ?? ""} placeholder="anyone" onchange={(e) => setTrigger(i, "from", e.currentTarget.value)} />
               {:else}
                 {@const hook = hookFor(draft.name)}
                 <span class="faint">POST</span> <code class="hook">{hook ? `${location.origin}${hook}` : "(save to get the URL)"}</code>
               {/if}
-              <button class="act del" data-agent-id={`flows.trigger.${i}.remove`} onclick={() => removeTrigger(i)}>remove</button>
+              <button class="act del" data-agent-id={`flows.trigger.${i}.remove`} onclick={() => removeTrigger(i)}>Remove</button>
             </div>
           {/each}
           {#if armed.length}

@@ -54,9 +54,9 @@
 
 <div class="idx" data-agent-id="session.rail">
   <div class="idx-head">
-    <span class="faint">sessions</span>
+    <span class="faint">Sessions</span>
     <span class="faint">{filtered.length}</span>
-    <button class="act accent" data-agent-id="session.new" onclick={newSession} disabled={disabled}>+ new</button>
+    <button class="act accent" data-agent-id="session.new" onclick={newSession} disabled={disabled}>+ New</button>
     {#if canManage}<button class="act" aria-label="Manage sessions" aria-expanded={menu === "all"} data-agent-id="sessions.manage" onclick={() => (menu = menu === "all" ? "" : "all")}>⋯</button>{/if}
     <button class="act rail-min" data-agent-id="sidebar.collapse" onclick={onCollapse} title="Minimize sessions (Ctrl/Cmd+B)">[‹]</button>
     <button class="act rail-close" data-agent-id="sidebar.close" onclick={onClose} title="Close sessions">[×]</button>
@@ -64,9 +64,9 @@
   {#if menu === "all"}
     <div class="idx-actions">
       <button class="act err" disabled={disabled || !app.sessions.some((s) => s.status === "cold" || s.status === "exited")}
-        data-agent-id="sessions.delete_cold" onclick={() => { menu = ""; requestSessionAction({ kind: "bulk", scope: "cold" }); }}>delete closed</button>
+        data-agent-id="sessions.delete_cold" onclick={() => { menu = ""; requestSessionAction({ kind: "bulk", scope: "cold" }); }}>Delete closed</button>
       <button class="act err" disabled={disabled || !app.sessions.length}
-        data-agent-id="sessions.delete_all" onclick={() => { menu = ""; requestSessionAction({ kind: "bulk", scope: "all" }); }}>delete all</button>
+        data-agent-id="sessions.delete_all" onclick={() => { menu = ""; requestSessionAction({ kind: "bulk", scope: "all" }); }}>Delete all</button>
     </div>
   {/if}
   {#if app.phase === "live" && !canManage}
@@ -78,7 +78,7 @@
   <input
     bind:value={query}
     type="search"
-    placeholder="filter…"
+    placeholder="Filter…"
     class="idx-search"
     data-agent-id="session.search"
   />
@@ -112,19 +112,19 @@
       </div>
       {#if menu === s.id}
         <div class="idx-actions">
-          <button class="act" disabled={disabled} data-agent-id={`session.${s.id}.rename`} onclick={() => requestSessionAction({ kind: "rename", id: s.id })}>rename</button>
+          <button class="act" disabled={disabled} data-agent-id={`session.${s.id}.rename`} onclick={() => requestSessionAction({ kind: "rename", id: s.id })}>Rename</button>
           {#if s.status === "cold"}
-            <button class="act" disabled={disabled} data-agent-id={`session.${s.id}.wake`} onclick={() => wakeSession(s.id)}>wake</button>
+            <button class="act" disabled={disabled} data-agent-id={`session.${s.id}.wake`} onclick={() => wakeSession(s.id)}>Wake</button>
           {:else if s.status !== "exited"}
-            <button class="act" disabled={disabled} title="Stop the agent; keep history for later" data-agent-id={`session.${s.id}.close`} onclick={() => closeSession(s.id)}>close</button>
+            <button class="act" disabled={disabled} title="Stop the agent; keep history for later" data-agent-id={`session.${s.id}.close`} onclick={() => closeSession(s.id)}>Close</button>
           {/if}
-          <button class="act" disabled={disabled} data-agent-id={`session.${s.id}.clear`} onclick={() => requestSessionAction({ kind: "clear", id: s.id })}>clear</button>
-          <button class="act err" disabled={disabled} data-agent-id={`session.${s.id}.delete`} onclick={() => requestSessionAction({ kind: "delete", id: s.id })}>delete</button>
+          <button class="act" disabled={disabled} data-agent-id={`session.${s.id}.clear`} onclick={() => requestSessionAction({ kind: "clear", id: s.id })}>Clear</button>
+          <button class="act err" disabled={disabled} data-agent-id={`session.${s.id}.delete`} onclick={() => requestSessionAction({ kind: "delete", id: s.id })}>Delete</button>
         </div>
       {/if}
       </div>
     {:else}
-      <p class="idx-empty" data-agent-id="session.rail.empty">{app.sessions.length ? "no matches" : "No sessions yet — start with + new."}</p>
+      <p class="idx-empty" data-agent-id="session.rail.empty">{app.sessions.length ? "No matches" : "No sessions yet — start with + New."}</p>
     {/each}
   </div>
   {#if hasPacks}
@@ -146,7 +146,7 @@
                   {#if missing.length}<span class="st-warn">!</span>{/if}
                 </button>
                 <button class="act idx-pack-edit" data-agent-id={`rail.packs.${p.name}.edit`} title={`edit ${p.path}`}
-                  onclick={() => { prefillComposer(`Edit the ${p.name} pack at ${p.path}: `); onPick?.(); }}>edit</button>
+                  onclick={() => { prefillComposer(`Edit the ${p.name} pack at ${p.path}: `); onPick?.(); }}>Edit</button>
               </div>
             {/each}
           {/each}

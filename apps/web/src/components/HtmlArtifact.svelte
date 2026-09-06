@@ -53,8 +53,8 @@
     <span class="st-cyan">▤ artifact</span>
     <span class="dim art-name">{name}</span>
     {#if codeText}
-      <button class="act" class:on={mode === "preview"} onclick={() => (mode = "preview")}>preview</button>
-      <button class="act" class:on={mode === "code"} onclick={() => (mode = "code")}>code</button>
+      <button class="act" class:on={mode === "preview"} onclick={() => (mode = "preview")}>Preview</button>
+      <button class="act" class:on={mode === "code"} onclick={() => (mode = "code")}>Code</button>
     {/if}
     {#if src}<a class="act" href={src} target="_blank" rel="noopener noreferrer">open ↗</a>{/if}
   </span>

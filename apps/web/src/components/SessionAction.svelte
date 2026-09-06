@@ -34,7 +34,7 @@
     {/if}
     <div class="actions">
       <button use:focus={action.kind !== "rename"} type="button" class="act" disabled={app.sessionPending}
-        data-agent-id="session.action.cancel" onclick={() => (app.sessionAction = null)}>cancel</button>
+        data-agent-id="session.action.cancel" onclick={() => (app.sessionAction = null)}>Cancel</button>
       <button type="submit" class="act" class:err={action.kind !== "rename"}
         disabled={app.sessionPending || app.phase !== "live" || count === 0 || (action.kind === "rename" && !title.trim())}
         data-agent-id="session.action.confirm">{app.sessionPending ? "working…" : action.kind === "rename" ? "save" : action.kind === "clear" ? "clear session" : "delete permanently"}</button>

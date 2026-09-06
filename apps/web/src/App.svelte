@@ -227,8 +227,8 @@
 {#if app.needsToken}
   <div class="pair" data-state="connect" data-agent-id="app.root">
     <form onsubmit={connectSubmit} class="pair-box" data-agent-id="connect.form">
-      <p class="pair-title"><span class="st-green">dext</span><span class="blink st-green">▊</span> <span class="dim">web console</span></p>
-      <p class="dim">pair with the agent host — paste the token printed by <span class="st-cyan">agentlinkd</span></p>
+      <p class="pair-title"><span class="st-green">dext</span><span class="blink st-green">▊</span> <span class="dim">Web console</span></p>
+      <p class="dim">Pair with the agent host — paste the token printed by <span class="st-cyan">agentlinkd</span></p>
       <p class="faint">(mock host default: dev-token)</p>
       {#if app.lastError}
         <p class="st-red" data-agent-id="connect.error">✗ {app.lastError}</p>
@@ -239,7 +239,7 @@
           bind:value={tokenInput}
           type="password"
           autocomplete="off"
-          placeholder="pairing token"
+          placeholder="Pairing token"
           data-agent-id="connect.token"
         />
         <button type="submit" class="act accent" data-agent-id="connect.submit">[⏎] connect</button>
@@ -259,7 +259,7 @@
       {#if app.lastError && app.phase !== "failed"}
         <div class="errbar" data-agent-id="banner.error">
           <span class="st-red">✗ {app.lastError}</span>
-          <button class="act" data-agent-id="banner.error.dismiss" onclick={() => (app.lastError = "")}>dismiss</button>
+          <button class="act" data-agent-id="banner.error.dismiss" onclick={() => (app.lastError = "")}>Dismiss</button>
         </div>
       {/if}
 
@@ -276,7 +276,7 @@
         {/if}
       {:else}
         <div class="hero content-axis" data-state="no_session" data-agent-id="hero">
-          <p><span class="st-green">dext</span><span class="blink st-green">▊</span> <span class="dim">web console</span></p>
+          <p><span class="st-green">dext</span><span class="blink st-green">▊</span> <span class="dim">Web console</span></p>
           {#if app.phase === "live" && app.packs.length > 0}
             <PackGallery />
             <p class="faint">or type anything to start a plain session · ⌘k finder</p>
@@ -380,7 +380,7 @@
     data-state="open"
   >
     <div class="insp-head">
-      <span class="st-magenta">events</span>
+      <span class="st-magenta">Events</span>
       <span class="dim">last {view.recent.length} envelopes · seq {view.lastSeq}</span>
       <span class="insp-acts">
         <button class="act" data-agent-id="drawer.events.close" onclick={() => (app.eventsOpen = false)}>esc</button>
@@ -414,7 +414,7 @@
     data-state="open"
   >
     <div class="insp-head">
-      <span class="st-magenta">packs</span>
+      <span class="st-magenta">Packs</span>
       <span class="dim">pick one to prefill the composer</span>
       <span class="insp-acts">
         <button class="act" data-agent-id="packs.overlay.close" onclick={() => (app.galleryOpen = false)}>esc</button>

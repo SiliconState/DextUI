@@ -103,7 +103,7 @@
     data-state="open"
   >
     <div class="sc-head">
-      <span class="st-cyan">shortcuts</span>
+      <span class="st-cyan">Shortcuts</span>
       <span class="faint">· every binding</span>
       <span class="sc-acts">
         <button class="act" data-agent-id="shortcuts.close" onclick={() => (app.shortcutsOpen = false)}

@@ -187,7 +187,7 @@
   {/if}
   {#if view.compacting}
     <span class="sep">│</span>
-    <span class="st-magenta">compacting…</span>
+    <span class="st-magenta">Compacting…</span>
   {/if}
   {#if view.retry}
     <span class="sep">│</span>
@@ -224,7 +224,7 @@
     <button class="act" data-agent-id="theme.toggle" onclick={toggleTheme} title="cycle theme: dark → light → system">
       theme:{app.theme}
     </button>
-    <button class="act" data-agent-id="pair.reset" onclick={rePair} title="clear token and re-pair">re-pair</button>
+    <button class="act" data-agent-id="pair.reset" onclick={rePair} title="Clear token and re-pair">Re-pair</button>
   </span>
 </div>
 

@@ -90,7 +90,7 @@
   <div class="b-text" data-agent-id="block.text">
     <Markdown src={block.text} {sessionId} />
     {#if !block.complete}<span class="blink cursor">▊</span>{/if}
-    <button class="act hover-act" data-agent-id="block.text.copy" onclick={() => copyText(block.text, "copied")}>copy</button>
+    <button class="act hover-act" data-agent-id="block.text.copy" onclick={() => copyText(block.text, "Copied")}>Copy</button>
   </div>
 {:else if block.kind === "thinking"}
   {#if block.complete}
@@ -152,7 +152,7 @@
 {:else if block.kind === "slash"}
   <div class="b-slash" data-agent-id="block.slash">
     <pre class="slash-pre">{block.text}</pre>
-    <button class="act hover-act" data-agent-id="block.slash.copy" onclick={() => copyText(block.text, "copied")}>copy</button>
+    <button class="act hover-act" data-agent-id="block.slash.copy" onclick={() => copyText(block.text, "Copied")}>Copy</button>
   </div>
 {:else if block.kind === "view"}
   <div class="tool view" data-agent-id={`view.${block.pack}`}>
@@ -166,9 +166,9 @@
     </div>
     {#if packMeta}
       <div class="view-foot" data-agent-id={`view.${block.pack}.actions`}>
-        <button class="act" data-agent-id={`view.${block.pack}.rerun`} onclick={() => prefillComposer(`/pack run ${block.pack} `)}>run again</button>
-        <button class="act" data-agent-id={`view.${block.pack}.edit`} title={packMeta.path} onclick={() => editPack(block.pack)}>edit pack</button>
-        <button class="act" data-agent-id={`view.${block.pack}.fork`} onclick={() => forkPack(block.pack)}>make my own</button>
+        <button class="act" data-agent-id={`view.${block.pack}.rerun`} onclick={() => prefillComposer(`/pack run ${block.pack} `)}>Run again</button>
+        <button class="act" data-agent-id={`view.${block.pack}.edit`} title={packMeta.path} onclick={() => editPack(block.pack)}>Edit pack</button>
+        <button class="act" data-agent-id={`view.${block.pack}.fork`} onclick={() => forkPack(block.pack)}>Make my own</button>
       </div>
     {/if}
   </div>

@@ -30,7 +30,7 @@
     const l = folders.listing;
     const home = app.conn?.home ?? "";
     if (!l) return [];
-    const out: { label: string; path: string }[] = [{ label: "home", path: home }];
+    const out: { label: string; path: string }[] = [{ label: "Home", path: home }];
     if (l.rel) {
       let at = home;
       for (const seg of l.rel.split("/")) {
@@ -115,8 +115,8 @@
   <div class="insp-scrim" data-agent-id="folders.scrim" onclick={closeFolderPicker} onkeydown={() => {}} role="presentation"></div>
   <div class="insp gallery-overlay folders" role="dialog" aria-modal="true" aria-label="choose a folder" tabindex="-1" use:dlg.ref data-agent-id="folders.overlay" data-state={folders.loading ? "loading" : "ready"} onkeydown={onKey}>
     <div class="insp-head">
-      <span class="st-magenta">folder</span>
-      <span class="dim">where should this work happen?</span>
+      <span class="st-magenta">Folder</span>
+      <span class="dim">Where should this work happen?</span>
       <span class="insp-acts">
         <button class="act" data-agent-id="folders.close" onclick={closeFolderPicker}>esc</button>
       </span>
@@ -124,17 +124,17 @@
     {#if listing}
       <div class="body">
         <div class="tools">
-          <input class="filter" bind:this={filterEl} bind:value={filter} placeholder="filter folders…" spellcheck="false" autocomplete="off" aria-label="filter folders" data-agent-id="folders.filter" />
+          <input class="filter" bind:this={filterEl} bind:value={filter} placeholder="Filter folders…" spellcheck="false" autocomplete="off" aria-label="Filter folders" data-agent-id="folders.filter" />
           {#if listing.dirs.some((d) => typeof d.mtime === "number")}
             <button class="act" data-agent-id="folders.sort" title="sort folders by name or last change" onclick={() => (sortRecent = !sortRecent)}>
-              {sortRecent ? "▾ recent" : "a–z"}
+              {sortRecent ? "▾ Recent" : "a–z"}
             </button>
           {/if}
         </div>
         <div class="scroll">
           {#if recents.length}
             <div class="recents">
-              <span class="faint lbl">recent</span>
+              <span class="faint lbl">Recent</span>
               {#each recents as r, i (r)}
                 <button class="chip" data-agent-id={`folders.recent.${i}`} title={r} onclick={() => pickCurrent(r)}>{shortFolder(r)}</button>
               {/each}
@@ -157,35 +157,35 @@
                   <span class="name">{d.name}</span>
                   {#if typeof d.mtime === "number"}<span class="faint ago">{ago(d.mtime)}</span>{/if}
                 </button>
-                <button class="go" data-agent-id={`folders.go.${d.name}`} title={`open ${d.name}`} aria-label={`open ${d.name}`} onclick={() => enter(d)}>▸</button>
+                <button class="go" data-agent-id={`folders.go.${d.name}`} title={`Open ${d.name}`} aria-label={`Open ${d.name}`} onclick={() => enter(d)}>▸</button>
               </li>
             {/each}
             {#if visible.length === 0}
-              <li class="dim empty">{q ? `nothing matches “${filter.trim()}”` : `no sub-folders${listing.files ? ` · ${listing.files} file${listing.files === 1 ? "" : "s"} here` : ""}`}</li>
+              <li class="dim empty">{q ? `Nothing matches “${filter.trim()}”` : `No sub-folders${listing.files ? ` · ${listing.files} file${listing.files === 1 ? "" : "s"} here` : ""}`}</li>
             {/if}
-            {#if listing.truncated}<li class="faint empty">list truncated</li>{/if}
+            {#if listing.truncated}<li class="faint empty">List truncated</li>{/if}
           </ul>
         </div>
         <div class="foot">
           {#if creating}
             <form class="newf" onsubmit={submitNew}>
-              <input bind:value={newName} placeholder="new folder name" maxlength="80" data-agent-id="folders.new.name" />
-              <button type="submit" class="act" data-agent-id="folders.new.submit">create</button>
-              <button type="button" class="act" onclick={() => (creating = false)}>cancel</button>
+              <input bind:value={newName} placeholder="New folder name" maxlength="80" data-agent-id="folders.new.name" />
+              <button type="submit" class="act" data-agent-id="folders.new.submit">Create</button>
+              <button type="button" class="act" onclick={() => (creating = false)}>Cancel</button>
             </form>
           {:else}
             <button class="use" data-agent-id="folders.use" onclick={useTarget}>
-              <span class="faint">[⏎]</span> use <b>{shortFolder(target)}</b>
-              <span class="faint sub">{folders.seed ? "opens a session and starts your pack" : "opens a session here"}</span>
+              <span class="faint">[⏎]</span> Use <b>{shortFolder(target)}</b>
+              <span class="faint sub">{folders.seed ? "Opens a session and starts your pack" : "Opens a session here"}</span>
             </button>
-            <button class="act" data-agent-id="folders.new" onclick={() => (creating = true)}>[n] new folder here</button>
+            <button class="act" data-agent-id="folders.new" onclick={() => (creating = true)}>[n] New folder here</button>
           {/if}
           <span class="faint hint">↑↓ move · → open · ← up</span>
         </div>
       </div>
     {:else}
       <div class="insp-body">
-        <p class="dim">loading…</p>
+        <p class="dim">Loading…</p>
       </div>
     {/if}
   </div>

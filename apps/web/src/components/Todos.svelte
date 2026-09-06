@@ -113,7 +113,7 @@
   <div class="todos content-axis" data-agent-id="todos.root" data-state={panelState}>
     <button class="todos-head" data-agent-id="todos.toggle" aria-expanded={open} onclick={toggle}>
       <span class="faint">{open ? "▾" : "▸"}</span>
-      <span class="st-cyan">todos</span>
+      <span class="st-cyan">Todos</span>
       {#if data}
         <span class="st-cyan">({done}/{data.items.length})</span>
         <span class="faint">· {data.source}</span>

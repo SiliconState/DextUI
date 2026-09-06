@@ -31,7 +31,7 @@ export function setPersona(id: Persona | null): void {
 }
 
 export function personaTitle(id: Persona | null): string {
-  return PERSONAS.find((p) => p.id === id)?.title ?? "everyone";
+  return PERSONAS.find((p) => p.id === id)?.title ?? "Everyone";
 }
 
 /** Plain-language requirement text for consumer personas. */
@@ -68,6 +68,6 @@ export function galleryGroups(id: Persona | null = persona.id): GalleryGroups {
   if (!id) return { forYou: curated, folded: { title: "", packs: [] }, others };
   const forYou = curated.filter((p) => forPersona(p, id));
   const rest = curated.filter((p) => !forPersona(p, id));
-  const title = id === "developer" ? "business tools" : "developer tools";
+  const title = id === "developer" ? "Business tools" : "Developer tools";
   return { forYou, folded: { title, packs: rest }, others };
 }

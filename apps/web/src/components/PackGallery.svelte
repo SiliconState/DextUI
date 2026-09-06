@@ -77,7 +77,7 @@
   {:else if !persona.id || persona.picking}
     <!-- onboarding: who is this for? one click, remembered per browser, changeable any time -->
     <header class="gal-head">
-      <span><span class="st-magenta">welcome</span> <span class="faint">· what do you do? This only chooses which tools you see first.</span></span>
+      <span><span class="st-magenta">Welcome</span> <span class="faint">· what do you do? This only chooses which tools you see first.</span></span>
     </header>
     <div class="cards personas">
       {#each PERSONAS as p (p.id)}
@@ -88,19 +88,19 @@
       {/each}
     </div>
     <p class="faint">
-      {#if persona.id}<button class="act" data-agent-id="persona.keep" onclick={() => (persona.picking = false)}>keep "{personaTitle(persona.id)}"</button> · {/if}
-      <button class="act" data-agent-id="persona.skip" onclick={() => setPersona("business")}>skip — show me everything</button>
+      {#if persona.id}<button class="act" data-agent-id="persona.keep" onclick={() => (persona.picking = false)}>Keep "{personaTitle(persona.id)}"</button> · {/if}
+      <button class="act" data-agent-id="persona.skip" onclick={() => setPersona("business")}>Skip — show me everything</button>
     </p>
   {:else}
     <header class="gal-head">
       <span>
-        <span class="st-magenta">{consumer ? "tools" : "packs"}</span>
+        <span class="st-magenta">{consumer ? "Tools" : "Packs"}</span>
         <span class="faint"> · for <button class="act inline" data-agent-id="persona.change" title="change who this is for" onclick={() => (persona.picking = true)}>{personaTitle(persona.id)} ▾</button></span>
         {#if !consumer}<span class="faint"> · workflows you can run, edit and share. They are just files in your workspace.</span>{/if}
       </span>
       <span class="head-acts">
         {#if foldersEnabled()}
-          <button class="act" data-agent-id="packs.folder" title="choose the folder the work happens in" onclick={() => { openFolderPicker(); onPick?.(); }}>▸ work in a folder…</button>
+          <button class="act" data-agent-id="packs.folder" title="choose the folder the work happens in" onclick={() => { openFolderPicker(); onPick?.(); }}>▸ Work in a folder…</button>
         {/if}
         <span class="faint">{app.packs.length}</span>
       </span>
@@ -110,7 +110,7 @@
       <button class="card hero" data-agent-id="packs.hero" onclick={() => (hero = !hero)} aria-expanded={hero}>
         <span class="card-title"><span class="st-green">+</span> {consumer ? "Build something new" : "Build a connector"}</span>
         <span class="card-desc">{consumer ? "Name it, say what it should do. You end up with a tool you own and can change." : "For your workflow: name a service, say what it should do. Ends with a pack you own."}</span>
-        <span class="card-meta faint">{consumer ? "yours to keep" : "/pack create · owns a pack"}</span>
+        <span class="card-meta faint">{consumer ? "Yours to keep" : "/pack create · owns a pack"}</span>
       </button>
 
       {#each groups.forYou as p (p.name)}
@@ -132,7 +132,7 @@
           {#if p.ui.panel || p.ui.actions?.length}
             <div class="chips">
               {#if p.ui.panel}
-                <button class="chip" data-agent-id={`packs.panelbtn.${p.name}`} onclick={() => openPackPanel(p.name)}>panel</button>
+                <button class="chip" data-agent-id={`packs.panelbtn.${p.name}`} onclick={() => openPackPanel(p.name)}>Panel</button>
               {/if}
               {#each p.ui.actions ?? [] as a, i}
                 <button class="chip" data-agent-id={`packs.action.${p.name}.${i}`} title={a.prompt}
@@ -141,7 +141,7 @@
             </div>
           {/if}
           {#if packEditEnabled() && !consumer}
-            <button class="card-edit" data-agent-id={`packs.edit.${p.name}`} title="edit pack files" onclick={() => openPackSheet(p.name)}>edit</button>
+            <button class="card-edit" data-agent-id={`packs.edit.${p.name}`} title="Edit pack files" onclick={() => openPackSheet(p.name)}>Edit</button>
           {/if}
         </div>
       {/each}
@@ -149,11 +149,11 @@
 
     {#if hero}
       <form class="hero-form" data-agent-id="packs.hero.form" onsubmit={(e) => { e.preventDefault(); buildConnector(); }}>
-        <label>{consumer ? "call it" : "service"} <input bind:value={service} placeholder={consumer ? "e.g. Mileage log, Client birthdays" : "e.g. Linear, Stripe, my Postgres"} maxlength="60" required data-agent-id="packs.hero.service" /></label>
-        <label>it should <input bind:value={purpose} placeholder={consumer ? "e.g. turn my trip notes into a monthly mileage table" : "e.g. list open issues assigned to me as a table"} maxlength="200" required data-agent-id="packs.hero.purpose" /></label>
+        <label>{consumer ? "Call it" : "Service"} <input bind:value={service} placeholder={consumer ? "e.g. Mileage log, Client birthdays" : "e.g. Linear, Stripe, my Postgres"} maxlength="60" required data-agent-id="packs.hero.service" /></label>
+        <label>It should <input bind:value={purpose} placeholder={consumer ? "e.g. turn my trip notes into a monthly mileage table" : "e.g. list open issues assigned to me as a table"} maxlength="200" required data-agent-id="packs.hero.purpose" /></label>
         <div class="row">
-          <button type="submit" class="act accent" data-agent-id="packs.hero.submit">[⏎] draft the request</button>
-          <button type="button" class="act" onclick={() => (hero = false)}>cancel</button>
+          <button type="submit" class="act accent" data-agent-id="packs.hero.submit">[⏎] Draft the request</button>
+          <button type="button" class="act" onclick={() => (hero = false)}>Cancel</button>
           <span class="faint">You review it before it runs.</span>
         </div>
       </form>
@@ -174,7 +174,7 @@
                 <span class="card-meta faint">{p.ui.artifact}{#if eta(p)} · {eta(p)}{/if}{#if missing.length}<span class="st-yellow"> · {missing.map((m) => humanRequirement(m)).join(", ")}</span>{/if}</span>
               </button>
               {#if packEditEnabled()}
-                <button class="card-edit" data-agent-id={`packs.edit.${p.name}`} title="edit pack files" onclick={() => openPackSheet(p.name)}>edit</button>
+                <button class="card-edit" data-agent-id={`packs.edit.${p.name}`} title="Edit pack files" onclick={() => openPackSheet(p.name)}>Edit</button>
               {/if}
             </div>
           {/each}
@@ -184,7 +184,7 @@
 
     {#if groups.others.length}
       <button class="act all" data-agent-id="packs.all" aria-expanded={showAll} onclick={() => (showAll = !showAll)}>
-        {showAll ? "▾" : "▸"} all packs ({groups.others.length} more)
+        {showAll ? "▾" : "▸"} All packs ({groups.others.length} more)
       </button>
       {#if showAll}
         <ul class="all-list">
@@ -197,7 +197,7 @@
                   <span class="dim truncate">{p.description}</span>
                 </button>
                 {#if packEditEnabled()}
-                  <button class="row-edit" data-agent-id={`packs.edit.${p.name}`} onclick={() => openPackSheet(p.name)}>edit</button>
+                  <button class="row-edit" data-agent-id={`packs.edit.${p.name}`} onclick={() => openPackSheet(p.name)}>Edit</button>
                 {/if}
               </div>
             </li>

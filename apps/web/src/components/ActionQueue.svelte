@@ -60,7 +60,7 @@
   >
     <button class="queue-head" data-agent-id="queue.toggle" aria-expanded={open} onclick={toggle}>
       <span class="faint">{open ? "▾" : "▸"}</span>
-      <span class="st-yellow">queue</span>
+      <span class="st-yellow">Queue</span>
       <span class="st-yellow">({total})</span>
     </button>
     {#if open}
@@ -74,7 +74,7 @@
             <button
               class="queue-goto"
               data-agent-id={`queue.${e.sessionId}.${e.pending.request_id}.open`}
-              title="open session"
+              title="Open session"
               onclick={() => go(e.sessionId)}
             >
               <span class="st-yellow">⚠</span>
