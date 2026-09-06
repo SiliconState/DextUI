@@ -249,7 +249,7 @@
       </div>
       <details class="pair-help">
         <summary class="faint">Where do I find this?</summary>
-        <p class="dim">The host prints it when it starts (<span class="st-cyan">agentlinkd</span> → “token:”), and shows it as a QR code when started with <code>--lan</code>. It stays on this device until you sign out.</p>
+        <p class="dim">The host prints it when it starts (<span class="st-cyan">agentlinkd</span> → “token:”) — see the host console or its journal. In any session, <code>/login --show</code> prints it for you. It stays on this device until you sign out.</p>
         {#if import.meta.env.DEV}<p class="faint">Mock host: <code>dev-token</code></p>{/if}
       </details>
     </form>

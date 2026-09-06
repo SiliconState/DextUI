@@ -290,6 +290,7 @@ const CONNECTORS = createConnectors({ home: DEXT_HOME, root: DIRS_ROOT, allowLoc
 // completion menu is driven by the host rather than a client-side guess.
 const COMMANDS = [
   { cmd: "/help", desc: "List host commands" },
+  { cmd: "/login", desc: "Sign-in help for another device; --show reveals the access code" },
   { cmd: "/approval", desc: `Set dext approval profile (${[...APPROVALS].join("|")}) — next turn` },
 ];
 
@@ -1257,6 +1258,7 @@ function sendError(client, code, message, cmd) {
 const HOST_HELP = [
   "agentlinkd host commands:",
   "  /help                 this text",
+  "  /login [--show]       sign in on another device; --show prints the access code",
   "  /approval <profile>   set this session's dext approval profile",
   `                        (${[...APPROVALS].join(" | ")}) — applies from the next turn`,
   "  /pack …               list | run <name> <task> | inspect <name> | create <shelf>/<name> [--from <pack>]",
@@ -1341,6 +1343,27 @@ function handleSlash(client, s, raw) {
     publish(journalData(s, "slash", HOST_HELP));
     return;
   }
+  if (trimmed === "/login" || trimmed === "/login --show") {
+    if (trimmed.endsWith("--show")) {
+      publish(journalData(s, "structured_slash", [
+        `access code: ${TOKEN}`,
+        "",
+        "pair another browser or device: open this host's address there and enter",
+        "the code on its sign-in screen — it stays saved there until signed out.",
+        "note: the code is now part of this transcript; prefer plain /login when",
+        "the transcript may be shared.",
+      ].join("\n")));
+    } else {
+      publish(journalData(s, "slash", [
+        "sign in on another device:",
+        `  1. open http://<this-host>:${PORT} in its browser`,
+        "  2. enter this host's access code — printed at host startup",
+        '     (agentlinkd → "token:"), e.g. journalctl --user -u dext-agentlinkd | grep token',
+        "or run /login --show to print the code here.",
+      ].join("\n")));
+    }
+    return;
+  }
   const ui = /^\/ui\b\s*(.*)$/s.exec(trimmed);
   if (ui) return handleUiSlash(client, s, ui[1].trim());
   const m = /^\/approval\s+(\S+)$/.exec(trimmed);
@@ -1356,7 +1379,7 @@ function handleSlash(client, s, raw) {
     publish(journalData(s, "slash", `approval profile → ${profile} (next turn)`));
     return;
   }
-  sendError(client, "unsupported", `host handles /help, /approval, /pack and /ui; '${trimmed.split(/\s/)[0]}' needs interactive dext`);
+  sendError(client, "unsupported", `host handles /help, /login, /approval, /pack and /ui; '${trimmed.split(/\s/)[0]}' needs interactive dext`);
 }
 
 // ---------- packs: slash + prompt routing ----------

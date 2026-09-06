@@ -142,6 +142,7 @@ const PACKS = [
 // Host-driven composer completion (mirrors the slash.* caps above).
 const COMMANDS = [
   { cmd: "/help", desc: "List host commands" },
+  { cmd: "/login", desc: "Sign-in help; --show reveals the access code" },
   { cmd: "/approval", desc: "Set dext approval profile" },
   { cmd: "/compact", desc: "Compact session context" },
   { cmd: "/model", desc: "Show or switch model" },
@@ -875,6 +876,12 @@ function handleCommand(client, frame) {
         publish(journalData(s, "approval_profile_changed", { profile }));
         publish(journalData(s, "slash", `approval profile → ${profile} (next turn)`));
         scheduleList();
+        return;
+      }
+      if (raw === "/login" || raw === "/login --show") {
+        publish(journalData(s, "structured_slash", raw.endsWith("--show")
+          ? `access code: ${TOKEN}`
+          : "sign in on another device: open the host address there and enter the access code (/login --show prints it here)"));
         return;
       }
       publish(journalData(s, "slash", `[mock] ${raw.slice(0, 200)}`));

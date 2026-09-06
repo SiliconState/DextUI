@@ -197,3 +197,30 @@ test("seat inventory isolates unrelated state and rejects linked ancestors", (t)
   fs.symlinkSync(path.join(p, "elsewhere"), path.join(p, "sessions"));
   assert.throws(() => seatFiles("dextui-1234", { DEXT_HOME: temp }), /symlink/);
 });
+
+test("agentlinkd: /login — advertised, help never reveals the code, --show pairs a fresh device", { timeout: 30000 }, async (t) => {
+  const h = await harness(t, false);
+  const c = await h.client();
+  assert.ok(c.hello.data.commands.some((x) => x?.cmd === "/login"), "advertised in hello_ok");
+  const id = await open(c);
+  c.send("session.subscribe", { id });
+  const m1 = c.events.length;
+  c.send("slash", { session: id, raw: "/login" });
+  const help = await c.wait((e) => e.session === id && e.event === "slash", m1);
+  assert.match(String(help.data), /access code/);
+  assert.ok(!/access code: \S/.test(String(help.data)), "plain /login never prints the code");
+  const m2 = c.events.length;
+  c.send("slash", { session: id, raw: "/login --show" });
+  const shown = await c.wait((e) => e.session === id && e.event === "structured_slash", m2);
+  const code = /access code: (\S+)/.exec(String(shown.data))?.[1];
+  assert.ok(code, `revealed a code: ${shown.data}`);
+  // The revealed code is the real pairing credential: a fresh client signs in with it.
+  const ws = new WebSocket(c.ws.url);
+  const seen = [];
+  ws.addEventListener("message", (e) => seen.push(JSON.parse(e.data)));
+  await once(ws, "open");
+  ws.send(JSON.stringify({ v: 1, cmd: "hello", token: code, protocol: 1 }));
+  for (let i = 0; i < 150 && !seen.some((e) => e.event === "hello_ok"); i++) await sleep(20);
+  assert.ok(seen.some((e) => e.event === "hello_ok"), "the revealed code signs a new device in");
+  ws.close();
+});
