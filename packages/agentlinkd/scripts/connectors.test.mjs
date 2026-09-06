@@ -9,7 +9,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawn, execFileSync } from "node:child_process";
 import { once } from "node:events";
-import { CONNECTED_DIR, createConnectors, normaliseRemote } from "../src/connectors.mjs";
+import { CONNECTED_DIR, createConnectors, extractRcloneToken, normaliseRemote } from "../src/connectors.mjs";
 
 const root = path.resolve("packages/agentlinkd");
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -48,6 +48,52 @@ test("normaliseRemote: github short/long forms, https-only git, drive paths, jun
   assert.equal(normaliseRemote("gdrive", "").remote, "");
   assert.equal(normaliseRemote("dropbox", "../x").error, "bad_remote");
   assert.equal(normaliseRemote("nope", "x").error, "bad_kind");
+});
+
+test("extractRcloneToken: accepts the whole `rclone authorize` paste, keeps just the token JSON, rejects junk", () => {
+  const tok = '{"access_token":"ya29.abc","token_type":"Bearer","refresh_token":"1//r","expiry":"2026-01-01T00:00:00Z"}';
+  const paste = `Paste the following into your remote machine --->\n${tok}\n<---End paste\n`;
+  assert.equal(extractRcloneToken(paste), tok);
+  assert.equal(extractRcloneToken(tok), tok);
+  assert.equal(extractRcloneToken("ya29.abc"), null, "a bare access token is not what rclone wants");
+  assert.equal(extractRcloneToken('{"foo":1}'), null);
+  assert.equal(extractRcloneToken("{not json}"), null);
+  assert.equal(extractRcloneToken(undefined), null);
+});
+
+const HAVE_RCLONE = (() => { try { execFileSync("rclone", ["version"], { stdio: "ignore" }); return true; } catch { return false; } })();
+
+test("rclone kinds: banner paste → config create (0600 conf, drive section); copy failure reduced to its reason and token-scrubbed; remove deletes the section", { skip: !HAVE_RCLONE && "rclone not installed", timeout: 60000 }, async (t) => {
+  const r = bareRepo(t);
+  // Real rclone for `config *`; the network copy is stubbed with the exact
+  // line rclone prints for a dead token so the test stays offline.
+  const { execFile } = await import("node:child_process");
+  const exec = (bin, args, opts = {}) => new Promise((resolve) => {
+    if (args.includes("copy")) {
+      resolve({ ok: false, code: 1, stdout: "", stderr: `2026/09/06 16:46:02 CRITICAL: Failed to create file system for "dextui-x:Projects": couldn't find root directory ID: Get "https://www.googleapis.com/drive/v3/files/root?alt=json": couldn't fetch token: oauth2: "invalid_grant" "Bad Request" access_token ya29.LEAKED_SECRET\n` });
+      return;
+    }
+    execFile(bin, args, { ...opts, env: { ...process.env, ...(opts.env ?? {}) } }, (err, stdout, stderr) => resolve({ ok: !err, code: err?.code ?? 0, stdout: String(stdout ?? ""), stderr: String(stderr ?? "") }));
+  });
+  const conn = createConnectors({ home: r.home, root: r.picker, exec });
+  const tok = '{"access_token":"ya29.abc","token_type":"Bearer","refresh_token":"1//r","expiry":"2026-01-01T00:00:00Z"}';
+  assert.equal((await conn.add({ kind: "gdrive", label: "Drive", remote: "Projects", secret: "ya29.bare" })).error, "bad_secret");
+  const added = await conn.add({ kind: "gdrive", label: "Drive", remote: "Projects", secret: `Paste the following into your remote machine --->\n${tok}\n<---End paste` });
+  assert.ok(added.added, JSON.stringify(added));
+  const [c] = added.connectors;
+  const conf = path.join(r.home, "rclone.conf");
+  assert.equal(fs.statSync(conf).mode & 0o777, 0o600);
+  const text = fs.readFileSync(conf, "utf8");
+  assert.ok(text.includes(`[dextui-${c.id}]`) && text.includes("type = drive"), "rclone owns the token in its own config");
+  assert.equal(c.has_secret, false, "nothing secret in our registry for rclone kinds");
+  assert.ok(!fs.readFileSync(path.join(r.home, "connectors.json"), "utf8").includes("ya29"));
+  assert.equal(c.status, "error");
+  assert.ok(!/\d{4}\/\d\d\/\d\d/.test(c.error), "log timestamp dropped");
+  assert.ok(!c.error.includes("LEAKED"), "token scrubbed from the surfaced reason");
+  assert.ok(c.error.includes("invalid_grant"), `reason kept: ${c.error}`);
+  assert.equal(fs.existsSync(path.join(r.picker, CONNECTED_DIR, "Drive")), false, "no half-made folder");
+  await conn.remove({ id: c.id });
+  assert.ok(!fs.readFileSync(conf, "utf8").includes("[dextui-"), "remove deletes the rclone section");
 });
 
 test("registry: add materialises under Connected/<label>, secrets stay out of listings, sync ff-only, push round-trips, remove keeps the folder unless purged", { timeout: 60000 }, async (t) => {
@@ -122,7 +168,7 @@ test("failure: a bad remote leaves a visible error and no half-clone; drive kind
   assert.ok(c.error, "the tool's last line is surfaced");
   assert.equal(fs.existsSync(path.join(r.picker, CONNECTED_DIR, "Broken")), false);
   assert.equal(bad.tools.rclone, false);
-  assert.equal((await conn.add({ kind: "gdrive", label: "Drive", remote: "", secret: "{}" })).error, "no_rclone");
+  assert.equal((await conn.add({ kind: "gdrive", label: "Drive", remote: "", secret: '{"access_token":"x","token_type":"Bearer"}' })).error, "no_rclone");
 });
 
 // ---------- host surface ----------

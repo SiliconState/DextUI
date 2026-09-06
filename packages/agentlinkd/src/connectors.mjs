@@ -76,11 +76,39 @@ function run(bin, args, { cwd, env, timeout = OP_TIMEOUT_MS } = {}) {
   });
 }
 
-/** Last meaningful line of a failing tool, with anything token-shaped scrubbed. */
+/** Last meaningful line of a failing tool, reduced to its reason: rclone's
+ *  `YYYY/MM/DD HH:MM:SS LEVEL:` prefix dropped, the innermost `: `-chained
+ *  cause kept, anything token-shaped scrubbed. */
 function failLine(r) {
   const text = `${r.stderr}\n${r.stdout}`.split("\n").map((l) => l.trim()).filter(Boolean);
-  const line = text.at(-1) ?? `exit ${r.code}`;
-  return line.replace(/(gh[pousr]_|github_pat_)[A-Za-z0-9_]+/g, "$1…").replace(/https?:\/\/[^@\s/]+@/g, "https://…@").slice(0, 300);
+  let line = text.at(-1) ?? `exit ${r.code}`;
+  line = line.replace(/^\d{4}\/\d\d\/\d\d \d\d:\d\d:\d\d [A-Z]+:\s*/, "");
+  line = line
+    .replace(/(gh[pousr]_|github_pat_)[A-Za-z0-9_]+/g, "$1…")
+    .replace(/\b(ya29|sl)\.[A-Za-z0-9_-]+/g, "$1.…")
+    .replace(/"(access|refresh)_token":\s*"[^"]*"/g, '"$1_token":"…"')
+    .replace(/https?:\/\/[^@\s/]+@/g, "https://…@");
+  if (line.length > 240) {
+    // Chained causes read best from the end ("…: couldn't fetch token: …").
+    const parts = line.split(/:\s+(?=[A-Za-z])/);
+    line = parts.slice(-2).join(": ");
+    if (line.length > 240) line = `…${line.slice(-236)}`;
+  }
+  return line;
+}
+
+/** `rclone authorize` prints its token inside a paste banner; accept the
+ *  whole paste and keep just the JSON object. Returns the object text or null. */
+export function extractRcloneToken(secret) {
+  if (typeof secret !== "string") return null;
+  const m = /\{[^{}]*\}/.exec(secret);
+  if (!m) return null;
+  try {
+    const o = JSON.parse(m[0]);
+    return o && typeof o === "object" && typeof o.access_token === "string" ? JSON.stringify(o) : null;
+  } catch {
+    return null;
+  }
 }
 
 export function createConnectors({ home, root, allowLocal = false, exec = run, bins } = {}) {
@@ -216,9 +244,14 @@ export function createConnectors({ home, root, allowLocal = false, exec = run, b
       if (typeof label !== "string" || !DIR_NAME_RE.test(label)) return { error: "bad_label" };
       const n = normaliseRemote(kind, remote, { allowLocal });
       if (n.error) return { error: n.error };
+      const rclone = kind === "gdrive" || kind === "dropbox";
+      if (rclone) {
+        // Token pasted from `rclone authorize` — banner lines and all.
+        secret = extractRcloneToken(secret);
+        if (!secret) return { error: "bad_secret" };
+      }
       if (secret !== undefined && (typeof secret !== "string" || secret.length > 8192 || /[\r\n]/.test(secret))) return { error: "bad_secret" };
-      if ((kind === "gdrive" || kind === "dropbox") && !secret) return { error: "bad_secret" };
-      if ((kind === "gdrive" || kind === "dropbox") && !tools.rclone) return { error: "no_rclone" };
+      if (rclone && !tools.rclone) return { error: "no_rclone" };
       if ((kind === "github" || kind === "git") && !tools.git) return { error: "no_git" };
       const items = load();
       if (items.some((x) => x.label.toLowerCase() === label.toLowerCase())) return { error: "exists" };
