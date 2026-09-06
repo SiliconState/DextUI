@@ -90,7 +90,7 @@
 <style>
   .sheet-scrim { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.5); z-index: 40; }
   .sheet { position: fixed; inset: 8vh 8vw; z-index: 41; display: flex; flex-direction: column;
-    background: var(--bg0); border: 1px solid var(--line); min-width: 0; }
+    background: var(--bg1); border: 1px solid var(--line); min-width: 0; }
   .head, .foot { display: flex; justify-content: space-between; align-items: baseline; gap: 12px;
     padding: 6px 10px; border-bottom: 1px solid var(--line); }
   .foot { border-bottom: 0; border-top: 1px solid var(--line); }
@@ -103,7 +103,7 @@
   .file.sel { background: var(--bg2); color: var(--cyan); }
   .file.dim { color: var(--dim); cursor: default; }
   .editor { display: flex; flex-direction: column; min-width: 0; }
-  textarea { flex: 1; resize: none; border: 0; outline: none; background: var(--bg0); color: var(--fg);
+  textarea { flex: 1; resize: none; border: 0; outline: none; background: var(--bg); color: var(--fg);
     font-family: var(--mono, monospace); font-size: 12px; line-height: 1.45; padding: 8px 10px; min-width: 0; }
   .err { padding: 4px 10px; color: var(--red, #e06c75); font-size: 12px; border-bottom: 1px solid var(--line); }
   .pad { padding: 6px 10px; }
