@@ -5,6 +5,7 @@ import {
   cmd,
   isSessionRouted,
   CREW_EXT,
+  DIRS_EXT,
   PACK_EXT,
   SELF_HOST_EXT,
   SELF_UI_EXT,
@@ -60,6 +61,8 @@ export class Connection {
   crews: CrewsPayload = { runs: [], omitted: 0 };
   /** Self-edit status; null on hosts without the `self_edit` capability. */
   self: SelfStatus | null = null;
+  /** Folder-picker root (`hello_ok.home`); empty on hosts without `dirs`. */
+  home = "";
   /** Host process identity from the last hello_ok (undefined for legacy hosts). */
   instance?: string;
   sessions = new Map<string, SessionStore>();
@@ -269,6 +272,16 @@ export class Connection {
     this.sendRaw(cmd(`${SELF_HOST_EXT}.restart_cancel`, {}));
   }
 
+  // ---------- folder picker (host-prefixed until promoted) ----------
+
+  dirsList(path?: string): void {
+    this.sendRaw(cmd(`${DIRS_EXT}.list`, path ? { path } : {}));
+  }
+
+  dirsCreate(path: string, name: string): void {
+    this.sendRaw(cmd(`${DIRS_EXT}.create`, { path, name }));
+  }
+
   // ---------- pack file editing (host-prefixed until promoted) ----------
 
   packFiles(pack: string): void {
@@ -367,6 +380,7 @@ export class Connection {
           packs?: PackInfo[];
           crews?: CrewsPayload;
           self?: SelfStatus;
+          home?: string;
         };
         this.capabilities = d.capabilities;
         this.modelCatalog = d.model_catalog ?? [];
@@ -378,6 +392,7 @@ export class Connection {
         this.opts.onCrewsChanged?.(this.crews);
         this.self = d.self ?? null;
         if (this.self) this.opts.onSelfChanged?.(this.self);
+        this.home = typeof d.home === "string" ? d.home : "";
         this.attempt = 0;
         // A different host process may reuse session ids and even tail seqs;
         // resuming by seq would splice the old transcript onto the new one.

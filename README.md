@@ -108,6 +108,28 @@ The sample `hello-chart` pack (guaranteed sub-10 s chart, no tools) ships in
 dext pack create samples/hello-chart && cp packages/agentlinkd/sample-packs/hello-chart/PACK.md ~/.dext/shelves/samples/packs/hello-chart/PACK.md
 ```
 
+## Onboarding (who is this for?)
+
+The first visit asks one question — **I keep the books / I run a business /
+I build software** — and remembers the answer per browser (`dextui.persona`,
+changeable any time from the gallery header). It only decides what you see
+*first*: nothing is hidden, the rest folds under "developer tools" (or
+"business tools" for developers) and "all packs".
+
+- Cards show plain-language titles (`ui-title`, e.g. `crew` → **Team**,
+  `mesh` → **Inbox**) and requirements in words ("needs permission to write
+  files"). Curation lives in `packages/agentlinkd/gallery.json`
+  (`--gallery=<file>` / `DEXTUI_GALLERY` to override); a pack's own
+  `ui-title` / `ui-personas` front-matter keys win.
+- **Work in a folder.** With no session active, picking a card opens the
+  folder picker first: a HOME-confined browser (`hello_ok.home`,
+  `x-agentlinkd.dirs.{list,create}`; `--dirs-root=` to change the root; no
+  dot-directories, no symlinks, nothing outside the root is ever listed).
+  "Use this folder" opens a session there with `auto-write`, seeded with the
+  card's prompt. Keyboard: `↑↓` move · `→` open · `←` up · `⏎` use · `n` new folder.
+- Personas: `accountant` | `business` | `developer`; a pack lists who it is
+  for in `ui-personas` (`everyone` or empty = shown to all).
+
 ## Self-editing (workbench)
 
 When `agentlinkd` runs from this checkout it advertises the `self_edit`

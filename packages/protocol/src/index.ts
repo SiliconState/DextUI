@@ -238,6 +238,26 @@ export interface PackWriteReply {
   bytes: number;
 }
 
+// ---------- folder picker (host extension `x-agentlinkd.dirs.*`) ----------
+
+/** Confined folder browsing: `hello_ok.home` is the root; nothing outside it,
+ *  no dot-directories, no symlinks is ever listed. */
+export const DIRS_EXT = "x-agentlinkd.dirs";
+
+export interface DirsListReply {
+  path: string;
+  /** Relative to `root` ("" at the root). */
+  rel: string;
+  parent: string | null;
+  root: string;
+  dirs: { name: string }[];
+  /** Plain files in this folder (count only — the picker shows folders). */
+  files: number;
+  truncated: boolean;
+  /** Set on the reply to `dirs.create`: the folder that was just made. */
+  created?: string;
+}
+
 // ---------- self-edit (host extension `x-agentlinkd.ui.*` / `x-agentlinkd.host.*`) ----------
 
 /** Extension prefixes for DextUI editing itself. Advertised as capability

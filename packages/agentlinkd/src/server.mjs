@@ -34,6 +34,7 @@ import { checkedPath, purgeSeat, seatFiles } from "./session-files.mjs";
 import { GALLERY_DEFAULTS, PACK_NAME_RE, buildCatalog, listPackFiles, listPackTree, loadGallery, packCommands, parsePackListingJson, parsePackSlash, readPackFile, renderPackList, unmetRequirements, writePackFile } from "./packs.mjs";
 import { RUN_ID_RE as CREW_RUN_ID_RE, TAIL_MAX_LINES, createCrewAdapter } from "./crew.mjs";
 import { createSelfEdit, resolveStaticDir } from "./selfedit.mjs";
+import { createDir, listDirs } from "./dirs.mjs";
 
 const here = path.dirname(url.fileURLToPath(import.meta.url));
 const repoRoot = path.join(here, "..", "..", "..");
@@ -219,7 +220,14 @@ const CAPABILITIES = [
   // x-agentlinkd.pack.{files,file,write}: the pack editor's confined read/write
   // surface (extension allowlist, no dotfiles/symlinks, 256 KB cap).
   "pack_edit",
+  // x-agentlinkd.dirs.{list,create} + hello_ok.home: HOME-confined folder
+  // browsing so a session can be "a folder" chosen by click, not a typed path.
+  "dirs",
 ];
+
+// Root of the folder picker. Sessions may open any directory (session.open
+// checks existence only); the picker just never *shows* anything outside it.
+const DIRS_ROOT = path.resolve(argValue("dirs-root", process.env.DEXTUI_DIRS_ROOT ?? process.env.HOME ?? process.cwd()));
 
 // Host-handled slash commands, advertised in hello_ok so the composer's
 // completion menu is driven by the host rather than a client-side guess.
@@ -1424,6 +1432,7 @@ async function handleCommand(client, frame) {
       effort_options: EFFORT_OPTIONS,
       commands: hostCommands(),
       packs: PACKS,
+      home: DIRS_ROOT,
       ...(CREW ? { crews: CREW.summaries() } : {}),
       ...(SELF.enabled ? { self: SELF.status() } : {}),
     });
@@ -1700,6 +1709,21 @@ async function handleCommand(client, frame) {
       }
       if (typeof frame.cmd === "string" && (frame.cmd.startsWith("x-agentlinkd.ui.") || frame.cmd.startsWith("x-agentlinkd.host."))) {
         await handleSelfEditCommand(client, frame);
+        return;
+      }
+      if (frame.cmd === "x-agentlinkd.dirs.list") {
+        const r = listDirs(DIRS_ROOT, frame.path);
+        if (r.error) sendError(client, r.error === "outside_root" || r.error === "hidden" || r.error === "refused" ? "bad_path" : r.error === "missing" ? "no_dir" : "bad_request", `cannot list folder: ${r.error}`, frame.cmd);
+        else sendControl(client, "x-agentlinkd.dirs.list", r);
+        return;
+      }
+      if (frame.cmd === "x-agentlinkd.dirs.create") {
+        const r = createDir(DIRS_ROOT, frame.path, frame.name);
+        if (r.error) sendError(client, r.error === "exists" ? "exists" : r.error === "bad_name" ? "bad_request" : "bad_path", `cannot create folder: ${r.error}`, frame.cmd);
+        else {
+          const l = listDirs(DIRS_ROOT, frame.path);
+          sendControl(client, "x-agentlinkd.dirs.list", { ...(l.error ? { path: r.path, dirs: [], parent: null, root: DIRS_ROOT, files: 0, truncated: false } : l), created: r.path });
+        }
         return;
       }
       sendError(client, "unknown_command", `unsupported cmd ${String(frame.cmd)}`);

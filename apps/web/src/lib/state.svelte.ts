@@ -6,6 +6,7 @@ import { notifyEvent } from "./notify";
 import { acceptCrews, crewEscalations, onCrewControl, openRun } from "./crew.svelte";
 import { onPackControl } from "./packsheet.svelte";
 import { acceptSelf, onSelfControl, onSelfReconnected } from "./selfedit.svelte";
+import { onDirsControl } from "./folders.svelte";
 
 export type Theme = "dark" | "light" | "system";
 export type NotifyState = "on" | "off" | "blocked";
@@ -569,6 +570,7 @@ export function start(token: string): void {
     onCrewControl(env);
     onPackControl(env);
     onSelfControl(env);
+    onDirsControl(env);
     if (env.event === "sessions.deleted") {
       const d = env.data as { ids: string[] };
       finishSessionAction();

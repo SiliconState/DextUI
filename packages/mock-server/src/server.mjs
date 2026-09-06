@@ -49,7 +49,34 @@ const CAPABILITIES = [
   "todos_read",
   "session_manage",
   "packs",
+  // x-agentlinkd.dirs.{list,create} over an in-memory tree (no filesystem).
+  "dirs",
 ];
+
+// Fake folder tree for the picker: `hello_ok.home` is /home/demo.
+const MOCK_HOME = "/home/demo";
+const MOCK_DIRS = new Map([
+  [MOCK_HOME, { dirs: ["Books", "Clients", "Projects"], files: 2 }],
+  [`${MOCK_HOME}/Books`, { dirs: ["2025", "2026"], files: 3 }],
+  [`${MOCK_HOME}/Books/2025`, { dirs: [], files: 12 }],
+  [`${MOCK_HOME}/Books/2026`, { dirs: ["Q1", "Q2", "Q3"], files: 4 }],
+  [`${MOCK_HOME}/Books/2026/Q1`, { dirs: [], files: 31 }],
+  [`${MOCK_HOME}/Books/2026/Q2`, { dirs: [], files: 28 }],
+  [`${MOCK_HOME}/Books/2026/Q3`, { dirs: [], files: 9 }],
+  [`${MOCK_HOME}/Clients`, { dirs: ["Acme Ltd", "Blue Bakery"], files: 0 }],
+  [`${MOCK_HOME}/Clients/Acme Ltd`, { dirs: [], files: 6 }],
+  [`${MOCK_HOME}/Clients/Blue Bakery`, { dirs: [], files: 2 }],
+  [`${MOCK_HOME}/Projects`, { dirs: ["website"], files: 0 }],
+  [`${MOCK_HOME}/Projects/website`, { dirs: [], files: 40 }],
+]);
+
+function mockDirsList(requested) {
+  const p = typeof requested === "string" && requested.trim() ? (requested.startsWith("/") ? requested : `${MOCK_HOME}/${requested}`) : MOCK_HOME;
+  if (p !== MOCK_HOME && !p.startsWith(MOCK_HOME + "/")) return { error: "bad_path" };
+  const node = MOCK_DIRS.get(p);
+  if (!node) return { error: "no_dir" };
+  return { path: p, rel: p === MOCK_HOME ? "" : p.slice(MOCK_HOME.length + 1), parent: p === MOCK_HOME ? null : p.slice(0, p.lastIndexOf("/")), root: MOCK_HOME, dirs: node.dirs.map((name) => ({ name })), files: node.files, truncated: false };
+}
 
 // Fake catalog so the gallery, `/` menu, and pack badges are exercisable
 // without dext. Shapes match agentlinkd's PackInfo exactly.
@@ -517,6 +544,7 @@ function handleCommand(client, frame) {
       effort_options: EFFORT_OPTIONS,
       commands: COMMANDS,
       packs: PACKS,
+      home: MOCK_HOME,
     });
     return;
   }
@@ -802,6 +830,24 @@ function handleCommand(client, frame) {
         return;
       }
       publish(journalData(s, "slash", `[mock] ${raw.slice(0, 200)}`));
+      return;
+    }
+
+    case "x-agentlinkd.dirs.list": {
+      const r = mockDirsList(frame.path);
+      if (r.error) sendError(client, r.error, `cannot list folder: ${r.error}`, frame.cmd);
+      else sendControl(client, "x-agentlinkd.dirs.list", r);
+      return;
+    }
+    case "x-agentlinkd.dirs.create": {
+      const parent = mockDirsList(frame.path);
+      const name = typeof frame.name === "string" ? frame.name.trim() : "";
+      if (parent.error || !/^[A-Za-z0-9][A-Za-z0-9 ._()-]{0,79}$/.test(name)) { sendError(client, parent.error ?? "bad_request", "cannot create folder", frame.cmd); return; }
+      if (MOCK_DIRS.has(`${parent.path}/${name}`)) { sendError(client, "exists", "cannot create folder: exists", frame.cmd); return; }
+      MOCK_DIRS.set(`${parent.path}/${name}`, { dirs: [], files: 0 });
+      MOCK_DIRS.get(parent.path).dirs.push(name);
+      MOCK_DIRS.get(parent.path).dirs.sort();
+      sendControl(client, "x-agentlinkd.dirs.list", { ...mockDirsList(parent.path), created: `${parent.path}/${name}` });
       return;
     }
 

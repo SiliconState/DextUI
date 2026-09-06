@@ -2,6 +2,7 @@
   // Session index: a plain text list, like dext's own listings.
   // Status glyphs mirror the TUI: ● live · ● starting (pulse) · ○ cold · ● exited.
   import { app, activate, newSession, closeSession, wakeSession, requestSessionAction, prefillComposer, packStarter, packUnmet } from "../lib/state.svelte";
+  import { packTitle } from "../lib/persona.svelte";
   import SessionAction from "./SessionAction.svelte";
   import ActionQueue from "./ActionQueue.svelte";
   import CrewRail from "./CrewRail.svelte";
@@ -141,7 +142,7 @@
               <div class="idx-pack">
                 <button class="idx-pack-run" data-agent-id={`rail.packs.${p.name}.run`} title={missing.length ? `${p.description} — needs ${missing.join(", ")}` : p.description}
                   onclick={() => { prefillComposer(packStarter(p)); onPick?.(); }}>
-                  <span class:st-cyan={!missing.length} class:faint={missing.length > 0}>{p.name}</span>
+                  <span class:st-cyan={!missing.length} class:faint={missing.length > 0}>{packTitle(p)}</span>
                   {#if missing.length}<span class="st-warn">!</span>{/if}
                 </button>
                 <button class="act idx-pack-edit" data-agent-id={`rail.packs.${p.name}.edit`} title={`edit ${p.path}`}
