@@ -35,6 +35,7 @@ import { GALLERY_DEFAULTS, PACK_NAME_RE, buildCatalog, listPackFiles, listPackTr
 import { RUN_ID_RE as CREW_RUN_ID_RE, TAIL_MAX_LINES, createCrewAdapter } from "./crew.mjs";
 import { createSelfEdit, resolveStaticDir } from "./selfedit.mjs";
 import { createDir, listDirs } from "./dirs.mjs";
+import { createConnectors } from "./connectors.mjs";
 import { compileFlow, deleteFlow, listFlows, readFlow, writeFlow } from "./flows.mjs";
 import { createScheduler } from "./triggers.mjs";
 
@@ -194,6 +195,41 @@ if (DEFAULT_MODEL.provider && DEFAULT_MODEL.model) {
   if (!group.models.includes(DEFAULT_MODEL.model)) group.models.unshift(DEFAULT_MODEL.model);
 }
 
+// Provider sign-in state, parsed from `dext auth status` (one line per
+// provider: `[*] id  Label…  model=… … auth=<auth|key|none|…>`). Reused by the
+// web's Providers dialog; login/logout shell out to `dext auth login|logout`
+// so dext's own auth store stays the single credential holder.
+const PROVIDER_ID_RE = /^[a-z0-9][a-z0-9_.-]{0,39}$/i;
+function parseProviderStatus(text) {
+  const active = /^active provider:\s*(\S+)/m.exec(text)?.[1] ?? null;
+  const providers = [];
+  for (const line of text.split("\n")) {
+    const m = /^\s*(\*)?\s*(\S+)\s+(.*?)\s+model=(\S+)(.*)$/.exec(line);
+    if (!m || !PROVIDER_ID_RE.test(m[2])) continue;
+    const auth = /\bauth=(\S+)/.exec(m[5])?.[1] ?? "none";
+    providers.push({ id: m[2], label: m[3].trim() || m[2], model: m[4], auth, active: !!m[1] || m[2] === active });
+  }
+  return { active, providers };
+}
+function providerStatus() {
+  return parseProviderStatus(dextOutput(["auth", "status"]));
+}
+// After a login the model list may grow (a provider's models appear once it
+// is authenticated): refresh the catalog in place so hello_ok and the status
+// reply agree.
+function refreshModelCatalog() {
+  const fresh = discoverModels();
+  MODEL_CATALOG.splice(0, MODEL_CATALOG.length, ...fresh);
+  return MODEL_CATALOG;
+}
+function runDext(args, timeout = 60_000) {
+  return new Promise((resolve) => {
+    execFile(DEXT_BIN, args, { env: { ...process.env, DEXT_NO_TUI: "1" }, timeout, maxBuffer: 4 * 1024 * 1024, windowsHide: true }, (err, stdout, stderr) => {
+      resolve({ ok: !err, stdout: String(stdout ?? ""), stderr: String(stderr ?? "") });
+    });
+  });
+}
+
 // Real capabilities only. No "steering" (one-shot children have no stdin
 // channel mid-turn) and no "approvals" (the interactive round-trip needs the
 // upstream dext PermissionRequested bridge); dext's own --approval profile
@@ -228,11 +264,19 @@ const CAPABILITIES = [
   // x-agentlinkd.flows.{list,get,put,delete,compile,run}: the flow builder —
   // flows live in <cwd>/.dext/flows/*.flow.json; runs compile to crew specs.
   "flows",
+  // x-agentlinkd.connectors.{list,add,remove,sync,push}: GitHub/git/Drive/
+  // Dropbox sources materialised as folders under <home>/Connected via git and
+  // rclone; registry + secrets in DEXT_HOME (per user).
+  "connectors",
+  // x-agentlinkd.auth.{status,login,logout}: provider sign-in through
+  // `dext auth login|logout` — dext's auth store is the only credential holder.
+  "provider_auth",
 ];
 
 // Root of the folder picker. Sessions may open any directory (session.open
 // checks existence only); the picker just never *shows* anything outside it.
 const DIRS_ROOT = path.resolve(argValue("dirs-root", process.env.DEXTUI_DIRS_ROOT ?? process.env.HOME ?? process.cwd()));
+const CONNECTORS = createConnectors({ home: DEXT_HOME, root: DIRS_ROOT, allowLocal: process.env.DEXTUI_CONNECTORS_ALLOW_LOCAL === "1" });
 
 // Host-handled slash commands, advertised in hello_ok so the composer's
 // completion menu is driven by the host rather than a client-side guess.
@@ -1750,8 +1794,104 @@ async function handleCommand(client, frame) {
         }
         return;
       }
+      if (typeof frame.cmd === "string" && frame.cmd.startsWith("x-agentlinkd.connectors.")) {
+        await handleConnectorsCommand(client, frame);
+        return;
+      }
+      if (typeof frame.cmd === "string" && frame.cmd.startsWith("x-agentlinkd.auth.")) {
+        await handleAuthCommand(client, frame);
+        return;
+      }
       sendError(client, "unknown_command", `unsupported cmd ${String(frame.cmd)}`);
   }
+}
+
+// ---------- connectors (x-agentlinkd.connectors.*) ----------
+
+// Progress (syncing → idle/error) is broadcast so every tab sees the state;
+// the requesting client additionally gets the final listing tagged with
+// added/removed/synced/pushed. Errors are cmd-tagged; a tool's last line
+// rides in `detail` (already secret-scrubbed by the module).
+CONNECTORS.onChange((l) => broadcastControl("x-agentlinkd.connectors.list", l));
+
+const CONNECTOR_ERROR_CODES = {
+  bad_kind: "bad_request", bad_label: "bad_request", bad_remote: "bad_request", bad_secret: "bad_request", bad_request: "bad_request",
+  no_rclone: "unsupported", no_git: "unsupported", exists: "exists", no_connector: "no_connector", busy: "busy", bad_path: "bad_path", tool_failed: "tool_failed",
+};
+const CONNECTOR_ERROR_TEXT = {
+  bad_kind: "unknown connector kind", bad_label: "label: letters, numbers, spaces, . _ ( ) - (max 80)", bad_remote: "remote must be owner/repo, an https URL, or a folder path",
+  bad_secret: "a credential is required for this kind (single line)", no_rclone: "rclone is not installed on the host — install it to connect Drive or Dropbox",
+  no_git: "git is not installed on the host", exists: "a connector or folder with that name already exists", no_connector: "unknown connector",
+  busy: "that connector is already syncing", bad_path: "connected folder refused", tool_failed: "the sync tool failed", bad_request: "bad request",
+};
+
+async function handleConnectorsCommand(client, frame) {
+  const op = frame.cmd.slice("x-agentlinkd.connectors.".length);
+  let r;
+  switch (op) {
+    case "list": r = CONNECTORS.list(); break;
+    case "add": r = await CONNECTORS.add({ kind: frame.kind, label: frame.label, remote: frame.remote, secret: typeof frame.secret === "string" && frame.secret.trim() ? frame.secret.trim() : undefined }); break;
+    case "remove": r = await CONNECTORS.remove({ id: frame.id, purge: frame.purge === true }); break;
+    case "sync": r = await CONNECTORS.sync({ id: frame.id }); break;
+    case "push": r = await CONNECTORS.push({ id: frame.id, message: frame.message }); break;
+    default:
+      sendError(client, "unknown_command", `unsupported cmd ${frame.cmd}`);
+      return;
+  }
+  if (r.error) {
+    const code = CONNECTOR_ERROR_CODES[r.error] ?? "tool_failed";
+    const text = CONNECTOR_ERROR_TEXT[r.error] ?? r.error;
+    sendError(client, code, r.detail ? `${text}: ${r.detail}` : text, frame.cmd);
+    return;
+  }
+  sendControl(client, "x-agentlinkd.connectors.list", r);
+}
+
+// ---------- provider sign-in (x-agentlinkd.auth.*) ----------
+
+// Credentials are pasted (never a browser flow: the host may be headless or
+// paired over LAN/hosted, so `web`/`import` modes are refused). The value
+// goes to `dext auth login <provider> <credential>` on argv of a child we
+// spawn directly — no shell, no history — and is never echoed in any frame.
+async function handleAuthCommand(client, frame) {
+  const op = frame.cmd.slice("x-agentlinkd.auth.".length);
+  if (op === "status") {
+    sendControl(client, "x-agentlinkd.auth.status", { ...providerStatus(), model_catalog: MODEL_CATALOG });
+    return;
+  }
+  if (op !== "login" && op !== "logout") {
+    sendError(client, "unknown_command", `unsupported cmd ${frame.cmd}`);
+    return;
+  }
+  const provider = typeof frame.provider === "string" ? frame.provider.trim() : "";
+  if (!PROVIDER_ID_RE.test(provider) || !providerStatus().providers.some((p) => p.id === provider)) {
+    sendError(client, "bad_request", "unknown provider", frame.cmd);
+    return;
+  }
+  let args;
+  if (op === "login") {
+    const credential = typeof frame.credential === "string" ? frame.credential.trim() : "";
+    if (!credential || credential.length > 8192 || /[\r\n]/.test(credential)) {
+      sendError(client, "bad_request", "paste the API key or token (single line)", frame.cmd);
+      return;
+    }
+    if (/^(web|import|cancel)$/i.test(credential)) {
+      sendError(client, "bad_request", "browser and import flows are not available here — paste an API key or token", frame.cmd);
+      return;
+    }
+    args = ["auth", "login", provider, credential];
+  } else {
+    args = ["auth", "logout", provider];
+  }
+  const r = await runDext(args);
+  if (!r.ok) {
+    const line = `${r.stderr}\n${r.stdout}`.split("\n").map((l) => l.trim()).filter(Boolean).at(-1) ?? "dext refused";
+    sendError(client, "tool_failed", `${op} failed: ${line.slice(0, 200)}`, frame.cmd);
+    return;
+  }
+  refreshModelCatalog();
+  const status = { ...providerStatus(), model_catalog: MODEL_CATALOG, changed: provider };
+  broadcastControl("x-agentlinkd.auth.status", status);
 }
 
 // ---------- flows (x-agentlinkd.flows.*) ----------

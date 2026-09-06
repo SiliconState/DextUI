@@ -2,6 +2,20 @@
 // Deterministic fake dext for agentlinkd protocol tests. It implements the
 // catalog discovery commands and the one-shot stream-json argv contract.
 
+import fs from "node:fs";
+import path from "node:path";
+
+// Provider auth is a file in DEXT_HOME so login/logout survive across the
+// one-shot invocations the host makes (status → login → status).
+const AUTH_FILE = path.join(process.env.DEXT_HOME ?? "/nonexistent", "fake-auth.json");
+function readAuth() {
+  try { return JSON.parse(fs.readFileSync(AUTH_FILE, "utf8")); } catch { return { "fake-a": "auth" }; }
+}
+function writeAuth(a) {
+  fs.mkdirSync(path.dirname(AUTH_FILE), { recursive: true });
+  fs.writeFileSync(AUTH_FILE, JSON.stringify(a));
+}
+
 if (process.argv[2] === "auth" && process.argv[3] === "models") {
   process.stdout.write(
     "* provider 'fake-a' models:\n- alpha\n- alpha-pro\n\n  provider 'fake-b' models:\n- beta\n",
@@ -9,9 +23,26 @@ if (process.argv[2] === "auth" && process.argv[3] === "models") {
   process.exit(0);
 }
 if (process.argv[2] === "auth" && (process.argv[3] === "status" || process.argv[3] === "providers")) {
+  const a = readAuth();
   process.stdout.write(
-    "active provider: fake-a\n* fake-a Fake A model=alpha contract=fake api=fake spec=model auth=auth base=http://fake\n  fake-b Fake B model=beta contract=fake api=fake spec=model auth=auth base=http://fake\n",
+    `active provider: fake-a\n* fake-a Fake A model=alpha contract=fake api=fake spec=model auth=${a["fake-a"] ?? "none"} base=http://fake\n  fake-b Fake B model=beta contract=fake api=fake spec=model auth=${a["fake-b"] ?? "none"} base=http://fake\n`,
   );
+  process.exit(0);
+}
+if (process.argv[2] === "auth" && process.argv[3] === "login") {
+  const [, , , , provider, credential] = process.argv;
+  if (!["fake-a", "fake-b"].includes(provider)) { process.stderr.write(`[err] unknown provider ${provider}\n`); process.exit(1); }
+  const a = readAuth();
+  a[provider] = "key";
+  writeAuth(a);
+  process.stdout.write(`stored credential for ${provider} (${credential ? credential.length : 0} chars)\nactive -> fake-a\n`);
+  process.exit(0);
+}
+if (process.argv[2] === "auth" && process.argv[3] === "logout") {
+  const a = readAuth();
+  delete a[process.argv[4]];
+  writeAuth(a);
+  process.stdout.write(`removed credential for ${process.argv[4]}\n`);
   process.exit(0);
 }
 // `dext pack list --verbose` shape (see packs.rs render_pack_listing_opts).
