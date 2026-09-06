@@ -8,6 +8,7 @@
   import { flows, flowsEnabled, openFlow, newFlow, saveFlow, deleteFlow, runFlow, compileFlow_, closeFlows, addTrigger, removeTrigger, hookFor } from "../lib/flows.svelte";
   import { flowNodeTypes, flowNode } from "../ext";
   import { app } from "../lib/state.svelte";
+  import { packTitle } from "../lib/display";
   import { useDialog } from "../lib/dialog.svelte";
 
   const dlg = useDialog(() => flows.open);
@@ -280,7 +281,7 @@
                 {:else if kind === "pack"}
                   <label>{key}
                     <select value={(selNode as unknown as Record<string, string>)[key] ?? ""} onchange={(e) => setField(key, e.currentTarget.value)} data-agent-id={`flows.field.${key}`}>
-                      {#each app.packs as p (p.name)}<option value={p.name}>{p.ui.title ?? p.name}</option>{/each}
+                      {#each app.packs as p (p.name)}<option value={p.name}>{packTitle(p)}</option>{/each}
                     </select>
                   </label>
                 {:else}

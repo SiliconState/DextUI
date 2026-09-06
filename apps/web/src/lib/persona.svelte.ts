@@ -4,6 +4,7 @@
 // get the reverse. Nothing is hidden, only folded.
 import type { PackInfo } from "@dextui/protocol";
 import { app } from "./state.svelte";
+export { packTitle } from "./display";
 
 export type Persona = "accountant" | "business" | "developer";
 
@@ -31,11 +32,6 @@ export function setPersona(id: Persona | null): void {
 
 export function personaTitle(id: Persona | null): string {
   return PERSONAS.find((p) => p.id === id)?.title ?? "everyone";
-}
-
-/** Display name: curated title, else the pack id. */
-export function packTitle(p: PackInfo): string {
-  return p.ui.title ?? p.name;
 }
 
 /** Plain-language requirement text for consumer personas. */

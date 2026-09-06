@@ -8,6 +8,7 @@ import { onPackControl } from "./packsheet.svelte";
 import { acceptSelf, onSelfControl, onSelfReconnected } from "./selfedit.svelte";
 import { onDirsControl } from "./folders.svelte";
 import { onFlowsControl } from "./flows.svelte";
+import { packTitle } from "./display";
 
 export type Theme = "dark" | "light" | "system";
 export type NotifyState = "on" | "off" | "blocked";
@@ -506,7 +507,7 @@ export function start(token: string): void {
       // A pack that just appeared (hero flow / `/pack create`) gets a run offer.
       if (before.size > 0) {
         for (const p of app.packs) {
-          if (!before.has(p.name)) pushToast("ok", `New pack: ${p.name}`, { label: "run it", run: () => prefillComposer(`/pack run ${p.name} `) });
+          if (!before.has(p.name)) pushToast("ok", `New pack: ${packTitle(p)}`, { label: "run it", run: () => prefillComposer(`/pack run ${p.name} `) });
         }
       }
     },
