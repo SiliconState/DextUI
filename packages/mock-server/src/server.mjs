@@ -51,7 +51,12 @@ const CAPABILITIES = [
   "packs",
   // x-agentlinkd.dirs.{list,create} over an in-memory tree (no filesystem).
   "dirs",
+  // x-agentlinkd.flows.* over an in-memory store; run = a synthetic reply.
+  "flows",
 ];
+
+// In-memory flow store so the builder is exercisable without a host on disk.
+const MOCK_FLOWS = new Map();
 
 // Fake folder tree for the picker: `hello_ok.home` is /home/demo.
 const MOCK_HOME = "/home/demo";
@@ -69,6 +74,10 @@ const MOCK_DIRS = new Map([
   [`${MOCK_HOME}/Projects`, { dirs: ["website"], files: 0 }],
   [`${MOCK_HOME}/Projects/website`, { dirs: [], files: 40 }],
 ]);
+
+function mockFlowList() {
+  return [...MOCK_FLOWS.values()].map((f) => ({ name: f.name, title: f.title ?? f.name, desc: f.desc ?? "", nodes: f.nodes.length, edges: f.edges.length, mtime: Date.now() }));
+}
 
 function mockDirsList(requested) {
   const p = typeof requested === "string" && requested.trim() ? (requested.startsWith("/") ? requested : `${MOCK_HOME}/${requested}`) : MOCK_HOME;
@@ -848,6 +857,43 @@ function handleCommand(client, frame) {
       MOCK_DIRS.get(parent.path).dirs.push(name);
       MOCK_DIRS.get(parent.path).dirs.sort();
       sendControl(client, "x-agentlinkd.dirs.list", { ...mockDirsList(parent.path), created: `${parent.path}/${name}` });
+      return;
+    }
+
+    case "x-agentlinkd.flows.list":
+      sendControl(client, "x-agentlinkd.flows.list", { cwd: MOCK_HOME, flows: mockFlowList() });
+      return;
+    case "x-agentlinkd.flows.get": {
+      const f = MOCK_FLOWS.get(frame.name);
+      if (!f) sendError(client, "no_flow", `flow '${frame.name}': no_flow`, frame.cmd);
+      else sendControl(client, "x-agentlinkd.flows.get", { cwd: MOCK_HOME, flow: f });
+      return;
+    }
+    case "x-agentlinkd.flows.put": {
+      const f = frame.flow;
+      if (!f || typeof f.name !== "string" || !/^[a-z0-9][a-z0-9_-]{0,63}$/.test(f.name) || !Array.isArray(f.nodes) || f.nodes.length === 0) {
+        sendError(client, "bad_request", "flow not saved: flow needs a valid name and at least one node", frame.cmd);
+        return;
+      }
+      MOCK_FLOWS.set(f.name, { version: 1, name: f.name, title: f.title, desc: f.desc, nodes: f.nodes, edges: Array.isArray(f.edges) ? f.edges : [] });
+      sendControl(client, "x-agentlinkd.flows.put", { cwd: MOCK_HOME, flow: MOCK_FLOWS.get(f.name), bytes: JSON.stringify(f).length });
+      broadcastControl("x-agentlinkd.flows.changed", { cwd: MOCK_HOME, flows: mockFlowList() });
+      return;
+    }
+    case "x-agentlinkd.flows.delete":
+      if (!MOCK_FLOWS.delete(frame.name)) sendError(client, "no_flow", `flow '${frame.name}': no_flow`, frame.cmd);
+      else broadcastControl("x-agentlinkd.flows.changed", { cwd: MOCK_HOME, flows: mockFlowList() });
+      return;
+    case "x-agentlinkd.flows.compile": {
+      const f = MOCK_FLOWS.get(frame.name);
+      if (!f) { sendError(client, "no_flow", `flow '${frame.name}': no_flow`, frame.cmd); return; }
+      sendControl(client, "x-agentlinkd.flows.compile", { cwd: MOCK_HOME, name: f.name, spec: { task: f.title ?? f.name, steps: f.nodes.map((n) => ({ agent: "worker", label: n.label ?? n.id, task: `[mock] ${n.type} ${n.id}` })) } });
+      return;
+    }
+    case "x-agentlinkd.flows.run": {
+      const f = MOCK_FLOWS.get(frame.name);
+      if (!f) { sendError(client, "no_flow", `flow '${frame.name}': no_flow`, frame.cmd); return; }
+      sendControl(client, "x-agentlinkd.flows.run", { cwd: MOCK_HOME, name: f.name, spec_path: `${MOCK_HOME}/.crew/specs/flow-${f.name}.json`, started: true });
       return;
     }
 

@@ -35,6 +35,7 @@ import { GALLERY_DEFAULTS, PACK_NAME_RE, buildCatalog, listPackFiles, listPackTr
 import { RUN_ID_RE as CREW_RUN_ID_RE, TAIL_MAX_LINES, createCrewAdapter } from "./crew.mjs";
 import { createSelfEdit, resolveStaticDir } from "./selfedit.mjs";
 import { createDir, listDirs } from "./dirs.mjs";
+import { compileFlow, deleteFlow, listFlows, readFlow, writeFlow } from "./flows.mjs";
 
 const here = path.dirname(url.fileURLToPath(import.meta.url));
 const repoRoot = path.join(here, "..", "..", "..");
@@ -223,6 +224,9 @@ const CAPABILITIES = [
   // x-agentlinkd.dirs.{list,create} + hello_ok.home: HOME-confined folder
   // browsing so a session can be "a folder" chosen by click, not a typed path.
   "dirs",
+  // x-agentlinkd.flows.{list,get,put,delete,compile,run}: the flow builder —
+  // flows live in <cwd>/.dext/flows/*.flow.json; runs compile to crew specs.
+  "flows",
 ];
 
 // Root of the folder picker. Sessions may open any directory (session.open
@@ -1711,6 +1715,10 @@ async function handleCommand(client, frame) {
         await handleSelfEditCommand(client, frame);
         return;
       }
+      if (typeof frame.cmd === "string" && frame.cmd.startsWith("x-agentlinkd.flows.")) {
+        handleFlowsCommand(client, frame);
+        return;
+      }
       if (frame.cmd === "x-agentlinkd.dirs.list") {
         const r = listDirs(DIRS_ROOT, frame.path);
         if (r.error) sendError(client, r.error === "outside_root" || r.error === "hidden" || r.error === "refused" ? "bad_path" : r.error === "missing" ? "no_dir" : "bad_request", `cannot list folder: ${r.error}`, frame.cmd);
@@ -1727,6 +1735,123 @@ async function handleCommand(client, frame) {
         return;
       }
       sendError(client, "unknown_command", `unsupported cmd ${String(frame.cmd)}`);
+  }
+}
+
+// ---------- flows (x-agentlinkd.flows.*) ----------
+
+// Flows belong to a workspace folder (a session cwd). frame.cwd may point at
+// any existing directory — same posture as session.open.
+function flowCwd(frame) {
+  const cwd = typeof frame.cwd === "string" && frame.cwd ? path.resolve(frame.cwd) : DEFAULT_CWD;
+  try {
+    if (!fs.existsSync(cwd) || !fs.statSync(cwd).isDirectory()) return { error: "no_dir" };
+    return { cwd };
+  } catch {
+    return { error: "no_dir" };
+  }
+}
+
+function meshBin() {
+  const pack = PACKS.find((p) => p.name === "mesh");
+  if (pack?.path) {
+    const bin = path.join(pack.path, "bin", "mesh");
+    if (fs.existsSync(bin)) return bin;
+  }
+  return "mesh";
+}
+
+function flowErr(client, cmd, r, what) {
+  const code = r.error === "no_flow" ? "no_flow" : "bad_request";
+  sendError(client, code, `flow '${what}': ${r.error}`, cmd);
+}
+
+function compileOrError(client, frame, flow) {
+  try {
+    return compileFlow(flow, { meshBin: meshBin(), packs: new Set(PACKS.map((p) => p.name)) });
+  } catch (e) {
+    sendError(client, e?.code === "no_pack" ? "no_pack" : "bad_request", String(e?.message ?? e), frame.cmd);
+    return null;
+  }
+}
+
+function handleFlowsCommand(client, frame) {
+  const { cwd, error } = flowCwd(frame);
+  if (error) {
+    sendError(client, "bad_request", `flows need an existing folder: ${error}`, frame.cmd);
+    return;
+  }
+  switch (frame.cmd) {
+    case "x-agentlinkd.flows.list":
+      sendControl(client, "x-agentlinkd.flows.list", { cwd, flows: listFlows(cwd) });
+      return;
+    case "x-agentlinkd.flows.get": {
+      const r = readFlow(cwd, frame.name);
+      if (r.error) flowErr(client, frame.cmd, r, frame.name);
+      else sendControl(client, "x-agentlinkd.flows.get", { cwd, flow: r.flow });
+      return;
+    }
+    case "x-agentlinkd.flows.put": {
+      const r = writeFlow(cwd, frame.flow);
+      if (r.error) sendError(client, "bad_request", `flow not saved: ${r.error}`, frame.cmd);
+      else {
+        sendControl(client, "x-agentlinkd.flows.put", { cwd, flow: r.flow, bytes: r.bytes });
+        broadcastControl("x-agentlinkd.flows.changed", { cwd, flows: listFlows(cwd) });
+      }
+      return;
+    }
+    case "x-agentlinkd.flows.delete": {
+      const r = deleteFlow(cwd, frame.name);
+      if (r.error) flowErr(client, frame.cmd, r, frame.name);
+      else broadcastControl("x-agentlinkd.flows.changed", { cwd, flows: listFlows(cwd) });
+      return;
+    }
+    case "x-agentlinkd.flows.compile": {
+      const r = readFlow(cwd, frame.name);
+      if (r.error) return flowErr(client, frame.cmd, r, frame.name);
+      const spec = compileOrError(client, frame, r.flow);
+      if (spec) sendControl(client, "x-agentlinkd.flows.compile", { cwd, name: r.flow.name, spec });
+      return;
+    }
+    case "x-agentlinkd.flows.run": {
+      if (!CREW_BIN) {
+        sendError(client, "unsupported", "flows run on crew; no crew binary on this host", frame.cmd);
+        return;
+      }
+      const r = readFlow(cwd, frame.name);
+      if (r.error) return flowErr(client, frame.cmd, r, frame.name);
+      const spec = compileOrError(client, frame, r.flow);
+      if (!spec) return;
+      // Spec file under <cwd>/.crew/specs: refuse symlinked ancestors, then
+      // mkdir; write-once (wx), then crew runs it detached (no host blocking).
+      const specsDir = path.join(cwd, ".crew", "specs");
+      try {
+        if (!checkedPath(specsDir)) fs.mkdirSync(specsDir, { recursive: true });
+      } catch {
+        sendError(client, "bad_path", `cannot write ${specsDir}`, frame.cmd);
+        return;
+      }
+      const specPath = path.join(specsDir, `flow-${r.flow.name}-${Date.now().toString(36)}.json`);
+      try {
+        fs.writeFileSync(specPath, JSON.stringify(spec, null, 2) + "\n", { flag: "wx" });
+      } catch {
+        sendError(client, "write_failed", `cannot write ${specPath}`, frame.cmd);
+        return;
+      }
+      if (CREW) CREW.addRoot(path.join(cwd, ".crew", "runs"));
+      try {
+        const child = spawn(CREW_BIN, ["run", "--spec", specPath, "--cwd", cwd], { cwd, env: { ...process.env, DEXT_NO_TUI: "1" }, detached: process.platform !== "win32", stdio: "ignore" });
+        child.on("error", (err) => broadcastControl("x-agentlinkd.flows.run", { cwd, name: r.flow.name, error: `crew failed to start: ${err.message}` }));
+        child.unref();
+      } catch (err) {
+        sendError(client, "spawn_failed", String(err?.message ?? err), frame.cmd);
+        return;
+      }
+      sendControl(client, "x-agentlinkd.flows.run", { cwd, name: r.flow.name, spec_path: specPath, started: true });
+      return;
+    }
+    default:
+      sendError(client, "unknown_command", `unsupported cmd ${String(frame.cmd)}`, frame.cmd);
   }
 }
 

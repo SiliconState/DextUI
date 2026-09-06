@@ -6,6 +6,7 @@ import {
   isSessionRouted,
   CREW_EXT,
   DIRS_EXT,
+  FLOWS_EXT,
   PACK_EXT,
   SELF_HOST_EXT,
   SELF_UI_EXT,
@@ -17,6 +18,7 @@ import {
   type ModelGroup,
   type PackInfo,
   type SelfStatus,
+  type FlowFile,
   type SessionMeta,
   type ThinkingEffort,
 } from "@dextui/protocol";
@@ -270,6 +272,32 @@ export class Connection {
 
   hostRestartCancel(): void {
     this.sendRaw(cmd(`${SELF_HOST_EXT}.restart_cancel`, {}));
+  }
+
+  // ---------- flows (host-prefixed until promoted) ----------
+
+  flowsList(cwd?: string): void {
+    this.sendRaw(cmd(`${FLOWS_EXT}.list`, cwd ? { cwd } : {}));
+  }
+
+  flowsGet(name: string, cwd?: string): void {
+    this.sendRaw(cmd(`${FLOWS_EXT}.get`, { name, ...(cwd ? { cwd } : {}) }));
+  }
+
+  flowsPut(flow: FlowFile, cwd?: string): void {
+    this.sendRaw(cmd(`${FLOWS_EXT}.put`, { flow, ...(cwd ? { cwd } : {}) }));
+  }
+
+  flowsDelete(name: string, cwd?: string): void {
+    this.sendRaw(cmd(`${FLOWS_EXT}.delete`, { name, ...(cwd ? { cwd } : {}) }));
+  }
+
+  flowsCompile(name: string, cwd?: string): void {
+    this.sendRaw(cmd(`${FLOWS_EXT}.compile`, { name, ...(cwd ? { cwd } : {}) }));
+  }
+
+  flowsRun(name: string, cwd?: string): void {
+    this.sendRaw(cmd(`${FLOWS_EXT}.run`, { name, ...(cwd ? { cwd } : {}) }));
   }
 
   // ---------- folder picker (host-prefixed until promoted) ----------

@@ -130,6 +130,41 @@ changeable any time from the gallery header). It only decides what you see
 - Personas: `accountant` | `business` | `developer`; a pack lists who it is
   for in `ui-personas` (`everyone` or empty = shown to all).
 
+## Flows (drag-and-drop workflows)
+
+Press `f` (or `/flows`, or Finder → "flows") to open the **flow builder**: a
+zero-dependency SVG canvas where a workflow is a small graph of typed steps.
+Flows are plain files — `<folder>/.dext/flows/<name>.flow.json` — you can
+edit, copy and version. **crew is the executor**: "run" compiles the flow to a
+crew chain spec (`.crew/specs/flow-<name>-<ts>.json`) and starts
+`crew run --spec` detached; progress, deliverables and checkpoints show up in
+the existing crew rail / run sheet / Action Queue. No second engine.
+
+| Node | What it does | Compiles to |
+|---|---|---|
+| Pack | run one of your tools on a task | worker step, `run <pack> — <task>` (dext's pack inference) |
+| Prompt | a helper does one step and writes a result | worker step with your prompt, optional agent/model |
+| Checkpoint (gate) | pause and ask you before continuing | worker writes `escalation.json` → run pauses → Action Queue; answering resumes |
+| Message | send a note via Inbox (mesh) | worker shells `mesh send <to>` with the resolved text |
+| Condition | continue only if clearly true, else ask | worker replies `PASS:` or escalates |
+
+Steps run in topological order (Kahn; declaration order breaks ties); each
+step sees `{previous}` (crew's own template variable) and writes
+`<node-id>.md` as its deliverable. Node types come from the extension registry
+(`apps/web/src/ext/flow`), so a pack can register its own node type.
+
+Canvas: drag nodes · drag the `○→` port onto another node to connect · click
+a node to edit its fields · wheel zooms, background drag pans · `spec` shows
+the exact crew spec a run would use. Validation (ids, types, cycles, caps) is
+host-side (`packages/agentlinkd/src/flows.mjs`) and errors come back verbatim.
+
+Sample: `packs/flows/month-end-close.flow.json` — scan receipts + who-owes-me
+→ ledger clean? → summary → your approval → tell the accountant. Copy it into
+a folder's `.dext/flows/` to try it.
+
+Surface: capability `flows`; `x-agentlinkd.flows.{list,get,put,delete,compile,run}`,
+broadcast `x-agentlinkd.flows.changed`. The mock host keeps flows in memory.
+
 ## Self-editing (workbench)
 
 When `agentlinkd` runs from this checkout it advertises the `self_edit`

@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "name": "month-end-close",
+  "title": "Month-end close",
+  "desc": "Record new receipts, check the ledger, get your OK, then tell your accountant.",
+  "nodes": [
+    { "id": "scan", "type": "pack", "label": "Scan receipts", "pack": "receipts", "task": "list receipt files in this folder, record every one not yet in the ledger with the right category, then show this month's summary", "x": 60, "y": 120 },
+    { "id": "aging", "type": "pack", "label": "Who owes me", "pack": "invoice", "task": "show the aging report: who still owes money and how late", "x": 60, "y": 260 },
+    { "id": "check", "type": "condition", "label": "Ledger clean?", "expr": "every receipt recorded this month has a category other than Uncategorised and a source file", "x": 320, "y": 120 },
+    { "id": "summary", "type": "prompt", "label": "Write summary", "prompt": "Write a plain-language month-end summary for a small business owner: total spend by category, top three vendors, outstanding invoices and anything overdue. Keep it under 200 words.", "x": 560, "y": 190 },
+    { "id": "ok", "type": "gate", "label": "Your approval", "question": "Here is the month-end summary. Send it to your accountant?", "x": 800, "y": 190 },
+    { "id": "send", "type": "message", "label": "Tell accountant", "to": "accountant", "text": "Month-end summary from DextUI:\n\n{previous}", "x": 1040, "y": 190 }
+  ],
+  "edges": [
+    ["scan", "check"],
+    ["check", "summary"],
+    ["aging", "summary"],
+    ["summary", "ok"],
+    ["ok", "send"]
+  ]
+}

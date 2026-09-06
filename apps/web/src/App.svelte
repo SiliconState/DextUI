@@ -33,6 +33,8 @@
   import PackSheet from "./components/PackSheet.svelte";
   import FolderPicker from "./components/FolderPicker.svelte";
   import { folders, closeFolderPicker } from "./lib/folders.svelte";
+  import FlowCanvas from "./components/FlowCanvas.svelte";
+  import { flows, openFlows, closeFlows } from "./lib/flows.svelte";
   import { crew, closeRun, crewLive, openRun } from "./lib/crew.svelte";
   import { packSheet, closePackSheet, closePackPanel } from "./lib/packsheet.svelte";
 
@@ -118,6 +120,7 @@
       if (e.key === "Escape") {
         if (inspect) inspect = null;
         else if (folders.open) closeFolderPicker();
+        else if (flows.open) closeFlows();
         else if (packSheet.panelOpen) closePackPanel();
         else if (packSheet.open) closePackSheet();
         else if (crew.openId) closeRun();
@@ -156,7 +159,7 @@
       }
       // The run sheet owns its keys (j/k/x/a…) so the global a/s/d and
       // hero-typing handlers below never see them while it is open.
-      if (app.paletteOpen || app.shortcutsOpen || inspect || app.eventsOpen || app.galleryOpen || packSheet.open || crew.openId || folders.open) return;
+      if (app.paletteOpen || app.shortcutsOpen || inspect || app.eventsOpen || app.galleryOpen || packSheet.open || crew.openId || folders.open || flows.open) return;
       const editing = e.target instanceof HTMLElement && (e.target.matches("input, textarea") || e.target.isContentEditable);
       if (!editing && app.activeId && (e.ctrlKey || e.metaKey) && e.key === "Backspace") {
         e.preventDefault();
@@ -181,6 +184,12 @@
       if (e.key === "g" && app.caps.includes("packs") && app.packs.length > 0) {
         e.preventDefault();
         app.galleryOpen = true;
+        return;
+      }
+      // Flow builder: the workflow canvas (crew is the executor).
+      if (e.key === "f" && app.caps.includes("flows")) {
+        e.preventDefault();
+        openFlows();
         return;
       }
       // Approvals: a/s/d act on the globally oldest pending request, whether
@@ -390,6 +399,7 @@
 
 <PackSheet />
 <FolderPicker />
+<FlowCanvas />
 
 {#if app.galleryOpen}
   <div class="insp-scrim" data-agent-id="packs.overlay.scrim" onclick={() => (app.galleryOpen = false)} onkeydown={() => {}} role="presentation"></div>

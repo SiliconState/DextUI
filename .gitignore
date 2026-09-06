@@ -8,5 +8,6 @@ dist.broken-*/
 packages/agentlinkd/.selfedit-test-*/
 packages/agentlinkd/.packs-test-*/
 packages/agentlinkd/.dirs-test-*/
+packages/agentlinkd/.flows-test-*/
 packs/target/
 packs/*/ui/panel.html

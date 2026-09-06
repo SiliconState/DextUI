@@ -238,6 +238,72 @@ export interface PackWriteReply {
   bytes: number;
 }
 
+// ---------- flows (host extension `x-agentlinkd.flows.*`) ----------
+
+/** Flow builder: a DAG of typed nodes saved at `<cwd>/.dext/flows/<name>.flow.json`;
+ *  runs compile to a crew chain spec (crew is the executor). */
+export const FLOWS_EXT = "x-agentlinkd.flows";
+
+export type FlowNodeType = "pack" | "prompt" | "gate" | "message" | "condition";
+
+export interface FlowNode {
+  id: string;
+  type: FlowNodeType;
+  label?: string;
+  /** Canvas position (persisted; canvas-local). */
+  x?: number;
+  y?: number;
+  /** pack: which pack to run. */
+  pack?: string;
+  /** pack: what the pack should do. */
+  task?: string;
+  /** prompt: the worker instruction (crew templates like {previous} pass through). */
+  prompt?: string;
+  agent?: string;
+  model?: string;
+  /** gate: the question the human answers (run pauses here). */
+  question?: string;
+  /** message: mesh recipient node name. */
+  to?: string;
+  text?: string;
+  /** condition: continue when clearly true; escalate (pause) otherwise. */
+  expr?: string;
+}
+
+export type FlowEdge = [string, string];
+
+export interface FlowFile {
+  version: 1;
+  name: string;
+  title?: string;
+  desc?: string;
+  nodes: FlowNode[];
+  edges: FlowEdge[];
+}
+
+/** `x-agentlinkd.flows.list` entry. */
+export interface FlowSummary {
+  name: string;
+  title: string;
+  desc: string;
+  nodes: number;
+  edges: number;
+  mtime: number;
+}
+
+export interface FlowsListReply {
+  cwd: string;
+  flows: FlowSummary[];
+}
+
+export interface FlowRunReply {
+  cwd: string;
+  name: string;
+  spec_path?: string;
+  started?: boolean;
+  error?: string;
+}
+
 // ---------- folder picker (host extension `x-agentlinkd.dirs.*`) ----------
 
 /** Confined folder browsing: `hello_ok.home` is the root; nothing outside it,
