@@ -301,8 +301,13 @@ export function writePackFile(packDir, rel, text, { cap = PACK_FILE_CAP } = {}) 
       return { error: "bad_path" };
     }
     const tmp = path.join(packDir, `.dextui-${crypto.randomBytes(6).toString("hex")}.tmp`);
-    fs.writeFileSync(tmp, text, { flag: "wx" });
-    fs.renameSync(tmp, abs);
+    try {
+      fs.writeFileSync(tmp, text, { flag: "wx" });
+      fs.renameSync(tmp, abs);
+    } catch (err) {
+      try { fs.unlinkSync(tmp); } catch { /* never created, or already gone */ }
+      throw err;
+    }
     return { path: rel, bytes };
   } catch {
     return { error: "write_failed" };

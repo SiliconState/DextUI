@@ -29,6 +29,10 @@ export function packEditEnabled(): boolean {
   return app.caps.includes("pack_edit");
 }
 
+// The text exactly as sent, so a write reply never marks keystrokes typed
+// during the in-flight save as already saved.
+let pendingSave = "";
+
 export function packSheetDirty(): boolean {
   return packSheet.open && packSheet.text !== packSheet.savedText;
 }
@@ -101,6 +105,7 @@ export function savePackFile(): void {
   if (!c || !packSheet.open || !packSheet.sel || !packSheetDirty() || packSheet.saving) return;
   packSheet.saving = true;
   packSheet.error = "";
+  pendingSave = packSheet.text;
   c.packWrite(packSheet.pack, packSheet.sel, packSheet.text);
 }
 
@@ -146,7 +151,7 @@ export function onPackControl(env: Envelope): void {
       const d = env.data as PackWriteReply | undefined;
       if (!d || d.pack !== packSheet.pack) return;
       packSheet.saving = false;
-      packSheet.savedText = packSheet.text;
+      packSheet.savedText = pendingSave;
       pushToast("ok", `saved ${d.pack}/${d.path} (${d.bytes}B)`);
       const c = app.conn;
       if (c) {
@@ -157,10 +162,12 @@ export function onPackControl(env: Envelope): void {
       break;
     }
     case "error": {
-      // Only ours while a sheet request is in flight; everything else is
-      // handled by the app-level onControlError.
-      if (!packSheet.saving && !packSheet.loading && !packSheet.panelLoading) return;
-      const d = env.data as { code?: string; message?: string } | undefined;
+      const d = env.data as { code?: string; message?: string; cmd?: string } | undefined;
+      // Tagged errors are scoped to the request that caused them; only untagged
+      // ones fall back to the in-flight gate (everything else is the app-level
+      // onControlError's business).
+      const ours = d?.cmd ? d.cmd.startsWith(PACK_EXT) : packSheet.saving || packSheet.loading || packSheet.panelLoading;
+      if (!ours) return;
       packSheet.saving = false;
       packSheet.loading = false;
       packSheet.panelLoading = false;

@@ -404,20 +404,20 @@ async function handleCrewCommand(client, frame) {
 function handlePackFileCommand(client, frame) {
   const verb = frame.cmd.slice("x-agentlinkd.pack.".length);
   const pack = packByName(frame.pack);
-  if (!pack) return sendError(client, "unknown_pack", `unknown pack ${String(frame.pack)}`);
+  if (!pack) return sendError(client, "unknown_pack", `unknown pack ${String(frame.pack)}`, frame.cmd);
   switch (verb) {
     case "files":
       sendControl(client, "x-agentlinkd.pack.files", { pack: pack.name, files: listPackTree(pack.path) });
       return;
     case "file": {
       const r = readPackFile(pack.path, frame.path);
-      if (r.error) return sendError(client, r.error, `cannot read ${String(frame.path)} in ${pack.name}: ${r.error}`);
+      if (r.error) return sendError(client, r.error, `cannot read ${String(frame.path)} in ${pack.name}: ${r.error}`, frame.cmd);
       sendControl(client, "x-agentlinkd.pack.file", { pack: pack.name, ...r });
       return;
     }
     case "write": {
       const r = writePackFile(pack.path, frame.path, frame.text);
-      if (r.error) return sendError(client, r.error, `cannot write ${String(frame.path)} in ${pack.name}: ${r.error}`);
+      if (r.error) return sendError(client, r.error, `cannot write ${String(frame.path)} in ${pack.name}: ${r.error}`, frame.cmd);
       // Catalog refresh: PACK.md edits change ui-* front matter and commands.
       schedulePackRefresh();
       console.error(`agentlinkd: pack write ${pack.name}/${r.path} (${r.bytes}B) by client ${client.id}`);
@@ -425,7 +425,7 @@ function handlePackFileCommand(client, frame) {
       return;
     }
     default:
-      sendError(client, "unknown_command", `unsupported cmd ${frame.cmd}`);
+      sendError(client, "unknown_command", `unsupported cmd ${frame.cmd}`, frame.cmd);
   }
 }
 
@@ -1094,8 +1094,10 @@ function sendControl(client, event, data) {
   client.send(JSON.stringify(env));
 }
 
-function sendError(client, code, message) {
-  sendControl(client, "error", { code, message });
+// `cmd`, when known, tags the error with the request that caused it so clients
+// can scope error handling to their own in-flight requests.
+function sendError(client, code, message, cmd) {
+  sendControl(client, "error", cmd ? { code, message, cmd } : { code, message });
 }
 
 const HOST_HELP = [
