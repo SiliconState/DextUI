@@ -73,6 +73,17 @@ Designed from the driver's seat: what makes a *driving* agent excellent cheaply?
 
 6. **Consumer packs, one folder.** The business packs (`packs/`) are Rust runtimes on a shared SDK (`dextui_pack_sdk`: protocol framing, money as cents, CSV, dates, confined paths, fences, live panels) that read each other's plain files in the user's folder — receipts feed reconciliation, cash flow and tax; invoices feed follow-ups and cash flow. The agent narrates and asks; the runtime owns every number. Flows chain the packs; triggers start flows; crew executes. Nothing new thinks.
 
+## Artifact theming contract
+
+HTML artifacts render in opaque-origin sandboxed iframes — they cannot see the app's DOM, storage, or theme toggle. Embeds track the app theme through two deliberate channels; both are opt-in for authors and backwards compatible (a doc that ignores them renders exactly as authored):
+
+1. **`color-scheme` inheritance (zero-JS path).** Artifact iframes inherit `color-scheme` from the app root, so a document styled with a `@media (prefers-color-scheme: dark)` block follows the app toggle in Chromium — no script needed. Every srcdoc document already gets `<meta name="color-scheme" content="light dark">` injected.
+2. **`?theme=` / `data-theme` (exact path).** File URLs carry `&theme=dark|light` — the app's *resolved* theme, never "system"; srcdoc documents get `document.documentElement.dataset.theme` set to the same value by an injected bootstrap. Documents wanting pixel-exact sync style `:root[data-theme="dark"]`; the param wins over the OS media query, and an explicit `data-theme="light"` keeps light. The bootstrap whitelists its values — nothing else from a URL is ever reflected into the DOM.
+
+Producers: `files.ts:fileUrl` appends `theme=` (images ignore it); `HtmlArtifact.svelte` injects the bootstrap next to the height probe and re-renders embeds when the theme toggles. Pack panels (`PackSheet`) are out of scope — packs declare their own styles. Docs opened standalone ("open ↗") fall back to OS `prefers-color-scheme`.
+
+Agents authoring workspace `.html` artifacts SHOULD follow this contract: light default, dark block keyed to both channels, `<meta name="color-scheme" content="light dark">`, param reader limited to the whitelisted `theme=dark|light` regex setting `data-theme`.
+
 ## Repo map
 
 ```

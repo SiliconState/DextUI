@@ -41,6 +41,8 @@ export const app = $state({
   eventsOpen: false,
   sidebarCollapsed: false,
   theme: "dark" as Theme,
+  /** Resolved (never "system") — artifact URLs and srcdoc bootstrap read it. */
+  resolvedTheme: "dark" as "dark" | "light",
   toasts: [] as Toast[],
   /** Desktop notifications. "blocked" is derived from the browser permission
    *  state, never persisted. */
@@ -268,6 +270,7 @@ function resolveTheme(t: Theme): "dark" | "light" {
 
 function applyTheme(t: Theme): void {
   const resolved = resolveTheme(t);
+  app.resolvedTheme = resolved;
   document.documentElement.dataset.theme = resolved;
   // Keep installed-PWA/browser chrome in sync with the resolved scheme.
   document.querySelector<HTMLMetaElement>('meta[name="theme-color"]')?.setAttribute(
@@ -281,6 +284,11 @@ export function toggleTheme(): void {
   app.theme = app.theme === "dark" ? "light" : app.theme === "light" ? "system" : "dark";
   localStorage.setItem("dextui.theme", app.theme);
   applyTheme(app.theme);
+}
+
+/** Resolved app theme (never "system") for artifact URL/srcdoc consumers. */
+export function currentResolvedTheme(): "dark" | "light" {
+  return app.resolvedTheme;
 }
 
 export async function copyText(text: string, what = "Copied"): Promise<void> {

@@ -1,6 +1,9 @@
 // Session-workspace file URLs, shared by markdown images/artifacts and tool
 // cards. Subresource loads (<img>/<iframe>) send no Authorization header; the
-// file endpoint accepts ?t=<token> instead.
+// file endpoint accepts ?t=<token> instead. HTML artifacts also carry &theme=
+// (resolved app theme) per DESIGN.md's artifact-theming contract; images
+// ignore it.
+import { currentResolvedTheme } from "./state.svelte";
 
 /** Models emit file paths in several shapes — relative ("qc_charts/x.png"),
  *  absolute file URIs, WSL UNC URIs. Only paths under the session cwd are
@@ -25,7 +28,7 @@ export function normalizeHref(href: string, cwd: string): string {
 export function fileUrl(sessionId: string, href: string, cwd: string): string {
   const token = typeof localStorage !== "undefined" ? (localStorage.getItem("dextui.token") ?? "") : "";
   const path = normalizeHref(href, cwd).split("/").map(encodeURIComponent).join("/");
-  return `/sessions/${encodeURIComponent(sessionId)}/file/${path}?t=${encodeURIComponent(token)}`;
+  return `/sessions/${encodeURIComponent(sessionId)}/file/${path}?t=${encodeURIComponent(token)}&theme=${currentResolvedTheme()}`;
 }
 
 export const isHtmlPath = (p: string): boolean => /\.html?$/i.test(p);
