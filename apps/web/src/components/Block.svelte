@@ -148,7 +148,7 @@
   {:else}
     <details class="b-think live" open data-agent-id="block.thinking" data-state="thinking">
       <summary><span class="faint">▾ Thinking · Streaming…</span></summary>
-      <p class="think-p stream"><span class="think-mark" aria-hidden="true">◈</span>{thinkTail}</p>
+      <p class="think-p stream"><span class="think-radar" aria-hidden="true"><span class="core"></span><span class="ring"></span><span class="ring r2"></span></span>{thinkTail}</p>
     </details>
   {/if}
 {:else if block.kind === "tool"}
@@ -309,23 +309,62 @@
   .think-p.stream {
     color: var(--dim);
   }
-  /* Streaming thought indicator: a lozenge in a slow, steady rotation —
-     the "working" motion the star had, in a geometric glyph that is no
-     lab's mark (not ✻, not ✦, no ellipsis beside it either). */
-  .think-mark {
+  /* Streaming thought indicator: a radar target — core dot with two
+     concentric rings pinging outward in staggered waves. Pure CSS geometry,
+     centered by construction (glyph rotation visibly pivots on the
+     baseline), pulses and moves, and is no lab's mark. */
+  .think-radar {
+    position: relative;
     display: inline-block;
-    margin-right: 6px;
-    color: var(--faint);
-    animation: think-spin 2.4s linear infinite;
+    width: 12px;
+    height: 12px;
+    margin-right: 7px;
+    vertical-align: -1px;
+    color: var(--cyan);
   }
-  @keyframes think-spin {
-    to {
-      transform: rotate(360deg);
+  .think-radar .core {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 4px;
+    height: 4px;
+    margin: -2px 0 0 -2px;
+    border-radius: 50%;
+    background: currentColor;
+  }
+  .think-radar .ring {
+    position: absolute;
+    inset: 0;
+    border: 1px solid currentColor;
+    border-radius: 50%;
+    opacity: 0;
+    animation: think-ping 1.8s cubic-bezier(0.2, 0.6, 0.4, 1) infinite;
+  }
+  .think-radar .r2 {
+    animation-delay: 0.6s;
+  }
+  @keyframes think-ping {
+    0% {
+      transform: scale(0.3);
+      opacity: 0.9;
+    }
+    70% {
+      opacity: 0.15;
+    }
+    100% {
+      transform: scale(1);
+      opacity: 0;
     }
   }
   @media (prefers-reduced-motion: reduce) {
-    .think-mark {
+    .think-radar .ring {
       animation: none;
+      transform: scale(1);
+      opacity: 0.35;
+    }
+    .think-radar .r2 {
+      transform: scale(0.65);
+      opacity: 0.2;
     }
   }
   /* Tool / pack cards: CSS rail, hover accent — never glyph gutters. */
