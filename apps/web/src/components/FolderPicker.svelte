@@ -70,7 +70,7 @@
   function onKey(e: KeyboardEvent) {
     dlg.onKey(e); // Tab trap while the modal is open
     if (creating) {
-      if (e.key === "Escape") { creating = false; e.stopPropagation(); }
+      if (e.key === "Escape") { creating = false; e.preventDefault(); e.stopPropagation(); }
       return;
     }
     if (e.key === "Escape") {
@@ -149,15 +149,15 @@
           </nav>
           <ul class="list" data-agent-id="folders.list">
             {#if listing.parent && !q}
-              <li><button class="row" data-agent-id="folders.up" onclick={() => navigate(listing.parent!)}><span class="faint">↑</span> <span class="name">..</span></button></li>
+              <li class="entry"><button class="row" data-agent-id="folders.up" onclick={() => navigate(listing.parent!)}><span class="faint">↑</span> <span class="name">..</span></button></li>
             {/if}
             {#each visible as d, i (d.name)}
-              <li>
-                <button class="row" class:cur={i === cursor} data-agent-id={`folders.dir.${d.name}`} title={d.name} onclick={() => (cursor = i)} ondblclick={() => enter(d)}>
-                  <span class="st-cyan">▸</span>
+              <li class="entry" class:cur={i === cursor}>
+                <button class="row" data-agent-id={`folders.dir.${d.name}`} title={d.name} onclick={() => (cursor = i)} ondblclick={() => enter(d)}>
                   <span class="name">{d.name}</span>
                   {#if typeof d.mtime === "number"}<span class="faint ago">{ago(d.mtime)}</span>{/if}
                 </button>
+                <button class="go" data-agent-id={`folders.go.${d.name}`} title={`open ${d.name}`} aria-label={`open ${d.name}`} onclick={() => enter(d)}>▸</button>
               </li>
             {/each}
             {#if visible.length === 0}
@@ -201,6 +201,10 @@
     margin: auto;
     border: 1px solid var(--line);
     box-shadow: 0 24px 80px rgba(0, 0, 0, 0.55);
+  }
+  .folders[data-state="loading"] .scroll {
+    /* Navigating: dim the (stale) list while the fresh listing is in flight. */
+    opacity: 0.55;
   }
   @media (max-width: 640px) {
     .folders {
@@ -295,10 +299,15 @@
     border: 1px solid var(--line);
     background: var(--bg2);
   }
+  .entry {
+    display: flex;
+    align-items: stretch;
+  }
   .row {
     display: flex;
     gap: 8px;
-    width: 100%;
+    flex: 1;
+    min-width: 0;
     padding: 4px 8px;
     align-items: baseline;
     text-align: left;
@@ -308,9 +317,28 @@
     font: inherit;
   }
   .row:hover,
-  .row.cur {
+  .entry.cur .row {
     background: var(--bg2);
+  }
+  .row:hover .name,
+  .entry.cur .name {
     color: var(--cyan);
+  }
+  /* Explicit "open" affordance on every row: single click selects, this
+     drills in — the only enter gesture that works on touch. */
+  .go {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    padding: 0 8px;
+    border-left: 1px solid var(--line);
+    background: var(--bg1);
+    color: var(--cyan);
+    font-size: 11px;
+  }
+  .go:hover,
+  .entry.cur .go {
+    background: var(--bg2);
   }
   .row .name {
     flex: 1;
