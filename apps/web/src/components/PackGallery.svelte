@@ -5,6 +5,7 @@
   // hidden: visibility of the catalog is the point.
   import type { PackInfo } from "@dextui/protocol";
   import { app, galleryPacks, packStarter, packUnmet, prefillComposer } from "../lib/state.svelte";
+  import { openPackSheet, openPackPanel, packEditEnabled } from "../lib/packsheet.svelte";
 
   let { compact = false, onPick }: { compact?: boolean; onPick?: () => void } = $props();
 
@@ -60,15 +61,30 @@
 
       {#each curated as p (p.name)}
         {@const missing = packUnmet(p)}
-        <button class="card" class:greyed={missing.length > 0} data-agent-id={`packs.card.${p.name}`} data-state={missing.length ? "unmet" : "ready"}
-          title={missing.length ? `needs ${missing.join(", ")}` : packStarter(p)} onclick={() => pick(p)}>
-          <span class="card-title"><span class="st-cyan">{glyph[p.ui.artifact] ?? "·"}</span> {p.name}</span>
-          <span class="card-desc">{p.description}</span>
-          <span class="card-meta faint">
-            {p.ui.artifact}{#if p.ui.time_to_first_artifact} · ~{p.ui.time_to_first_artifact}s{/if}{#if p.shelf} · {p.shelf}{/if}
-            {#if missing.length}<span class="st-yellow"> · needs {missing.join(", ")}</span>{:else if p.ui.requires.length === 0}<span class="st-green"> · no setup</span>{/if}
-          </span>
-        </button>
+        <div class="card" class:greyed={missing.length > 0} data-agent-id={`packs.card.${p.name}`} data-state={missing.length ? "unmet" : "ready"}>
+          <button class="card-main" title={missing.length ? `needs ${missing.join(", ")}` : packStarter(p)} onclick={() => pick(p)}>
+            <span class="card-title"><span class="st-cyan">{glyph[p.ui.artifact] ?? "·"}</span> {p.name}</span>
+            <span class="card-desc">{p.description}</span>
+            <span class="card-meta faint">
+              {p.ui.artifact}{#if p.ui.time_to_first_artifact} · ~{p.ui.time_to_first_artifact}s{/if}{#if p.shelf} · {p.shelf}{/if}
+              {#if missing.length}<span class="st-yellow"> · needs {missing.join(", ")}</span>{:else if p.ui.requires.length === 0}<span class="st-green"> · no setup</span>{/if}
+            </span>
+          </button>
+          {#if p.ui.panel || p.ui.actions?.length}
+            <div class="chips">
+              {#if p.ui.panel}
+                <button class="chip" data-agent-id={`packs.panelbtn.${p.name}`} onclick={() => openPackPanel(p.name)}>panel</button>
+              {/if}
+              {#each p.ui.actions ?? [] as a, i}
+                <button class="chip" data-agent-id={`packs.action.${p.name}.${i}`} title={a.prompt}
+                  onclick={() => { prefillComposer(a.prompt); onPick?.(); }}>{a.label}</button>
+              {/each}
+            </div>
+          {/if}
+          {#if packEditEnabled()}
+            <button class="card-edit" data-agent-id={`packs.edit.${p.name}`} title="edit pack files" onclick={() => openPackSheet(p.name)}>edit</button>
+          {/if}
+        </div>
       {/each}
     </div>
 
@@ -92,11 +108,16 @@
         <ul class="all-list">
           {#each others as p (p.name)}
             <li>
-              <button class="row-btn" data-agent-id={`packs.row.${p.name}`} onclick={() => pick(p)}>
-                <span class="st-cyan">{p.name}</span>
-                <span class="faint">{p.shelf ?? "-"}</span>
-                <span class="dim truncate">{p.description}</span>
-              </button>
+              <div class="row-wrap">
+                <button class="row-btn" data-agent-id={`packs.row.${p.name}`} onclick={() => pick(p)}>
+                  <span class="st-cyan">{p.name}</span>
+                  <span class="faint">{p.shelf ?? "-"}</span>
+                  <span class="dim truncate">{p.description}</span>
+                </button>
+                {#if packEditEnabled()}
+                  <button class="row-edit" data-agent-id={`packs.edit.${p.name}`} onclick={() => openPackSheet(p.name)}>edit</button>
+                {/if}
+              </div>
             </li>
           {/each}
         </ul>
@@ -110,9 +131,16 @@
   .gal-head { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; }
   .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; }
   .compact .cards { grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); }
-  .card { display: flex; flex-direction: column; gap: 4px; padding: 8px 10px; border: 1px solid var(--line); background: var(--bg1); text-align: left; min-width: 0; }
-  .card:hover, .card:focus-visible { border-color: var(--cyan); background: var(--bg2); }
-  .card.hero { border-style: dashed; }
+  .card { position: relative; display: flex; flex-direction: column; border: 1px solid var(--line); background: var(--bg1); text-align: left; min-width: 0; }
+  .card-main { display: flex; flex-direction: column; gap: 4px; padding: 8px 10px; min-width: 0; background: none; border: 0; color: inherit; font: inherit; text-align: left; }
+  .card-main:hover, .card-main:focus-visible { color: var(--cyan); }
+  .card:hover, .card:focus-within { border-color: var(--cyan); background: var(--bg2); }
+  .chips { display: flex; flex-wrap: wrap; gap: 4px; padding: 0 10px 8px; }
+  .chip { font-size: 10px; padding: 1px 6px; color: var(--cyan); background: none; border: 1px solid var(--line); }
+  .chip:hover { border-color: var(--cyan); background: var(--bg2); }
+  .card-edit { position: absolute; right: 6px; top: 6px; padding: 1px 6px; font-size: 10px; color: var(--dim); background: var(--bg1); border: 1px solid var(--line); }
+  .card-edit:hover { color: var(--cyan); border-color: var(--cyan); }
+  .card.hero { border-style: dashed; display: flex; flex-direction: column; gap: 4px; padding: 8px 10px; }
   .card.greyed { opacity: 0.6; }
   .card.greyed:hover { opacity: 0.9; }
   .card-title { color: var(--fg); font-weight: bold; }
@@ -124,7 +152,10 @@
   .row { display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; }
   .all { align-self: flex-start; }
   .all-list { list-style: none; display: grid; gap: 2px; }
-  .row-btn { display: grid; grid-template-columns: 10em 8em 1fr; gap: 10px; width: 100%; padding: 3px 6px; align-items: baseline; }
+  .row-wrap { display: flex; gap: 6px; align-items: center; }
+  .row-btn { display: grid; grid-template-columns: 10em 8em 1fr; gap: 10px; flex: 1; min-width: 0; padding: 3px 6px; align-items: baseline; }
+  .row-edit { padding: 1px 6px; font-size: 10px; color: var(--dim); border: 1px solid var(--line); }
+  .row-edit:hover { color: var(--cyan); border-color: var(--cyan); }
   .row-btn:hover { background: var(--bg2); }
   .truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
   .st-yellow { color: var(--yellow); }

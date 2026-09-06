@@ -5,6 +5,7 @@ import {
   cmd,
   isSessionRouted,
   CREW_EXT,
+  PACK_EXT,
   PROTOCOL_VERSION,
   type Envelope,
   type CrewsPayload,
@@ -237,6 +238,20 @@ export class Connection {
 
   crewResume(run: string, answer: string): void {
     this.sendRaw(cmd(`${CREW_EXT}.resume`, { run, answer }));
+  }
+
+  // ---------- pack file editing (host-prefixed until promoted) ----------
+
+  packFiles(pack: string): void {
+    this.sendRaw(cmd(`${PACK_EXT}.files`, { pack }));
+  }
+
+  packFile(pack: string, path: string): void {
+    this.sendRaw(cmd(`${PACK_EXT}.file`, { pack, path }));
+  }
+
+  packWrite(pack: string, path: string, text: string): void {
+    this.sendRaw(cmd(`${PACK_EXT}.write`, { pack, path, text }));
   }
 
   private forget(id: string): void {

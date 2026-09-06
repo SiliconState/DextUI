@@ -4,6 +4,7 @@ import { Connection, type ConnPhase, type PendingPermission } from "@dextui/clie
 import type { Envelope, HostCommand, ModelGroup, PackInfo, SessionMeta, ThinkingEffort } from "@dextui/protocol";
 import { notifyEvent } from "./notify";
 import { acceptCrews, crewEscalations, onCrewControl, openRun } from "./crew.svelte";
+import { onPackControl } from "./packsheet.svelte";
 
 export type Theme = "dark" | "light" | "system";
 export type NotifyState = "on" | "off" | "blocked";
@@ -554,6 +555,7 @@ export function start(token: string): void {
   c.onControl((env) => {
     if (app.conn !== c) return;
     onCrewControl(env);
+    onPackControl(env);
     if (env.event === "sessions.deleted") {
       const d = env.data as { ids: string[] };
       finishSessionAction();

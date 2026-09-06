@@ -104,6 +104,9 @@ test("attention sort and cap", () => {
   // A day-old failure ranks below live and pending runs.
   const stale = sortRuns([mk("run-000000000001", "failed", 2 * 24 * 3600 * 1000), mk("run-000000000002", "pending"), mk("run-000000000003", "running")]);
   assert.deepEqual(stale.map((r) => r.state), ["running", "pending", "failed"]);
+  // A day-old pending queue is just as cold: below running and fresh pending.
+  const stalePend = sortRuns([mk("run-000000000001", "pending", 2 * 24 * 3600 * 1000), mk("run-000000000002", "pending"), mk("run-000000000003", "running")]);
+  assert.deepEqual(stalePend.map((r) => r.state), ["running", "pending", "pending"]);
   const many = Array.from({ length: 11 }, (_, i) => mk(`run-0000000000${String(i).padStart(2, "0")}`, i < 2 ? "running" : "completed", i));
   const capped = capRuns(many);
   assert.equal(capped.runs.length, 8);

@@ -28,7 +28,9 @@
   import Shortcuts from "./components/Shortcuts.svelte";
   import PackGallery from "./components/PackGallery.svelte";
   import CrewRun from "./components/CrewRun.svelte";
+  import PackSheet from "./components/PackSheet.svelte";
   import { crew, closeRun, crewLive, openRun } from "./lib/crew.svelte";
+  import { packSheet, closePackSheet, closePackPanel } from "./lib/packsheet.svelte";
 
   let tokenInput = $state("");
   let inspect: ViewBlock | null = $state(null);
@@ -111,6 +113,8 @@
       dlgCrew.onKey(e);
       if (e.key === "Escape") {
         if (inspect) inspect = null;
+        else if (packSheet.panelOpen) closePackPanel();
+        else if (packSheet.open) closePackSheet();
         else if (crew.openId) closeRun();
         else if (app.galleryOpen) app.galleryOpen = false;
         else if (app.eventsOpen) app.eventsOpen = false;
@@ -147,7 +151,7 @@
       }
       // The run sheet owns its keys (j/k/x/a…) so the global a/s/d and
       // hero-typing handlers below never see them while it is open.
-      if (app.paletteOpen || app.shortcutsOpen || inspect || app.eventsOpen || app.galleryOpen || crew.openId) return;
+      if (app.paletteOpen || app.shortcutsOpen || inspect || app.eventsOpen || app.galleryOpen || packSheet.open || crew.openId) return;
       const editing = e.target instanceof HTMLElement && (e.target.matches("input, textarea") || e.target.isContentEditable);
       if (!editing && app.activeId && (e.ctrlKey || e.metaKey) && e.key === "Backspace") {
         e.preventDefault();
@@ -372,6 +376,8 @@
     <CrewRun />
   </div>
 {/if}
+
+<PackSheet />
 
 {#if app.galleryOpen}
   <div class="insp-scrim" data-agent-id="packs.overlay.scrim" onclick={() => (app.galleryOpen = false)} onkeydown={() => {}} role="presentation"></div>

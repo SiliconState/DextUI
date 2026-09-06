@@ -7,7 +7,7 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import {
-  buildCatalog, listPackFiles, packCommands, parsePackListing, parsePackSlash, parsePackUi, readPackUi, renderPackList, unmetRequirements,
+  buildCatalog, listPackFiles, listPackTree, packCommands, parsePackListing, parsePackSlash, parsePackUi, readPackFile, readPackUi, renderPackList, resolvePackPath, unmetRequirements, writePackFile,
 } from "../src/packs.mjs";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -139,6 +139,92 @@ test("listPackFiles: symlinked ancestor yields an empty listing instead of throw
   assert.deepEqual(listPackFiles(linked), []);
   assert.ok(listPackFiles(secret).length === 1);
   assert.deepEqual(listPackFiles(path.join(temp, "missing")), []);
+});
+
+test("resolvePackPath: only the editable surface, no traversal or dotfiles", () => {
+  const d = "/tmp/pack-x";
+  assert.equal(resolvePackPath(d, "PACK.md"), path.join(d, "PACK.md"));
+  assert.equal(resolvePackPath(d, "src/main.rs"), path.join(d, "src", "main.rs"));
+  assert.equal(resolvePackPath(d, "scripts/pack.test.mjs"), path.join(d, "scripts", "pack.test.mjs"));
+  assert.equal(resolvePackPath(d, "../PACK.md"), null);
+  assert.equal(resolvePackPath(d, "/etc/passwd"), null);
+  assert.equal(resolvePackPath(d, "a/../../PACK.md"), null);
+  assert.equal(resolvePackPath(d, ".git/config"), null);
+  assert.equal(resolvePackPath(d, "src/.hidden.md"), null);
+  assert.equal(resolvePackPath(d, "bin/crew"), null); // extension allowlist
+  assert.equal(resolvePackPath(d, "x".repeat(600) + ".md"), null);
+});
+
+test("parsePackUi: ui-panel path and ui-actions label|prompt list", () => {
+  const ui = parsePackUi("---\nui-panel: panel.html\nui-actions: Weekly | /pack run report weekly; Audit | audit this repo\n---\nbody");
+  assert.equal(ui.panel, "panel.html");
+  assert.deepEqual(ui.actions, [
+    { label: "Weekly", prompt: "/pack run report weekly" },
+    { label: "Audit", prompt: "audit this repo" },
+  ]);
+  // Bad paths and pipe-less entries are dropped, never fatal.
+  const bad = parsePackUi("---\nui-panel: ../evil.html\nui-actions: no pipe\n---\n");
+  assert.equal(bad.panel, undefined);
+  assert.deepEqual(bad.actions, []);
+  assert.equal(parsePackUi("---\nui-panel: docs/panel.html\n---\n").panel, "docs/panel.html");
+});
+
+test("readPackFile/writePackFile: confined, symlink-refusing, size-capped", (t) => {
+  const temp = fs.mkdtempSync(path.join(root, ".packs-test-"));
+  t.after(() => fs.rmSync(temp, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(temp, "PACK.md"), "# hello\n");
+  fs.mkdirSync(path.join(temp, "src"));
+  fs.writeFileSync(path.join(temp, "src", "main.rs"), "fn main() {}\n");
+  fs.writeFileSync(path.join(temp, "nul.txt"), Buffer.from("a\0b"));
+  fs.symlinkSync(path.join(temp, "PACK.md"), path.join(temp, "link.md"));
+  fs.mkdirSync(path.join(temp, "outside"));
+  fs.writeFileSync(path.join(temp, "outside", "real.md"), "outside\n");
+  fs.symlinkSync(path.join(temp, "outside"), path.join(temp, "src", "linkeddir"));
+
+  // read: happy paths and refusals
+  assert.equal(readPackFile(temp, "missing.md").error, "no_file");
+  assert.equal(readPackFile(temp, "src/nope/x.md").error, "no_file");
+  assert.equal(readPackFile(temp, "link.md").error, "bad_path");
+  assert.equal(readPackFile(temp, "src/linkeddir/real.md").error, "bad_path");
+  assert.equal(readPackFile(temp, "bin/crew").error, "bad_path");
+  assert.equal(readPackFile(temp, "nul.txt").error, "not_text");
+  assert.equal(readPackFile(temp, "PACK.md", { cap: 3 }).error, "too_large");
+  const ok = readPackFile(temp, "src/main.rs");
+  assert.equal(ok.text, "fn main() {}\n");
+  assert.equal(ok.path, "src/main.rs");
+
+  // write: create, overwrite, refusals
+  assert.equal(writePackFile(temp, "src/main.rs", "fn main() { return; }\n").bytes, 22);
+  assert.equal(readPackFile(temp, "src/main.rs").text, "fn main() { return; }\n");
+  assert.equal(writePackFile(temp, "new.md", "created").bytes, 7);
+  assert.equal(readPackFile(temp, "new.md").text, "created");
+  assert.equal(writePackFile(temp, "src/nope/x.md", "x").error, "no_dir");
+  assert.equal(writePackFile(temp, "link.md", "x").error, "bad_path");
+  assert.equal(writePackFile(temp, "src/linkeddir/evil.md", "x").error, "bad_path");
+  assert.equal(writePackFile(temp, "src/linkeddir/real.md", "x").error, "bad_path");
+  assert.equal(writePackFile(temp, "PACK.md", "x".repeat(300 * 1024)).error, "too_large");
+  assert.equal(writePackFile(temp, "bin/crew", "x").error, "bad_path");
+  assert.equal(writePackFile(temp, "PACK.md", 42).error, "bad_request");
+});
+
+test("listPackTree: relative paths, dotfiles and symlinks skipped, capped", (t) => {
+  const temp = fs.mkdtempSync(path.join(root, ".packs-test-"));
+  t.after(() => fs.rmSync(temp, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(temp, "PACK.md"), "x");
+  fs.mkdirSync(path.join(temp, "agents"));
+  fs.writeFileSync(path.join(temp, "agents", "worker.md"), "x");
+  fs.writeFileSync(path.join(temp, "agents", "run.sh"), "x");
+  fs.mkdirSync(path.join(temp, ".git"));
+  fs.writeFileSync(path.join(temp, ".git", "config"), "x");
+  fs.symlinkSync(path.join(temp, "PACK.md"), path.join(temp, "alias.md"));
+  const files = listPackTree(temp);
+  assert.deepEqual(files.map((f) => f.path), ["PACK.md", "agents", "agents/run.sh", "agents/worker.md"]);
+  const md = files.find((f) => f.path === "PACK.md");
+  assert.equal(md.kind, "file");
+  assert.equal(md.editable, true);
+  assert.equal(files.find((f) => f.path === "agents/run.sh").editable, true);
+  assert.equal(listPackTree(temp, { maxEntries: 1 }).length, 1);
+  assert.deepEqual(listPackTree(path.join(temp, "alias.md")), []);
 });
 
 // ---------- live host ----------

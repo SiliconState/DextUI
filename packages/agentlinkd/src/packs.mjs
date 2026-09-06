@@ -4,11 +4,15 @@
 // Pure functions except readPackUi/listPackFiles (filesystem, symlink-refusing).
 import fs from "node:fs";
 import path from "node:path";
+import crypto from "node:crypto";
 import { checkedPath } from "./session-files.mjs";
 
 export const PACK_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 const PACK_MD_CAP = 1024 * 1024;
 const ARTIFACTS = new Set(["html", "chart", "table", "markdown", "file", "none"]);
+/** Sandboxed panel: an .html file inside the pack (no dotfiles/traversal). */
+const PACK_PANEL_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}(?:\/[A-Za-z0-9][A-Za-z0-9_-]{0,63})*\.html$/;
+const MAX_PACK_ACTIONS = 4;
 
 /** Permissiveness order of dext approval profiles (`ask` behaves like a prompt; headless dext denies). */
 export const APPROVAL_RANK = { never: 0, ask: 0, "auto-read": 1, "auto-write": 2, always: 3 };
@@ -116,10 +120,27 @@ export function parsePackUi(text) {
       case "ui-gallery": ui.gallery = /^(true|yes|1)$/i.test(yamlScalar(value)); break;
       case "ui-tags": ui.tags = yamlList(value); break;
       case "ui-icon": ui.icon = yamlScalar(value).slice(0, 32); break;
+      case "ui-panel": { const p = yamlScalar(value); if (PACK_PANEL_RE.test(p)) ui.panel = p; break; }
+      case "ui-actions": ui.actions = parsePackActions(value); break;
       default: break;
     }
   }
   return ui;
+}
+
+/** `label | prompt ; label2 | prompt2` — semicolons separate actions, the
+ *  first `|` splits label from prompt. Prompts keep starter-prompt caps. */
+function parsePackActions(value) {
+  const out = [];
+  for (const part of String(value ?? "").split(";")) {
+    if (out.length >= MAX_PACK_ACTIONS) break;
+    const i = part.indexOf("|");
+    if (i < 0) continue;
+    const label = part.slice(0, i).trim().slice(0, 32);
+    const prompt = part.slice(i + 1).trim().slice(0, 400);
+    if (label && prompt) out.push({ label, prompt });
+  }
+  return out;
 }
 
 /** Read PACK.md without following symlinks; unreadable/oversized → {}. */
@@ -193,6 +214,138 @@ export function listPackFiles(packDir) {
         return { name: e.name, kind: "file", bytes };
       });
   } catch { return []; }
+}
+
+// ---------- pack file editing (x-agentlinkd.pack.{files,file,write}) ----------
+
+/** Per-file cap for the pack editor: large enough for real PACK.md/src files,
+ *  small enough that a client cannot ask the host to slurp binaries or logs. */
+export const PACK_FILE_CAP = 256 * 1024;
+
+/** The editable text surface of a pack: relative paths only, no dotfiles or
+ *  dot-directories (rules out .git), no traversal (segments cannot be `..`),
+ *  at most 12 segments, and a text-extension allowlist (rules out bin/crew). */
+export const PACK_FILE_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*(?:\/[A-Za-z0-9][A-Za-z0-9._-]*){0,11}\.(?:md|txt|json|js|mjs|cjs|ts|svelte|html|css|sh|py|rs|toml|yaml|yml|xml|svg)$/;
+
+/** "ok" | "missing" | "refused" — checkedPath conflates missing and symlink;
+ *  the editor needs the distinction (no_file/no_dir vs bad_path). */
+function pathState(p) {
+  try {
+    return checkedPath(p) ? "ok" : "missing";
+  } catch {
+    return "refused";
+  }
+}
+
+/** Resolve a client-supplied relative path against a pack dir, or null when it
+ *  leaves the editable surface. The regex already excludes `..`, absolute
+ *  paths, and dotfiles, so join is traversal-safe. */
+export function resolvePackPath(packDir, rel) {
+  if (typeof rel !== "string" || rel.length > 512 || !PACK_FILE_RE.test(rel)) return null;
+  return path.join(packDir, ...rel.split("/"));
+}
+
+/** Read one editable pack file. Symlinks — the final component or any
+ *  ancestor, including the pack dir itself — are refused; missing parents and
+ *  missing files are `no_file`; oversized or non-text files report errors
+ *  rather than truncating. */
+export function readPackFile(packDir, rel, { cap = PACK_FILE_CAP } = {}) {
+  const abs = resolvePackPath(packDir, rel);
+  if (!abs) return { error: "bad_path" };
+  try {
+    const parent = pathState(path.dirname(abs));
+    if (parent === "missing") return { error: "no_file" };
+    if (parent !== "ok") return { error: "bad_path" };
+    const fd = fs.openSync(abs, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+    try {
+      const st = fs.fstatSync(fd);
+      if (!st.isFile()) return { error: "bad_path" };
+      if (st.size > cap) return { error: "too_large" };
+      const buf = Buffer.alloc(st.size);
+      const n = fs.readSync(fd, buf, 0, buf.length, 0);
+      const text = buf.toString("utf8", 0, n);
+      if (text.includes("\0")) return { error: "not_text" };
+      return { path: rel, bytes: n, text };
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch (err) {
+    return { error: err?.code === "ENOENT" ? "no_file" : "bad_path" };
+  }
+}
+
+/** Atomically write one editable pack file. Never follows symlinks, never
+ *  creates directories (a missing parent is `no_dir`), never writes over a
+ *  non-regular file. The caller refreshes the pack catalog afterwards. */
+export function writePackFile(packDir, rel, text, { cap = PACK_FILE_CAP } = {}) {
+  const abs = resolvePackPath(packDir, rel);
+  if (!abs) return { error: "bad_path" };
+  if (typeof text !== "string") return { error: "bad_request" };
+  const bytes = Buffer.byteLength(text, "utf8");
+  if (bytes > cap) return { error: "too_large" };
+  try {
+    if (pathState(packDir) !== "ok") return { error: "bad_path" };
+    let existing = null;
+    try {
+      existing = fs.lstatSync(abs);
+    } catch {
+      /* new file */
+    }
+    if (existing && !existing.isFile()) return { error: "bad_path" };
+    const parent = pathState(path.dirname(abs));
+    if (parent !== "ok") {
+      // Missing parent + new file → the editor creates files in existing
+      // dirs only; a symlinked parent is always a confinement refusal, even
+      // when the target itself resolves to a real file through it.
+      if (!existing && parent === "missing") return { error: "no_dir" };
+      return { error: "bad_path" };
+    }
+    const tmp = path.join(packDir, `.dextui-${crypto.randomBytes(6).toString("hex")}.tmp`);
+    fs.writeFileSync(tmp, text, { flag: "wx" });
+    fs.renameSync(tmp, abs);
+    return { path: rel, bytes };
+  } catch {
+    return { error: "write_failed" };
+  }
+}
+
+/** Recursive listing for the pack editor: relative paths, real directories
+ *  only (never descends into symlinks), dotfiles skipped, depth- and
+ *  entry-capped, each file flagged against the editable allowlist. */
+export function listPackTree(packDir, { maxEntries = 500, maxDepth = 8 } = {}) {
+  const out = [];
+  const walk = (dir, prefix, depth) => {
+    let entries;
+    try {
+      // Byte order, not locale: listings must be deterministic across hosts.
+      entries = fs.readdirSync(dir, { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      if (out.length >= maxEntries) return;
+      if (e.name.startsWith(".") || e.isSymbolicLink()) continue;
+      if (e.isDirectory()) {
+        out.push({ path: prefix + e.name, kind: "dir" });
+        if (depth + 1 <= maxDepth) walk(path.join(dir, e.name), `${prefix}${e.name}/`, depth + 1);
+      } else if (e.isFile()) {
+        let bytes;
+        try {
+          bytes = fs.lstatSync(path.join(dir, e.name)).size;
+        } catch {
+          /* listing only */
+        }
+        out.push({ path: prefix + e.name, kind: "file", bytes, editable: PACK_FILE_RE.test(prefix + e.name) });
+      }
+    }
+  };
+  try {
+    if (pathState(packDir) !== "ok") return [];
+    walk(packDir, "", 0);
+    return out;
+  } catch {
+    return [];
+  }
 }
 
 /** `/` completion entries: one per pack plus the management verbs. */

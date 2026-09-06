@@ -31,7 +31,7 @@ import { spawn, spawnSync, execFile } from "node:child_process";
 import { acceptKey, FrameParser, encodeFrame, OP_PONG, OP_TEXT } from "../../mock-server/src/ws.mjs";
 import { fold, foldMeta } from "../../mock-server/src/fold.mjs";
 import { checkedPath, purgeSeat, seatFiles } from "./session-files.mjs";
-import { PACK_NAME_RE, buildCatalog, listPackFiles, packCommands, parsePackSlash, renderPackList, unmetRequirements } from "./packs.mjs";
+import { PACK_NAME_RE, buildCatalog, listPackFiles, listPackTree, packCommands, parsePackSlash, readPackFile, renderPackList, unmetRequirements, writePackFile } from "./packs.mjs";
 import { RUN_ID_RE as CREW_RUN_ID_RE, TAIL_MAX_LINES, createCrewAdapter } from "./crew.mjs";
 
 const here = path.dirname(url.fileURLToPath(import.meta.url));
@@ -211,6 +211,9 @@ const CAPABILITIES = [
   "session_manage",
   // hello_ok.packs + /pack run|list|create|inspect + GET /packs + packs.changed.
   "packs",
+  // x-agentlinkd.pack.{files,file,write}: the pack editor's confined read/write
+  // surface (extension allowlist, no dotfiles/symlinks, 256 KB cap).
+  "pack_edit",
 ];
 
 // Host-handled slash commands, advertised in hello_ok so the composer's
@@ -386,6 +389,39 @@ async function handleCrewCommand(client, frame) {
       const r = await CREW.resume(run, answer);
       if (!r.ok) return sendError(client, r.code ?? "crew_failed", r.message);
       broadcastControl("x-agentlinkd.crew.control", { run, verb: "resume", ok: true, by: client.id, message: r.message });
+      return;
+    }
+    default:
+      sendError(client, "unknown_command", `unsupported cmd ${frame.cmd}`);
+  }
+}
+
+// ---------- pack file editing ----------
+
+// The pack editor's confined surface: everything routes through packs.mjs
+// (extension allowlist, no dotfiles, symlink refusal, size cap) against the
+// catalog's own resolved pack dirs — clients never supply absolute paths.
+function handlePackFileCommand(client, frame) {
+  const verb = frame.cmd.slice("x-agentlinkd.pack.".length);
+  const pack = packByName(frame.pack);
+  if (!pack) return sendError(client, "unknown_pack", `unknown pack ${String(frame.pack)}`);
+  switch (verb) {
+    case "files":
+      sendControl(client, "x-agentlinkd.pack.files", { pack: pack.name, files: listPackTree(pack.path) });
+      return;
+    case "file": {
+      const r = readPackFile(pack.path, frame.path);
+      if (r.error) return sendError(client, r.error, `cannot read ${String(frame.path)} in ${pack.name}: ${r.error}`);
+      sendControl(client, "x-agentlinkd.pack.file", { pack: pack.name, ...r });
+      return;
+    }
+    case "write": {
+      const r = writePackFile(pack.path, frame.path, frame.text);
+      if (r.error) return sendError(client, r.error, `cannot write ${String(frame.path)} in ${pack.name}: ${r.error}`);
+      // Catalog refresh: PACK.md edits change ui-* front matter and commands.
+      schedulePackRefresh();
+      console.error(`agentlinkd: pack write ${pack.name}/${r.path} (${r.bytes}B) by client ${client.id}`);
+      sendControl(client, "x-agentlinkd.pack.write", { pack: pack.name, path: r.path, bytes: r.bytes });
       return;
     }
     default:
@@ -1513,6 +1549,10 @@ async function handleCommand(client, frame) {
     }
 
     default:
+      if (typeof frame.cmd === "string" && frame.cmd.startsWith("x-agentlinkd.pack.")) {
+        handlePackFileCommand(client, frame);
+        return;
+      }
       if (typeof frame.cmd === "string" && frame.cmd.startsWith("x-agentlinkd.crew.")) {
         await handleCrewCommand(client, frame);
         return;

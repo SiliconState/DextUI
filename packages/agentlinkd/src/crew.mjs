@@ -141,16 +141,17 @@ export function projectManifest(m, { now = Date.now(), mtimeMs = now, stateOf = 
 }
 
 const RANK = { paused: 0, failed: 1, running: 2, pending: 3, completed: 5, stopped: 6 };
-const STALE_FAIL_MS = 24 * 60 * 60 * 1000;
+const STALE_MS = 24 * 60 * 60 * 1000;
 
 function rankOf(r) {
-  // A failure is attention only while fresh; an old one must never push a live
-  // run off the capped list (real data: 33 runs, 25 of them stale failures).
-  if (r.state === "failed" && r.updated_ms > STALE_FAIL_MS) return 4;
+  // Fresh problems first; anything untouched for a day — a failed run or a
+  // dead pending queue — must never push a live run off the capped list
+  // (real data: 33 runs, 25 of them stale failures and dead pendings).
+  if ((r.state === "failed" || r.state === "pending") && r.updated_ms > STALE_MS) return 4;
   return RANK[r.state] ?? 9;
 }
 
-/** Attention order: paused → fresh failed → running → pending → stale failed → done → stopped; fresher first within a rank. */
+/** Attention order: paused → fresh failed → running → fresh pending → day-old failed/pending → done → stopped; fresher first within a rank. */
 export function sortRuns(list) {
   return [...list].sort((a, b) => rankOf(a) - rankOf(b) || a.updated_ms - b.updated_ms || (a.id < b.id ? -1 : 1));
 }

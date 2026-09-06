@@ -160,6 +160,10 @@ export interface PackUi {
   gallery: boolean;
   tags: string[];
   icon?: string;
+  /** Optional sandboxed HTML panel shipped inside the pack (relative path). */
+  panel?: string;
+  /** Pack-declared quick actions: label plus composer prompt. */
+  actions?: { label: string; prompt: string }[];
 }
 
 /** One entry of the host's pack catalog (`hello_ok.packs`, `GET /packs`). */
@@ -178,6 +182,44 @@ export interface PackInfo {
 /** `GET /packs/:name`: metadata plus a shallow, read-only listing. */
 export interface PackDetail extends PackInfo {
   files: { name: string; kind: "file" | "dir"; bytes?: number }[];
+}
+
+// ---------- pack file editing (host extension `x-agentlinkd.pack.*`) ----------
+
+/** Extension prefix for the pack editor's confined read/write file surface. */
+export const PACK_EXT = "x-agentlinkd.pack";
+
+/** One entry of `x-agentlinkd.pack.files`: a recursive, relative-path listing.
+ *  Dotfiles and symlinks never appear; `editable` mirrors the host's
+ *  extension allowlist (md/json/ts/rs/… — never `bin/`). */
+export interface PackFileEntry {
+  path: string;
+  kind: "file" | "dir";
+  bytes?: number;
+  editable?: boolean;
+}
+
+export interface PackFilesReply {
+  pack: string;
+  files: PackFileEntry[];
+}
+
+/** `x-agentlinkd.pack.file`: one editable file's full text (host cap 256 KB,
+ *  non-text files are refused with a control error, never truncated). */
+export interface PackFileReply {
+  pack: string;
+  path: string;
+  bytes: number;
+  text: string;
+}
+
+/** `x-agentlinkd.pack.write`: receipt for one saved file. The refreshed
+ *  catalog follows separately via `packs.changed` (a PACK.md edit can change
+ *  `ui-*` front matter and the `/pack` command list). */
+export interface PackWriteReply {
+  pack: string;
+  path: string;
+  bytes: number;
 }
 
 // ---------- crew runs (host extension `x-agentlinkd.crew.*`) ----------
