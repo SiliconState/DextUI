@@ -132,7 +132,7 @@
 {:else if block.kind === "thinking"}
   {#if block.complete}
     <details class="b-think done" data-agent-id="block.thinking" data-state="complete">
-      <summary><span class="faint">▸ thinking · {thinkWords} words{thinkDur}</span></summary>
+      <summary><span class="faint">▸ Thinking · {thinkWords} words{thinkDur}</span></summary>
       <div class="think-body">
         {#each thinkParas(block.text) as p, i (i)}
           <p class="think-p">{p}</p>
@@ -141,8 +141,8 @@
     </details>
   {:else}
     <details class="b-think live" open data-agent-id="block.thinking" data-state="thinking">
-      <summary><span class="faint">▾ thinking · streaming…</span></summary>
-      <p class="think-p stream"><span class="think-dots" aria-hidden="true"><span class="d"></span><span class="d"></span><span class="d"></span></span>{thinkTail}</p>
+      <summary><span class="faint">▾ Thinking · Streaming…</span></summary>
+      <p class="think-p stream"><span class="think-star" aria-hidden="true">✦</span>{thinkTail}</p>
     </details>
   {/if}
 {:else if block.kind === "tool"}
@@ -303,27 +303,23 @@
   .think-p.stream {
     color: var(--dim);
   }
-  /* Streaming thought indicator: three dots pulsing in sequence —
-     "working on it" in terminal language, borrowed from no one. */
-  .think-dots {
-    display: inline-flex;
-    align-items: center;
-    gap: 3px;
+  /* Streaming thought indicator: a four-pointed star in a slow, steady
+     rotation — the star's "working" motion, a glyph that is nobody's mark. */
+  .think-star {
+    display: inline-block;
     margin-right: 6px;
+    color: var(--faint);
+    animation: think-spin 2.4s linear infinite;
   }
-  .think-dots .d {
-    width: 3.5px;
-    height: 3.5px;
-    border-radius: 50%;
-    background: currentColor;
-    opacity: 0.25;
-    animation: think-dot 1.2s ease-in-out infinite;
+  @keyframes think-spin {
+    to {
+      transform: rotate(360deg);
+    }
   }
-  .think-dots .d:nth-child(2) { animation-delay: 0.2s; }
-  .think-dots .d:nth-child(3) { animation-delay: 0.4s; }
-  @keyframes think-dot {
-    0%, 100% { opacity: 0.25; }
-    50% { opacity: 1; }
+  @media (prefers-reduced-motion: reduce) {
+    .think-star {
+      animation: none;
+    }
   }
   /* Tool / pack cards: CSS rail, hover accent — never glyph gutters. */
   .tool {
