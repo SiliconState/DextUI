@@ -360,6 +360,67 @@ export interface DirsListReply {
   created?: string;
 }
 
+// ---------- connectors (host extension `x-agentlinkd.connectors.*`) ----------
+
+/** External sources (GitHub/git via git, Google Drive/Dropbox via rclone)
+ *  materialised as ordinary folders under `<home>/Connected/<label>`. The
+ *  listing never carries a secret. */
+export const CONNECTORS_EXT = "x-agentlinkd.connectors";
+
+export type ConnectorKind = "github" | "git" | "gdrive" | "dropbox";
+
+export interface ConnectorInfo {
+  id: string;
+  kind: ConnectorKind;
+  label: string;
+  /** Normalised remote: an https URL (git kinds) or a folder path inside the drive (rclone kinds). */
+  remote: string;
+  /** Absolute local folder the connector materialises into. */
+  local: string;
+  created: number;
+  last_sync?: number;
+  /** A credential is stored for this connector (git token); never the value. */
+  has_secret: boolean;
+  status: "idle" | "syncing" | "error";
+  /** Last tool failure line, secret-scrubbed. */
+  error?: string;
+}
+
+export interface ConnectorsListReply {
+  connectors: ConnectorInfo[];
+  /** Which tools the host has — the UI greys out kinds it cannot serve. */
+  tools: { git: boolean; rclone: boolean; gh: boolean };
+  /** `<home>/Connected`. */
+  root: string;
+  added?: string;
+  removed?: string;
+  synced?: string;
+  pushed?: string;
+}
+
+// ---------- provider sign-in (host extension `x-agentlinkd.auth.*`) ----------
+
+/** Sign in/out of model providers through `dext auth login|logout`; dext's own
+ *  auth store holds the credential. Paste-only (no browser flow on the host). */
+export const AUTH_EXT = "x-agentlinkd.auth";
+
+export interface ProviderAuth {
+  id: string;
+  label: string;
+  model: string;
+  /** dext's auth marker: `auth` (OAuth/session), `key` (API key), `none`, … */
+  auth: string;
+  active: boolean;
+}
+
+export interface AuthStatusReply {
+  active: string | null;
+  providers: ProviderAuth[];
+  model_catalog: ModelGroup[];
+  /** Set after a login/logout: the provider that changed. */
+  changed?: string;
+}
+
 // ---------- self-edit (host extension `x-agentlinkd.ui.*` / `x-agentlinkd.host.*`) ----------
 
 /** Extension prefixes for DextUI editing itself. Advertised as capability

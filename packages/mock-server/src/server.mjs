@@ -53,7 +53,35 @@ const CAPABILITIES = [
   "dirs",
   // x-agentlinkd.flows.* over an in-memory store; run = a synthetic reply.
   "flows",
+  // x-agentlinkd.connectors.* over an in-memory registry (sync is a timer).
+  "connectors",
+  // x-agentlinkd.auth.* over an in-memory provider store.
+  "provider_auth",
 ];
+
+// In-memory connectors + provider auth so the picker's Connected section and
+// the Providers dialog are exercisable against the mock.
+const MOCK_CONNECTORS = new Map();
+const MOCK_AUTH = new Map([["mock-a", "auth"], ["mock-b", "none"]]);
+function mockConnectorsList(extra = {}) {
+  return {
+    connectors: [...MOCK_CONNECTORS.values()],
+    tools: { git: true, rclone: false, gh: false },
+    root: `${MOCK_HOME}/Connected`,
+    ...extra,
+  };
+}
+function mockAuthStatus(extra = {}) {
+  return {
+    active: "mock-a",
+    providers: [...MOCK_AUTH].map(([id, auth]) => ({ id, label: id === "mock-a" ? "Mock A" : "Mock B", model: id === "mock-a" ? "alpha" : "beta", auth, active: id === "mock-a" })),
+    model_catalog: MOCK_MODEL_CATALOG,
+    ...extra,
+  };
+}
+function broadcastControl(event, data) {
+  for (const c of clients) if (c.phase === "live") sendControl(c, event, data);
+}
 
 // In-memory flow store so the builder is exercisable without a host on disk.
 const MOCK_FLOWS = new Map();
@@ -867,6 +895,55 @@ function handleCommand(client, frame) {
       MOCK_DIRS.get(parent.path).dirs.push(name);
       MOCK_DIRS.get(parent.path).dirs.sort();
       sendControl(client, "x-agentlinkd.dirs.list", { ...mockDirsList(parent.path), created: `${parent.path}/${name}` });
+      return;
+    }
+
+    case "x-agentlinkd.connectors.list":
+      sendControl(client, "x-agentlinkd.connectors.list", mockConnectorsList());
+      return;
+    case "x-agentlinkd.connectors.add": {
+      const label = typeof frame.label === "string" ? frame.label.trim() : "";
+      if (!/^[A-Za-z0-9][A-Za-z0-9 ._()-]{0,79}$/.test(label) || typeof frame.remote !== "string") { sendError(client, "bad_request", "label: letters, numbers, spaces, . _ ( ) - (max 80)", frame.cmd); return; }
+      if ([...MOCK_CONNECTORS.values()].some((c) => c.label.toLowerCase() === label.toLowerCase())) { sendError(client, "exists", "a connector or folder with that name already exists", frame.cmd); return; }
+      if (frame.kind === "gdrive" || frame.kind === "dropbox") { sendError(client, "unsupported", "rclone is not installed on the host — install it to connect Drive or Dropbox", frame.cmd); return; }
+      const id = Math.random().toString(16).slice(2, 10).padEnd(8, "0");
+      const c = { id, kind: frame.kind, label, remote: frame.kind === "github" && !frame.remote.startsWith("https://") ? `https://github.com/${frame.remote}` : frame.remote, local: `${MOCK_HOME}/Connected/${label}`, created: Date.now(), has_secret: !!frame.secret, status: "syncing" };
+      MOCK_CONNECTORS.set(id, c);
+      if (!MOCK_DIRS.has(`${MOCK_HOME}/Connected`)) { MOCK_DIRS.set(`${MOCK_HOME}/Connected`, { dirs: [], files: 0 }); MOCK_DIRS.get(MOCK_HOME).dirs.push("Connected"); }
+      MOCK_DIRS.set(c.local, { dirs: [], files: 3 });
+      MOCK_DIRS.get(`${MOCK_HOME}/Connected`).dirs.push(label);
+      broadcastControl("x-agentlinkd.connectors.list", mockConnectorsList());
+      setTimeout(() => { c.status = "idle"; c.last_sync = Date.now(); sendControl(client, "x-agentlinkd.connectors.list", mockConnectorsList({ added: id })); }, 600);
+      return;
+    }
+    case "x-agentlinkd.connectors.sync":
+    case "x-agentlinkd.connectors.push": {
+      const c = MOCK_CONNECTORS.get(frame.id);
+      if (!c) { sendError(client, "no_connector", "unknown connector", frame.cmd); return; }
+      if (c.status === "syncing") { sendError(client, "busy", "that connector is already syncing", frame.cmd); return; }
+      c.status = "syncing";
+      broadcastControl("x-agentlinkd.connectors.list", mockConnectorsList());
+      const key = frame.cmd.endsWith(".push") ? "pushed" : "synced";
+      setTimeout(() => { c.status = "idle"; c.last_sync = Date.now(); sendControl(client, "x-agentlinkd.connectors.list", mockConnectorsList({ [key]: c.id })); }, 700);
+      return;
+    }
+    case "x-agentlinkd.connectors.remove": {
+      const c = MOCK_CONNECTORS.get(frame.id);
+      if (!c) { sendError(client, "no_connector", "unknown connector", frame.cmd); return; }
+      MOCK_CONNECTORS.delete(c.id);
+      sendControl(client, "x-agentlinkd.connectors.list", mockConnectorsList({ removed: c.id }));
+      return;
+    }
+
+    case "x-agentlinkd.auth.status":
+      sendControl(client, "x-agentlinkd.auth.status", mockAuthStatus());
+      return;
+    case "x-agentlinkd.auth.login":
+    case "x-agentlinkd.auth.logout": {
+      if (!MOCK_AUTH.has(frame.provider)) { sendError(client, "bad_request", "unknown provider", frame.cmd); return; }
+      if (frame.cmd.endsWith(".login") && (typeof frame.credential !== "string" || !frame.credential.trim())) { sendError(client, "bad_request", "paste the API key or token (single line)", frame.cmd); return; }
+      MOCK_AUTH.set(frame.provider, frame.cmd.endsWith(".login") ? "key" : "none");
+      broadcastControl("x-agentlinkd.auth.status", mockAuthStatus({ changed: frame.provider }));
       return;
     }
 

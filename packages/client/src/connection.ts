@@ -4,6 +4,8 @@
 import {
   cmd,
   isSessionRouted,
+  AUTH_EXT,
+  CONNECTORS_EXT,
   CREW_EXT,
   DIRS_EXT,
   FLOWS_EXT,
@@ -21,6 +23,7 @@ import {
   type FlowFile,
   type SessionMeta,
   type ThinkingEffort,
+  type ConnectorKind,
 } from "@dextui/protocol";
 import { SessionStore } from "./session.js";
 
@@ -308,6 +311,43 @@ export class Connection {
 
   dirsCreate(path: string, name: string): void {
     this.sendRaw(cmd(`${DIRS_EXT}.create`, { path, name }));
+  }
+
+  // ---------- connectors (host-prefixed until promoted) ----------
+
+  connectorsList(): void {
+    this.sendRaw(cmd(`${CONNECTORS_EXT}.list`, {}));
+  }
+
+  /** `secret`: git token, or the token JSON printed by `rclone authorize`. Sent once; never echoed. */
+  connectorsAdd(opts: { kind: ConnectorKind; label: string; remote: string; secret?: string }): void {
+    this.sendRaw(cmd(`${CONNECTORS_EXT}.add`, opts));
+  }
+
+  connectorsRemove(id: string, purge = false): void {
+    this.sendRaw(cmd(`${CONNECTORS_EXT}.remove`, { id, purge }));
+  }
+
+  connectorsSync(id: string): void {
+    this.sendRaw(cmd(`${CONNECTORS_EXT}.sync`, { id }));
+  }
+
+  connectorsPush(id: string, message?: string): void {
+    this.sendRaw(cmd(`${CONNECTORS_EXT}.push`, message ? { id, message } : { id }));
+  }
+
+  // ---------- provider sign-in (host-prefixed until promoted) ----------
+
+  authStatus(): void {
+    this.sendRaw(cmd(`${AUTH_EXT}.status`, {}));
+  }
+
+  authLogin(provider: string, credential: string): void {
+    this.sendRaw(cmd(`${AUTH_EXT}.login`, { provider, credential }));
+  }
+
+  authLogout(provider: string): void {
+    this.sendRaw(cmd(`${AUTH_EXT}.logout`, { provider }));
   }
 
   // ---------- pack file editing (host-prefixed until promoted) ----------
