@@ -49,6 +49,7 @@ test("listDirs: sorted folders only, dot-dirs and symlinks omitted, file count, 
   assert.equal(top.parent, null);
   assert.equal(top.root, base);
   assert.deepEqual(top.dirs.map((d) => d.name), ["Books", "Clients"], "no .secrets, no escape symlink");
+  assert.ok(top.dirs.every((d) => Number.isFinite(d.mtime)), "folders carry mtime for age and recent sort");
   assert.equal(top.files, 1);
   assert.equal(top.truncated, false);
   const books = listDirs(base, "Books");
@@ -125,6 +126,7 @@ test("host: dirs capability + hello_ok.home; list/create round-trip; refusals ar
   const top = await c.wait((e) => e.event === "x-agentlinkd.dirs.list");
   assert.deepEqual(top.data.dirs.map((d) => d.name), ["Books", "Clients"]);
   assert.equal(top.data.parent, null);
+  assert.ok(top.data.dirs.every((d) => Number.isFinite(d.mtime)), "mtime survives the wire");
 
   let mark = c.events.length;
   c.send("x-agentlinkd.dirs.list", { path: "/etc" });

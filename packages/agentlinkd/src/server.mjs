@@ -1746,7 +1746,7 @@ async function handleCommand(client, frame) {
         if (r.error) sendError(client, r.error === "exists" ? "exists" : r.error === "bad_name" ? "bad_request" : "bad_path", `cannot create folder: ${r.error}`, frame.cmd);
         else {
           const l = listDirs(DIRS_ROOT, frame.path);
-          sendControl(client, "x-agentlinkd.dirs.list", { ...(l.error ? { path: r.path, dirs: [], parent: null, root: DIRS_ROOT, files: 0, truncated: false } : l), created: r.path });
+          sendControl(client, "x-agentlinkd.dirs.list", { ...(l.error ? { path: r.path, rel: "", dirs: [], parent: null, root: DIRS_ROOT, files: 0, truncated: false } : l), created: r.path });
         }
         return;
       }

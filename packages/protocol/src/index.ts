@@ -347,7 +347,12 @@ export interface DirsListReply {
   rel: string;
   parent: string | null;
   root: string;
-  dirs: { name: string }[];
+  dirs: {
+    name: string;
+    /** Subfolder mtime, epoch ms — the picker ages folders (\"3d\") and
+     *  offers a recently-changed sort. Absent on unreadable folders. */
+    mtime?: number;
+  }[];
   /** Plain files in this folder (count only — the picker shows folders). */
   files: number;
   truncated: boolean;

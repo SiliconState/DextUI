@@ -49,19 +49,33 @@ export function createFolder(name: string): void {
   c.dirsCreate(folders.listing.path, name);
 }
 
-/** Choose the current folder: open a session there (or run the caller's hook). */
-export function pickCurrent(): void {
-  const l = folders.listing;
+/** Distinct live-session folders under the picker root, most recent first
+ *  (the rail's session order is recency). Shown as one-click chips. */
+export function recentFolders(limit = 4): string[] {
+  const home = app.conn?.home ?? "";
+  const out: string[] = [];
+  for (const s of app.sessions) {
+    if (s.status === "exited" || !s.cwd || !s.cwd.startsWith(home + "/")) continue;
+    if (!out.includes(s.cwd)) out.push(s.cwd);
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
+/** Choose a folder (`path`, default the listed one): open a session there
+ *  (or run the caller's hook). Recents chips pass their own path. */
+export function pickCurrent(path?: string): void {
   const c = app.conn;
-  if (!l || !c) return;
+  const p = path ?? folders.listing?.path;
+  if (!p || !c) return;
   const hook = folders.onPick;
   const seed = folders.seed;
   closeFolderPicker();
   if (hook) {
-    hook(l.path);
+    hook(p);
     return;
   }
-  const existing = app.sessions.find((s) => s.cwd === l.path && s.status !== "exited");
+  const existing = app.sessions.find((s) => s.cwd === p && s.status !== "exited");
   if (existing) {
     app.activeId = existing.id;
     if (existing.status === "cold") c.openSession({ id: existing.id });
@@ -72,7 +86,7 @@ export function pickCurrent(): void {
   if (seed) app.pendingDraft = seed;
   // Consumer packs write files (ledgers, invoices): auto-write from the start
   // so the first run is not refused for a missing permission.
-  c.openSession({ cwd: l.path, approval: "auto-write" });
+  c.openSession({ cwd: p, approval: "auto-write" });
 }
 
 /** Control-plane tap (wired from state.svelte.ts). */

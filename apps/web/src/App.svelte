@@ -516,71 +516,8 @@
       display: none;
     }
   }
-  .insp {
-    position: fixed;
-    top: 0;
-    right: 0;
-    bottom: 0;
-    z-index: 35;
-    width: min(30rem, 92vw);
-    display: flex;
-    flex-direction: column;
-    border-left: 1px solid var(--line);
-    background: var(--bg1);
-    box-shadow: -8px 0 40px rgba(0, 0, 0, 0.4);
-  }
-  .insp-head {
-    display: flex;
-    gap: 10px;
-    align-items: baseline;
-    padding: 8px 12px;
-    border-bottom: 1px solid var(--line);
-  }
-  .insp-acts {
-    margin-left: auto;
-  }
-  .insp-body {
-    flex: 1;
-    min-height: 0;
-    overflow: auto;
-    padding: 10px 12px;
-    white-space: pre-wrap;
-    color: var(--dim);
-    font-size: 12px;
-  }
-  .insp-scrim {
-    position: fixed;
-    inset: 0;
-    z-index: 34;
-    background: color-mix(in srgb, var(--bg) 55%, transparent);
-  }
-  .gallery-overlay {
-    width: min(56rem, 96vw);
-  }
-  .gallery-body {
-    white-space: normal;
-    color: var(--fg);
-    font-size: 13px;
-  }
-  .st-green {
-    color: var(--green);
-  }
-  .st-cyan {
-    color: var(--cyan);
-  }
-  .st-red {
-    color: var(--red);
-  }
-  .st-yellow {
-    color: var(--yellow);
-  }
-  .st-magenta {
-    color: var(--magenta);
-  }
-  .dim {
-    color: var(--dim);
-  }
-  .faint {
-    color: var(--faint);
-  }
+  /* Shared overlay chrome (.insp*, .gallery-*) and text utilities (.st-*,
+     .dim, .faint) live in app.css: FolderPicker, FlowCanvas and PackGallery
+     render these classes from their own components, where scoped styles
+     never applied. */
 </style>

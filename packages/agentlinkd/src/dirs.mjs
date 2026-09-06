@@ -35,7 +35,7 @@ export function confine(root, requested) {
   return { abs, rel };
 }
 
-/** `{ path, rel, parent, dirs: [{name, has_children?}], truncated }` or `{ error }`. */
+/** `{ path, rel, parent, dirs: [{name, mtime?}], truncated }` or `{ error }`. */
 export function listDirs(root, requested) {
   const c = confine(root, requested);
   if (c.error) return c;
@@ -46,18 +46,24 @@ export function listDirs(root, requested) {
   } catch {
     return { error: "unreadable" };
   }
-  const dirs = entries
+  const names = entries
     .filter((e) => e.isDirectory() && !e.isSymbolicLink() && !e.name.startsWith("."))
     .map((e) => e.name)
     .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
-  const truncated = dirs.length > MAX_ENTRIES;
+  const truncated = names.length > MAX_ENTRIES;
   const files = entries.filter((e) => e.isFile() && !e.name.startsWith(".")).length;
   return {
     path: c.abs,
     rel: c.rel,
     parent: c.abs === base ? null : path.dirname(c.abs),
     root: base,
-    dirs: dirs.slice(0, MAX_ENTRIES).map((name) => ({ name })),
+    dirs: names.slice(0, MAX_ENTRIES).map((name) => {
+      // One stat per listed folder (≤ MAX_ENTRIES): the picker shows ages
+      // ("3d") and offers a recently-changed sort. Unreadable → no mtime.
+      let mtime;
+      try { mtime = fs.statSync(path.join(c.abs, name)).mtimeMs; } catch { /* gone or unreadable */ }
+      return Number.isFinite(mtime) ? { name, mtime } : { name };
+    }),
     files,
     truncated,
   };
