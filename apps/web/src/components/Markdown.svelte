@@ -23,7 +23,7 @@
 
   const sessCwd = $derived(app.sessions.find((s) => s.id === sessionId)?.cwd ?? "");
 
-  const fileUrl = (href: string): string => fileUrlFor(sessionId, href, sessCwd);
+  const fileUrl = (href: string, opts?: { theme?: boolean }): string => fileUrlFor(sessionId, href, sessCwd, opts);
   const isHtmlArtifact = isHtmlPath;
 </script>
 
@@ -37,7 +37,7 @@
         <code class="ic">{tk.href}</code>
       {:else if isHtmlArtifact(tk.href)}
         <!-- HTML artifact: self-contained dashboard in a sandboxed opaque-origin frame -->
-        <HtmlArtifact src={fileUrl(tk.href)} name={tk.s || prettyPath(tk.href, sessCwd)} />
+        <HtmlArtifact src={fileUrl(tk.href, { theme: true })} name={tk.s || prettyPath(tk.href, sessCwd)} />
       {:else if broken[tk.href]}
         <span class="md-imgmiss" data-agent-id="markdown.image.missing">✗ image not found under the session workspace: {prettyPath(tk.href, sessCwd)}</span>
       {:else}

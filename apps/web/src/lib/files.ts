@@ -25,10 +25,18 @@ export function normalizeHref(href: string, cwd: string): string {
 }
 
 /** Path-shaped URL so an HTML artifact's nested relative assets resolve. */
-export function fileUrl(sessionId: string, href: string, cwd: string): string {
+export function fileUrl(
+  sessionId: string,
+  href: string,
+  cwd: string,
+  opts: { theme?: boolean } = {},
+): string {
   const token = typeof localStorage !== "undefined" ? (localStorage.getItem("dextui.token") ?? "") : "";
   const path = normalizeHref(href, cwd).split("/").map(encodeURIComponent).join("/");
-  return `/sessions/${encodeURIComponent(sessionId)}/file/${path}?t=${encodeURIComponent(token)}&theme=${currentResolvedTheme()}`;
+  // Only HTML embeds carry the theme param (artifact-theming contract); tagging
+  // <img> URLs too would refetch every image on each theme flip for nothing.
+  const theme = opts.theme ? `&theme=${currentResolvedTheme()}` : "";
+  return `/sessions/${encodeURIComponent(sessionId)}/file/${path}?t=${encodeURIComponent(token)}${theme}`;
 }
 
 export const isHtmlPath = (p: string): boolean => /\.html?$/i.test(p);

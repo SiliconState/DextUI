@@ -199,7 +199,7 @@
     {/if}
     {#if htmlOut}
       <div class="tool-artifact" data-agent-id={`tool.${block.call_id}.artifact`}>
-        <HtmlArtifact src={fileUrl(sessionId, htmlOut, sessCwd)} name={prettyPath(htmlOut, sessCwd)} />
+        <HtmlArtifact src={fileUrl(sessionId, htmlOut, sessCwd, { theme: true })} name={prettyPath(htmlOut, sessCwd)} />
       </div>
     {/if}
   </div>

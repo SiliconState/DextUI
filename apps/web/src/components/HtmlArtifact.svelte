@@ -72,7 +72,11 @@
   {#if mode === "code"}
     <pre class="art-code">{codeText}</pre>
   {:else if src}
-    <iframe sandbox="allow-scripts" loading="lazy" title={name} {src} class="fixed"></iframe>
+    <!-- Remount on theme flip: the fresh document re-fetches with the new
+         &theme= and can never sit on pre-contract bits after a deploy. -->
+    {#key currentResolvedTheme()}
+      <iframe sandbox="allow-scripts" loading="lazy" title={name} {src} class="fixed"></iframe>
+    {/key}
   {:else}
     <iframe bind:this={frame} sandbox="allow-scripts" title={name} srcdoc={doc} style:height={fitH ? `${fitH}px` : undefined} class:fit={fitH !== null}></iframe>
   {/if}
