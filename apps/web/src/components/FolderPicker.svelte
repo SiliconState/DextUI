@@ -47,13 +47,18 @@
     filter = "";
     cursor = -1;
   });
+  // Typing selects the first match; a cleared filter means "this folder".
   $effect(() => {
     void q;
-    cursor = -1;
+    cursor = q ? 0 : -1;
   });
-  // The filter is the primary affordance: focus it whenever the picker opens.
+  // Focus the filter on open and after every navigation — navigating swaps
+  // the row buttons, which drops focus to <body> and would kill key handling.
+  // rAF queues this after useDialog's own rAF focus (first focusable = the
+  // close button), so the filter wins.
   $effect(() => {
-    if (folders.open) filterEl?.focus();
+    void folders.listing;
+    if (folders.open) requestAnimationFrame(() => filterEl?.focus());
   });
 
   function useTarget(): void {
@@ -63,6 +68,7 @@
     if (listing) navigate(`${listing.path}/${d.name}`);
   }
   function onKey(e: KeyboardEvent) {
+    dlg.onKey(e); // Tab trap while the modal is open
     if (creating) {
       if (e.key === "Escape") { creating = false; e.stopPropagation(); }
       return;
@@ -75,7 +81,7 @@
     }
     if (e.key === "ArrowDown") { cursor = Math.min(visible.length - 1, cursor + 1); e.preventDefault(); }
     else if (e.key === "ArrowUp") { cursor = Math.max(-1, cursor - 1); e.preventDefault(); }
-    else if (e.key === "ArrowRight" && selected) { enter(selected); e.preventDefault(); }
+    else if (e.key === "ArrowRight" && selected && !q) { enter(selected); e.preventDefault(); } // (→ moves the filter caret while typing)
     else if (e.key === "ArrowLeft" && listing?.parent && !q) { navigate(listing.parent); e.preventDefault(); }
     else if (e.key === "Enter") { useTarget(); e.preventDefault(); }
     else if (e.key === "n" && !e.metaKey && !e.ctrlKey && !(e.target instanceof HTMLInputElement)) { creating = true; newName = ""; e.preventDefault(); }

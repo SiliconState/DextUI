@@ -53,6 +53,7 @@ export function createFolder(name: string): void {
  *  (the rail's session order is recency). Shown as one-click chips. */
 export function recentFolders(limit = 4): string[] {
   const home = app.conn?.home ?? "";
+  if (!home) return [];
   const out: string[] = [];
   for (const s of app.sessions) {
     if (s.status === "exited" || !s.cwd || !s.cwd.startsWith(home + "/")) continue;
