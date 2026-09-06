@@ -94,6 +94,12 @@ export function fold(journal) {
         blocks.push({ kind: "user", text: d.text });
         break;
       case "text_delta":
+        // Text ends any open thinking (providers may skip thinking_block_complete);
+        // client parity with SessionStore.appendStream.
+        if (openThinking) {
+          openThinking.complete = true;
+          openThinking = null;
+        }
         // Only append when the open text block is still the last block — tool
         // cards or markers in between must start a fresh block (client parity).
         if (openText && blocks[blocks.length - 1] === openText) openText.text += d;
@@ -110,6 +116,10 @@ export function fold(journal) {
         openText = null;
         break;
       case "thinking_delta":
+        if (openText) {
+          openText.complete = true;
+          openText = null;
+        }
         if (openThinking && blocks[blocks.length - 1] === openThinking) openThinking.text += d;
         else {
           openThinking = { kind: "thinking", text: d, complete: false };

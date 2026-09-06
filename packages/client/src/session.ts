@@ -139,6 +139,10 @@ export class SessionStore {
   }
 
   private appendStream(kind: "text" | "thinking", delta: string): void {
+    // A stream of one kind ends the other: providers may start text without an
+    // explicit thinking_block_complete, and a still-"live" thinking block would
+    // otherwise keep rendering its tail beside the reply until turn_end.
+    this.sealOpenOf(kind === "text" ? "thinking" : "text");
     const i = this.lastOpen(kind);
     if (i < 0) {
       this.pushBlock({ kind, text: delta, complete: false });
@@ -149,6 +153,7 @@ export class SessionStore {
   }
 
   private completeStream(kind: "text" | "thinking", full: string): void {
+    this.sealOpenOf(kind === "text" ? "thinking" : "text");
     const i = this.lastOpen(kind);
     if (i < 0) this.pushBlock({ kind, text: full, complete: true });
     else this.replaceBlock(i, { kind, text: full, complete: true });
@@ -437,9 +442,15 @@ export class SessionStore {
 
   /** End of turn (or interrupt): no streaming block may stay open. */
   private sealOpenBlocks(): void {
+    this.sealOpenOf("text");
+    this.sealOpenOf("thinking");
+  }
+
+  /** Seal the trailing open block of `kind`, if any (only the last block can be open). */
+  private sealOpenOf(kind: "text" | "thinking"): void {
     let blocks: ViewBlock[] | undefined;
     this.state.blocks.forEach((b, i) => {
-      if ((b.kind === "text" || b.kind === "thinking") && !b.complete) {
+      if (b.kind === kind && !b.complete) {
         blocks ??= this.state.blocks.slice();
         blocks[i] = { ...b, complete: true };
       }

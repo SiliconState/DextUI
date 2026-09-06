@@ -101,6 +101,9 @@ test("attention sort and cap", () => {
   const mk = (id, state, updated_ms = 0) => ({ id, state, updated_ms });
   const sorted = sortRuns([mk("run-000000000001", "completed"), mk("run-000000000002", "stopped"), mk("run-000000000003", "running"), mk("run-000000000004", "paused"), mk("run-000000000005", "failed")]);
   assert.deepEqual(sorted.map((r) => r.state), ["paused", "failed", "running", "completed", "stopped"]);
+  // A day-old failure ranks below live and pending runs.
+  const stale = sortRuns([mk("run-000000000001", "failed", 2 * 24 * 3600 * 1000), mk("run-000000000002", "pending"), mk("run-000000000003", "running")]);
+  assert.deepEqual(stale.map((r) => r.state), ["running", "pending", "failed"]);
   const many = Array.from({ length: 11 }, (_, i) => mk(`run-0000000000${String(i).padStart(2, "0")}`, i < 2 ? "running" : "completed", i));
   const capped = capRuns(many);
   assert.equal(capped.runs.length, 8);

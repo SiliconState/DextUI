@@ -56,15 +56,6 @@ function resolveDext() {
 const PORT = Number(argValue("port", process.env.AGENTLINKD_PORT ?? 8788));
 const TOKEN = argValue("token", process.env.AGENTLINKD_TOKEN ?? crypto.randomBytes(9).toString("base64url"));
 const DEXT_BIN = resolveDext();
-
-// crew binary: --crew / CREW_BIN / PATH. Absent → no `crew` capability, no crew UI.
-function resolveCrew() {
-  const explicit = argValue("crew", process.env.CREW_BIN);
-  if (explicit) return fs.existsSync(explicit) ? explicit : null;
-  const onPath = (process.env.PATH ?? "").split(path.delimiter).some((d) => d && fs.existsSync(path.join(d, "crew")));
-  return onPath ? "crew" : null;
-}
-const CREW_BIN = resolveCrew();
 const DEXT_HOME = process.env.DEXT_HOME ? path.resolve(process.env.DEXT_HOME) : path.join(process.env.HOME ?? "", ".dext");
 const DEFAULT_CWD = path.resolve(argValue("cwd", process.cwd()));
 const DEFAULT_APPROVAL = argValue("approval", process.env.DEXT_APPROVAL ?? "auto-read");
@@ -198,7 +189,8 @@ if (DEFAULT_MODEL.provider && DEFAULT_MODEL.model) {
 // Real capabilities only. No "steering" (one-shot children have no stdin
 // channel mid-turn) and no "approvals" (the interactive round-trip needs the
 // upstream dext PermissionRequested bridge); dext's own --approval profile
-// governs tool policy instead.
+// governs tool policy instead. `crew` is appended once the pack catalog has
+// located the binary (below).
 const CAPABILITIES = [
   "multi_session",
   "interrupt",
@@ -219,8 +211,6 @@ const CAPABILITIES = [
   "session_manage",
   // hello_ok.packs + /pack run|list|create|inspect + GET /packs + packs.changed.
   "packs",
-  // hello_ok.crews + x-agentlinkd.crew.{open,close,tail,file,stop,resume}.
-  ...(CREW_BIN ? ["crew"] : []),
 ];
 
 // Host-handled slash commands, advertised in hello_ok so the composer's
@@ -243,6 +233,26 @@ let PACKS = buildCatalog(dextOutput(["pack", "list", "--verbose"]), { approval: 
 let packRefresh = null;
 let packRefreshDirty = false;
 let packWatchTimer = null;
+
+// crew binary: --crew / CREW_BIN, else the crew pack's own bin/ from the
+// catalog (a systemd unit's PATH will not have it), else PATH. Absent → no
+// `crew` capability, no crew UI.
+function resolveCrew() {
+  const explicit = argValue("crew", process.env.CREW_BIN);
+  if (explicit) return fs.existsSync(explicit) ? explicit : null;
+  const pack = PACKS.find((p) => p.name === "crew");
+  if (pack?.path) {
+    const bin = path.join(pack.path, "bin", "crew");
+    if (fs.existsSync(bin)) return bin;
+  }
+  for (const d of (process.env.PATH ?? "").split(path.delimiter)) {
+    if (d && fs.existsSync(path.join(d, "crew"))) return path.join(d, "crew");
+  }
+  return null;
+}
+const CREW_BIN = resolveCrew();
+// hello_ok.crews + x-agentlinkd.crew.{open,close,tail,file,stop,resume}.
+if (CREW_BIN) CAPABILITIES.push("crew");
 
 function refreshPacks() {
   if (packRefresh) {

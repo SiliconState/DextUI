@@ -140,11 +140,19 @@ export function projectManifest(m, { now = Date.now(), mtimeMs = now, stateOf = 
   return { summary, detail, chainDir };
 }
 
-const RANK = { paused: 0, failed: 1, running: 2, pending: 3, completed: 4, stopped: 5 };
+const RANK = { paused: 0, failed: 1, running: 2, pending: 3, completed: 5, stopped: 6 };
+const STALE_FAIL_MS = 24 * 60 * 60 * 1000;
 
-/** Attention order: paused → failed → running → pending → done → stopped; fresher first within a rank. */
+function rankOf(r) {
+  // A failure is attention only while fresh; an old one must never push a live
+  // run off the capped list (real data: 33 runs, 25 of them stale failures).
+  if (r.state === "failed" && r.updated_ms > STALE_FAIL_MS) return 4;
+  return RANK[r.state] ?? 9;
+}
+
+/** Attention order: paused → fresh failed → running → pending → stale failed → done → stopped; fresher first within a rank. */
 export function sortRuns(list) {
-  return [...list].sort((a, b) => (RANK[a.state] ?? 9) - (RANK[b.state] ?? 9) || a.updated_ms - b.updated_ms || (a.id < b.id ? -1 : 1));
+  return [...list].sort((a, b) => rankOf(a) - rankOf(b) || a.updated_ms - b.updated_ms || (a.id < b.id ? -1 : 1));
 }
 
 /** `{ runs, omitted }` capped at SUMMARY_CAP; attention order means terminal runs drop first. */
@@ -255,7 +263,14 @@ export function createCrewAdapter({ roots = [], crewBin = "crew", dextBin, env =
       return;
     }
     for (const e of entries) {
-      if (!e.isDirectory() || !RUN_ID_RE.test(e.name)) continue;
+      if (!e.isDirectory()) continue;
+      // Two layouts: `<cwd>/.crew/runs/run-*` (explicit --runs-dir) and crew's
+      // default `~/.dext/crew/runs/project-<hash>/run-*` — one level deeper.
+      if (/^project-[a-f0-9]{16}$/.test(e.name)) {
+        scanRoot(path.join(root, e.name), seen, now);
+        continue;
+      }
+      if (!RUN_ID_RE.test(e.name)) continue;
       const dir = path.join(root, e.name);
       const file = path.join(dir, "manifest.json");
       let st;

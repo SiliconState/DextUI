@@ -160,7 +160,7 @@
     padding-bottom: 2px;
   }
   .md-p {
-    white-space: pre-wrap;
+    white-space: pre-line;
     overflow-wrap: break-word;
   }
   .ic {
@@ -235,11 +235,9 @@
     gap: 2px;
     list-style: none;
   }
-  /* Content bullets carry the reply lane's accent so they never read as
-     thinking markers (which are faint `•` on a tinted background). */
   ul.md-list > li::before {
     content: "• ";
-    color: var(--blue);
+    color: var(--faint);
   }
   ol.md-list {
     counter-reset: md;
@@ -249,7 +247,7 @@
   }
   ol.md-list > li::before {
     content: counter(md) ". ";
-    color: var(--blue);
+    color: var(--faint);
   }
   .md-list .md-list {
     margin-top: 2px;
