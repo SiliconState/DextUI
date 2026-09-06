@@ -4,7 +4,7 @@
   import type { SessionStore } from "@dextui/client";
   import type { ThinkingEffort } from "@dextui/protocol";
   import { app, toggleTheme, rePair, toggleSidebar, queueTotal, jumpToOldestPending, toggleNotify } from "../lib/state.svelte";
-  import { crew, crewLive, crewTop, crewDur, openRun, shortRun } from "../lib/crew.svelte";
+  import { crew, crewLive, crewDur, crewAge, openRun, shortRun } from "../lib/crew.svelte";
   import { fmtTokens, fmtElapsed, prettyPath } from "../lib/markdown";
   import { useSession } from "../lib/useSession.svelte";
 
@@ -19,7 +19,8 @@
   const liveRuns = $derived(crewLive());
   const ticker = $derived.by(() => {
     if (liveRuns.length === 0) return null;
-    const top = crewTop() ?? liveRuns[0]!;
+    // Host order is attention order, so the first live run is the one to open.
+    const top = liveRuns[0]!;
     const c = liveRuns.reduce((n, r) => ({ run: n.run + r.counts.run, done: n.done + r.counts.done, fail: n.fail + r.counts.fail, paused: n.paused + (r.escalation ? 1 : 0) }), { run: 0, done: 0, fail: 0, paused: 0 });
     return { top, c, more: liveRuns.length - 1 };
   });
@@ -154,7 +155,7 @@
     >
       <span class="tick-full">crew {shortRun(ticker.top.id)}{ticker.more ? `+${ticker.more}` : ""}
         {#if ticker.c.paused}⚠{ticker.c.paused}{/if}{#if ticker.c.run} ●{ticker.c.run}{/if}{#if ticker.c.done} ✓{ticker.c.done}{/if}{#if ticker.c.fail} ✗{ticker.c.fail}{/if}
-        · {(void now, crewDur(ticker.top.age_ms + (Date.now() - now)))}</span>
+        · {crewDur(crewAge(ticker.top, now))}</span>
       <span class="tick-min">crew {ticker.c.paused ? `⚠${ticker.c.paused}` : `●${ticker.c.run}`}</span>
     </button>
   {/if}

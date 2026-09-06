@@ -415,6 +415,7 @@ function makeSession({ cwd, approval }) {
   };
   sessions.set(id, s);
   persistIndex();
+  crewRootFor(cwd);
   return s;
 }
 
@@ -610,6 +611,7 @@ function restoreSessions() {
     };
     sessions.set(s.id, s);
     restoreJournal(s);
+    crewRootFor(s.cwd);
     if (!s.cleanup) terminateUnfinishedTurn(s);
     s.indexEntry = JSON.stringify(indexEntryOf(s));
   }

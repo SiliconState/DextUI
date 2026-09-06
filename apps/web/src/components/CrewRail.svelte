@@ -3,8 +3,8 @@
   // Global (runs outlive sessions), attention-sorted by the host, 3 visible +
   // "n more", unmounts when empty. Observation only: the one decision
   // (escalation) also lives in the queue as a row — this list never badges.
-  import { crew, crewEnabled, crewDur, openRun, shortRun, toggleCrewRail, GLYPH } from "../lib/crew.svelte";
-  import type { CrewRunSummary } from "@dextui/protocol";
+  import { crew, crewEnabled, crewDur, crewAge, crewIdle, openRun, shortRun, toggleCrewRail, GLYPH } from "../lib/crew.svelte";
+  import type { CrewRun } from "../lib/crew.svelte";
 
   let { onPick }: { onPick?: () => void } = $props();
 
@@ -12,7 +12,7 @@
   const enabled = $derived(crewEnabled() && crew.runs.length > 0);
   const visible = $derived(crew.railAll ? crew.runs : crew.runs.slice(0, CAP));
   const hidden = $derived(crew.runs.length - visible.length + crew.omitted);
-  const live = $derived(crew.runs.filter((r) => r.status === "running" || r.status === "pending").length);
+  const live = $derived(crew.runs.filter((r) => r.status !== "completed" && r.state !== "stopped" && r.status !== "failed").length);
 
   let now = $state(Date.now());
   $effect(() => {
@@ -25,11 +25,10 @@
     };
   });
 
-  function meta(r: CrewRunSummary): string {
-    void now;
+  function meta(r: CrewRun): string {
     const c = r.counts;
-    if (r.status === "paused") return `awaiting answer · ${crewDur(r.updated_ms)}`;
-    if (r.status === "running" || r.status === "pending") return `${c.done}/${c.total} · ${crewDur(r.age_ms)}`;
+    if (r.status === "paused") return `awaiting answer · ${crewDur(crewIdle(r, now))}`;
+    if (r.status === "running" || r.status === "pending") return `${c.done}/${c.total} · ${crewDur(crewAge(r, now))}`;
     if (r.state === "stopped") return `stopped · ${c.done}/${c.total}`;
     if (r.status === "failed") return `${c.fail} failed · ${c.done}/${c.total}`;
     return `${c.done}/${c.total} · ${crewDur(r.duration_ms)}`;

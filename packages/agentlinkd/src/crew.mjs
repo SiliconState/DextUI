@@ -240,7 +240,8 @@ export function createCrewAdapter({ roots = [], crewBin = "crew", dextBin, env =
     const e = { ...env, DEXT_NO_TUI: "1" };
     if (dextBin) {
       e.DEXT_BIN = dextBin;
-      e.PATH = `${path.dirname(dextBin)}${path.delimiter}${e.PATH ?? ""}`;
+      // Only an absolute binary may extend PATH: a bare "dext" would put "." first.
+      if (path.isAbsolute(dextBin)) e.PATH = `${path.dirname(dextBin)}${path.delimiter}${e.PATH ?? ""}`;
     }
     return e;
   }
@@ -274,7 +275,7 @@ export function createCrewAdapter({ roots = [], crewBin = "crew", dextBin, env =
         if (!read) continue;
         const proj = projectManifest(read.json, { now, mtimeMs: read.mtimeMs, stateOf: readState, files: chainFiles(read.json.chainDir) });
         if (!proj || proj.summary.id !== e.name) continue;
-        runs.set(e.name, { dir, manifest: read.json, mtimeMs: read.mtimeMs, ...proj });
+        runs.set(e.name, { dir, manifest: read.json, mtimeMs: read.mtimeMs, detailKey: prev?.detailKey, ...proj });
       } catch (err) {
         log(`crew: skipping ${file}: ${err.message}`);
       }
@@ -288,12 +289,20 @@ export function createCrewAdapter({ roots = [], crewBin = "crew", dextBin, env =
     for (const id of [...runs.keys()]) if (!seen.has(id)) runs.delete(id);
     // Ages tick even without disk changes; compare on the parts that matter.
     const payload = summaries();
-    const key = JSON.stringify(payload.runs.map((r) => [r.id, r.state, r.counts, r.escalation?.question ?? null]));
+    const key = JSON.stringify([payload.omitted, payload.runs.map((r) => [r.id, r.state, r.counts, r.task, r.escalation?.question ?? null])]);
     if (key !== lastPayload) {
       lastPayload = key;
       onChanged?.(payload);
     }
-    for (const [id, r] of runs) if (isOpen(id)) onRunChanged?.(id, r.detail);
+    // Detail pushes only when the projection itself moved (timing fields excluded).
+    for (const [id, r] of runs) {
+      if (!isOpen(id)) continue;
+      const { age_ms, updated_ms, ...rest } = r.detail;
+      const dkey = JSON.stringify(rest);
+      if (dkey === r.detailKey) continue;
+      r.detailKey = dkey;
+      onRunChanged?.(id, r.detail);
+    }
   }
 
   function schedule() {
@@ -304,25 +313,44 @@ export function createCrewAdapter({ roots = [], crewBin = "crew", dextBin, env =
     }, DEBOUNCE_MS);
   }
 
+  function watchDir(target, opts, handler) {
+    const w = fs.watch(target, { persistent: false, ...opts }, handler);
+    w.on("error", () => {});
+    return w;
+  }
+
   function addRoot(root) {
     root = path.resolve(root);
     if (!roots.includes(root)) roots.push(root);
     if (watched.has(root)) return;
-    // Watch the parent when the runs dir does not exist yet so a first
-    // `crew launch` in this project is noticed without a restart.
-    const target = fs.existsSync(root) ? root : path.dirname(root);
-    if (!fs.existsSync(target) || watched.has(target)) return;
     try {
-      const w = fs.watch(target, { recursive: true, persistent: false }, (_ev, name) => {
-        // Worker logs stream at high rate and never change a projection by themselves.
-        if (typeof name === "string" && name.endsWith("live.log")) return;
+      if (fs.existsSync(root)) {
+        watchDir(root, { recursive: true }, (_ev, name) => {
+          // Worker logs stream at high rate and never change a projection by themselves.
+          if (typeof name === "string" && name.endsWith("live.log")) return;
+          schedule();
+        });
+        watched.add(root);
         schedule();
+        return;
+      }
+      // The runs dir does not exist yet: watch the nearest existing ancestor
+      // (non-recursively, so a big project tree costs nothing) and upgrade to
+      // the real watch once a first `crew launch` creates it.
+      let anc = path.dirname(root);
+      while (!fs.existsSync(anc) && path.dirname(anc) !== anc) anc = path.dirname(anc);
+      const key = `${anc}\0${root}`;
+      if (watched.has(key)) return;
+      const w = watchDir(anc, {}, () => {
+        if (fs.existsSync(root)) {
+          w.close();
+          watched.delete(key);
+          addRoot(root);
+        }
       });
-      w.on("error", () => {});
-      watched.add(target);
-      if (target === root) watched.add(root);
+      watched.add(key);
     } catch (err) {
-      log(`crew: not watching ${target}: ${err.message}; heartbeat fallback`);
+      log(`crew: not watching ${root}: ${err.message}; heartbeat fallback`);
       if (!heartbeat) {
         heartbeat = setInterval(schedule, HEARTBEAT_MS);
         heartbeat.unref();
@@ -393,13 +421,14 @@ export function createCrewAdapter({ roots = [], crewBin = "crew", dextBin, env =
     const r = runs.get(id);
     if (!r) return { ok: false, message: "unknown run" };
     if (!["running", "pending", "paused"].includes(r.summary.status)) return { ok: false, message: `run is ${r.summary.status}` };
-    const res = await crew(["stop", id], r.summary.cwd || undefined);
+    // Address the run by manifest path: independent of which runs root it lives in.
+    const res = await crew(["stop", path.join(r.dir, "manifest.json"), "--cwd", r.summary.cwd || r.dir], r.summary.cwd || undefined);
     schedule();
     return { ok: res.ok, message: res.ok ? "stopped" : res.err.slice(0, 200) };
   }
 
   /** crew's two-step contract: record the answer, then execute the printed
-   *  `crew run --manifest …` (spawned detached so the host never blocks). */
+   *  `crew run --manifest … --cwd …` (spawned detached so the host never blocks). */
   async function resume(id, answer) {
     const r = runs.get(id);
     if (!r) return { ok: false, code: "no_run", message: "unknown run" };
@@ -407,13 +436,13 @@ export function createCrewAdapter({ roots = [], crewBin = "crew", dextBin, env =
     if (inflight.has(id)) return { ok: false, code: "crew_already_answered", message: "another client already answered" };
     inflight.add(id);
     try {
-      const res = await crew(["resume", id, "--answer", answer], r.summary.cwd || undefined);
+      const manifest = path.join(r.dir, "manifest.json");
+      const cwd = r.summary.cwd || r.dir;
+      const res = await crew(["resume", manifest, "--answer", answer, "--cwd", cwd], cwd);
       if (!res.ok) return { ok: false, code: "crew_failed", message: res.err.slice(0, 200) };
-      const m = /crew\s+run\s+--manifest\s+(\S+)/.exec(res.out);
-      const manifest = m ? m[1].replace(/^['"]|['"]$/g, "") : path.join(r.dir, "manifest.json");
-      const args = ["run", "--manifest", manifest];
+      const args = ["run", "--manifest", manifest, "--cwd", cwd];
       if (dextBin) args.push("--dext", dextBin);
-      const child = spawn(crewBin, args, { cwd: r.summary.cwd || undefined, env: childEnv(), detached: true, stdio: "ignore" });
+      const child = spawn(crewBin, args, { cwd, env: childEnv(), detached: true, stdio: "ignore" });
       child.on("error", (err) => log(`crew: run --manifest failed to spawn: ${err.message}`));
       child.unref();
       schedule();

@@ -3,7 +3,7 @@
 import { Connection, type ConnPhase, type PendingPermission } from "@dextui/client";
 import type { Envelope, HostCommand, ModelGroup, PackInfo, SessionMeta, ThinkingEffort } from "@dextui/protocol";
 import { notifyEvent } from "./notify";
-import { acceptCrews, crewEscalations, onCrewControl } from "./crew.svelte";
+import { acceptCrews, crewEscalations, onCrewControl, openRun } from "./crew.svelte";
 
 export type Theme = "dark" | "light" | "system";
 export type NotifyState = "on" | "off" | "blocked";
@@ -613,7 +613,8 @@ export function respondGlobal(
 }
 
 /** Badge / notification-click target: open the session holding the oldest
- *  pending approval (a count-only session when nothing fuller exists). */
+ *  pending approval (a count-only session when nothing fuller exists), else
+ *  the run sheet of the first crew escalation. */
 export function jumpToOldestPending(): void {
   const first = queue.entries[0];
   if (first) {
@@ -621,7 +622,12 @@ export function jumpToOldestPending(): void {
     return;
   }
   const count = queue.counts[0];
-  if (count) activate(count.id);
+  if (count) {
+    activate(count.id);
+    return;
+  }
+  const esc = crewEscalations()[0];
+  if (esc) openRun(esc.id);
 }
 
 /** Cycle the active session within index order (Ctrl+[ / Ctrl+]). */

@@ -28,7 +28,7 @@
   import Shortcuts from "./components/Shortcuts.svelte";
   import PackGallery from "./components/PackGallery.svelte";
   import CrewRun from "./components/CrewRun.svelte";
-  import { crew, closeRun, crewLive, crewTop, openRun } from "./lib/crew.svelte";
+  import { crew, closeRun, crewLive, openRun } from "./lib/crew.svelte";
 
   let tokenInput = $state("");
   let inspect: ViewBlock | null = $state(null);
@@ -54,6 +54,7 @@
   // Crew run sheet: same overlay contract; Esc closes it before the gallery.
   const dlgCrew = useDialog(() => !!crew.openId);
   const crewLiveCount = $derived(crewLive().length);
+  const crewLiveTop = $derived(crewLive()[0]);
 
   function connectSubmit(e: SubmitEvent) {
     e.preventDefault();
@@ -303,8 +304,8 @@
             >⚠ {pendingTotal}</button
             >
           {/if}
-          {#if crewLiveCount > 0}
-            <button class="act st-cyan" data-agent-id="status.crew" data-state={crewTop()?.state ?? "running"} onclick={() => openRun(crewTop()!.id)}>crew ●{crewLiveCount}</button>
+          {#if crewLiveTop}
+            <button class="act st-cyan" data-agent-id="status.crew" data-state={crewLiveTop.state} onclick={() => openRun(crewLiveTop.id)}>crew {crewLiveTop.status === "paused" ? "⚠" : "●"}{crewLiveCount}</button>
           {/if}
           <span class={app.phase === "live" ? "st-green" : app.phase === "failed" ? "st-red" : "st-yellow pulse"}>●</span>
           <span class="dim">{app.phase}{app.phaseDetail ? ` · ${app.phaseDetail}` : ""}</span>

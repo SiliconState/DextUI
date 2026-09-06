@@ -30,6 +30,19 @@
       ],
     },
     {
+      name: "crew run sheet",
+      rows: [
+        ["rail / queue [open] / ticker", "open a run sheet (hosts with crew)"],
+        ["j / k", "next / previous worker"],
+        ["J / K", "next / previous step group"],
+        ["⏎", "show this worker's log tail (one pane; ⏎ again hides)"],
+        ["r", "refresh the tail"],
+        ["x, then y", "stop the run (two-tap confirm; live runs only)"],
+        ["a", "focus the answer box (paused runs only) · ⏎ submits"],
+        ["esc", "leave the answer box, then close the sheet"],
+      ],
+    },
+    {
       name: "compose",
       rows: [
         ["⏎", "send (steer when supported)"],

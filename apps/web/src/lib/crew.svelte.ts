@@ -16,12 +16,15 @@ import type {
 import { CREW_EXT } from "@dextui/protocol";
 import { app, pushToast } from "./state.svelte";
 
+export type CrewRun = CrewRunSummary & { /** client receive time; ages tick from here */ at: number };
+
 export const crew = $state({
-  runs: [] as CrewRunSummary[],
+  runs: [] as CrewRun[],
   omitted: 0,
   /** Sheet subscription: id first (open sent), detail when the host answers. */
   openId: "",
   open: null as CrewRunDetail | null,
+  openAt: 0,
   /** The one tail pane per sheet. */
   tailWorker: "",
   tail: null as (CrewTailReply & { at: number }) | null,
@@ -39,18 +42,26 @@ export function crewEnabled(): boolean {
 }
 
 /** Open decisions: paused runs with an escalation (never `paused_reason` alone). */
-export function crewEscalations(): CrewRunSummary[] {
+export function crewEscalations(): CrewRun[] {
   return crew.runs.filter((r) => r.status === "paused" && !!r.escalation);
 }
 
 /** Runs that justify a ticker: anything not terminal. */
-export function crewLive(): CrewRunSummary[] {
+export function crewLive(): CrewRun[] {
   return crew.runs.filter((r) => r.status === "running" || r.status === "pending" || r.status === "paused");
 }
 
 /** Host order is attention order (paused → failed → running → …). */
-export function crewTop(): CrewRunSummary | undefined {
+export function crewTop(): CrewRun | undefined {
   return crew.runs[0];
+}
+
+/** Host ages are frozen at push time; add the client-side elapsed since receipt. */
+export function crewAge(r: { age_ms: number; at?: number }, now: number): number {
+  return r.age_ms + (r.at ? Math.max(0, now - r.at) : 0);
+}
+export function crewIdle(r: { updated_ms: number; at?: number }, now: number): number {
+  return r.updated_ms + (r.at ? Math.max(0, now - r.at) : 0);
 }
 
 export function toggleCrewRail(): void {
@@ -59,7 +70,7 @@ export function toggleCrewRail(): void {
 }
 
 export function shortRun(id: string): string {
-  return id.replace(/^run-/, "run-").slice(0, 8);
+  return id.slice(0, 8); // "run-8ee9"
 }
 
 export function crewDur(ms: number | undefined): string {
@@ -108,8 +119,9 @@ function notifyEscalation(r: CrewRunSummary): void {
 
 /** Wire boundary for hello_ok.crews and every x-agentlinkd.crew.changed. */
 export function acceptCrews(payload: CrewsPayload): void {
+  const at = Date.now();
   const runs = (payload?.runs ?? []).filter((r) => r && typeof r.id === "string");
-  crew.runs = runs.map((r) => ({ ...r, counts: { ...r.counts }, ...(r.escalation ? { escalation: { ...r.escalation } } : {}) }));
+  crew.runs = runs.map((r) => ({ ...r, at, counts: { ...r.counts }, ...(r.escalation ? { escalation: { ...r.escalation } } : {}) }));
   crew.omitted = payload?.omitted ?? 0;
   for (const r of crew.runs) {
     if (r.status === "paused" && r.escalation) notifyEscalation(r);
@@ -120,6 +132,10 @@ export function acceptCrews(payload: CrewsPayload): void {
   if (crew.openId && crew.open && !crew.runs.some((r) => r.id === crew.openId) && crew.omitted === 0) {
     crew.open = { ...crew.open, status: "failed", state: "stopped", paused_reason: "run directory removed" };
   }
+  // A resume/stop we were waiting on has landed as state; unstick the buttons.
+  const open = crew.runs.find((r) => r.id === crew.openId);
+  if (open && crew.answering && open.status !== "paused") crew.answering = false;
+  if (open && crew.stopping && open.status !== "running" && open.status !== "pending") crew.stopping = false;
 }
 
 export function openRun(id: string): void {
@@ -200,7 +216,10 @@ export function onCrewControl(env: Envelope): void {
   switch (env.event) {
     case `${CREW_EXT}.run`: {
       const d = env.data as CrewRunDetail;
-      if (d && d.id === crew.openId) crew.open = d;
+      if (d && d.id === crew.openId) {
+        crew.open = d;
+        crew.openAt = Date.now();
+      }
       return;
     }
     case `${CREW_EXT}.tail`: {
@@ -226,10 +245,19 @@ export function onCrewControl(env: Envelope): void {
       pushToast(d.ok ? "ok" : "err", `crew ${shortRun(d.run)} · ${d.verb} ${d.ok ? "✓" : "✗"}${d.message ? ` · ${d.message}` : ""}`);
       return;
     }
+    case "hello_ok": {
+      // A reconnect (host restart or not) drops the host's per-client open set;
+      // re-subscribe so an open sheet keeps receiving detail.
+      if (crew.openId) app.conn?.crewOpen(crew.openId);
+      return;
+    }
     case "error": {
+      // Control errors carry no correlation id: any error while a verb is in
+      // flight releases the button rather than leaving it stuck forever.
       const d = env.data as { code?: string };
-      if (d?.code === "crew_already_answered" || d?.code === "crew_failed") crew.answering = false;
-      if (d?.code === "no_log") crew.tailPending = false;
+      if (crew.answering) crew.answering = false;
+      if (crew.stopping) crew.stopping = false;
+      if (d?.code === "no_log" || d?.code === "no_worker" || d?.code === "no_run") crew.tailPending = false;
       return;
     }
     default:

@@ -3,7 +3,7 @@
   // oldest first, at the top of the rail. Compact rows only — the full card
   // (diff + note) still lives in the active session's approval dock.
   import { queue, queueTotal, activate, respondGlobal } from "../lib/state.svelte";
-  import { crewEscalations, crewDur, openRun, shortRun } from "../lib/crew.svelte";
+  import { crewEscalations, crewDur, crewIdle, openRun, shortRun } from "../lib/crew.svelte";
 
   let { onPick }: { onPick?: () => void } = $props();
 
@@ -106,7 +106,7 @@
             <span class="st-yellow">⚠</span>
             <span class="q-tool">crew escalation</span>
             <span class="dim truncate" title={r.escalation?.question}>{r.escalation?.label ?? r.task}</span>
-            <span class="faint q-meta">{shortRun(r.id)} · {crewDur(r.updated_ms)}</span>
+            <span class="faint q-meta">{shortRun(r.id)} · {(void now, crewDur(crewIdle(r, Date.now())))}</span>
             <button class="act accent" data-agent-id={`queue.crew.${r.id}.open`} onclick={() => goRun(r.id)}>[open]</button>
           </div>
         {/each}

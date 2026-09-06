@@ -230,7 +230,20 @@ export function parseMarkdown(src: string): MdBlock[] {
       buf.push(l);
       i++;
     }
-    out.push({ kind: "para", inline: parseInline(buf.join("\n")) });
+    // Markdown soft breaks join with a space (what the TUI's renderer does);
+    // a hard break survives only via trailing two spaces or a backslash.
+    // Without this, soft-wrapped prose renders as ragged one-line rows —
+    // indistinguishable from a thinking block.
+    let joined = "";
+    for (const l of buf) {
+      if (!joined) {
+        joined = l;
+        continue;
+      }
+      if (/(  |\\)$/.test(joined)) joined = joined.replace(/(  |\\)$/, "") + "\n" + l.trimStart();
+      else joined += " " + l.trim();
+    }
+    out.push({ kind: "para", inline: parseInline(joined) });
   }
   return out;
 }

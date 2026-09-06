@@ -4,7 +4,7 @@
   // tail pane; actions conditional on run state (stop while live, answer
   // while paused, deliverables + tails always). Keys are scoped to the dialog.
   import type { CrewGroup, CrewWorker } from "@dextui/protocol";
-  import { crew, crewDur, closeRun, requestTail, refreshTail, openFile, stopRun, answerRun, shortRun, GLYPH } from "../lib/crew.svelte";
+  import { crew, crewDur, crewAge, closeRun, requestTail, refreshTail, openFile, stopRun, answerRun, shortRun, GLYPH } from "../lib/crew.svelte";
 
   let { onClose }: { onClose?: () => void } = $props();
 
@@ -43,7 +43,7 @@
   });
 
   $effect(() => {
-    if (!run || run.counts.run === 0) return;
+    if (!run || !live) return;
     const t = setInterval(() => {
       now = Date.now();
     }, 1000);
@@ -54,9 +54,13 @@
 
   const RANK: Record<string, number> = { failed: 0, running: 1, paused: 2, pending: 3, completed: 4 };
 
+  // Default expansion: small groups open; big groups open only while they hold
+  // attention (a failure, a live or paused worker) — the attention sort plus
+  // the completed fold keeps such a group to a handful of rows, so a failed
+  // worker is visible without scrolling even in a 14-wide fanout.
   function isExpanded(g: CrewGroup): boolean {
     if (g.index in expanded) return expanded[g.index]!;
-    if (g.workers.length > GROUP_COLLAPSE_AT) return false;
+    if (g.workers.length > GROUP_COLLAPSE_AT) return g.counts.fail + g.counts.run + g.counts.paused > 0;
     return g.index < GROUP_EXPANDED_CAP || g.status !== "completed";
   }
 
@@ -93,11 +97,14 @@
   }
 
   function dur(w: CrewWorker): string {
-    if (w.status === "running") {
-      void now;
-      return w.started_at ? crewDur(Date.now() - w.started_at) : "…";
-    }
+    if (w.status === "running") return w.started_at ? crewDur(now - w.started_at) : "…";
     return w.duration_ms !== undefined ? crewDur(w.duration_ms) : "—";
+  }
+
+  function headClock(): string {
+    if (!run) return "";
+    if (run.status === "running" || run.status === "pending" || run.status === "paused") return crewDur(crewAge({ age_ms: run.age_ms, at: crew.openAt }, now));
+    return crewDur(run.duration_ms);
   }
 
   function base(p: string): string {
@@ -149,6 +156,11 @@
       if (e.key === "Enter" && !e.shiftKey && t === answerEl) {
         e.preventDefault();
         submit();
+      } else if (e.key === "Escape" && t === answerEl && answer.trim()) {
+        // A typed answer is not thrown away by Esc: leave the field first,
+        // a second Esc closes the sheet (the draft survives while it is open).
+        e.preventDefault();
+        answerEl?.blur();
       }
       return;
     }
@@ -191,7 +203,7 @@
     <div class={`head st-${run.state}`}>
       <span class={`glyph ${run.state === "running" ? "pulse" : ""}`}>{GLYPH[run.state]}</span>
       <span class="title"><b>crew run {shortRun(run.id)}</b>
-        <span class="dim"> · {run.mode} · {stopped ? "stopped by user" : run.status} · {run.status === "running" || run.status === "pending" ? crewDur(run.age_ms) : crewDur(run.duration_ms)}</span></span>
+        <span class="dim"> · {run.mode} · {stopped ? run.paused_reason || "stopped by user" : run.status} · {headClock()}</span></span>
       <span class="counts" aria-live="polite">
         {#if run.counts.run}<span class="st-cyan">●{run.counts.run}</span>{/if}
         {#if run.counts.done}<span class="st-green">✓{run.counts.done}</span>{/if}

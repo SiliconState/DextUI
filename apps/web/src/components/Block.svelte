@@ -81,10 +81,21 @@
     <span class="b-user-text">{block.text}</span>
   </div>
 {:else if block.kind === "text"}
-  <div class="b-text" data-agent-id="block.text">
-    <Markdown src={block.text} {sessionId} />
-    {#if !block.complete}<span class="blink cursor">▊</span>{/if}
-    <button class="act hover-act" data-agent-id="block.text.copy" onclick={() => copyText(block.text, "copied")}>copy</button>
+  <!-- TUI idiom: a swim-lane card — `┌─ dext` label, body under a rail, `└` close.
+       The rail is a CSS border (glyph gutters shred on wrap); the single-line
+       header/footer glyphs are safe. -->
+  <div class="b-text" data-agent-id="block.text" data-state={block.complete ? "complete" : "streaming"}>
+    <div class="lane-head">
+      <span class="faint">┌─</span>
+      <span class="lane-name">dext</span>
+      {#if !block.complete}<span class="st-blue pulse lane-live">●</span>{/if}
+      <button class="act hover-act" data-agent-id="block.text.copy" onclick={() => copyText(block.text, "copied")}>copy</button>
+    </div>
+    <div class="lane-body">
+      <Markdown src={block.text} {sessionId} />
+      {#if !block.complete}<span class="blink cursor">▊</span>{/if}
+    </div>
+    <span class="faint lane-foot">└</span>
   </div>
 {:else if block.kind === "thinking"}
   {#if block.complete}
@@ -200,6 +211,35 @@
   .b-text {
     position: relative;
     width: 100%;
+    min-width: 0;
+  }
+  .lane-head {
+    display: flex;
+    gap: 6px;
+    align-items: baseline;
+    user-select: none;
+    line-height: 1.2;
+  }
+  .lane-name {
+    color: var(--blue);
+    font-weight: bold;
+  }
+  .lane-live {
+    font-size: 9px;
+  }
+  .lane-body {
+    border-left: 1px solid var(--line);
+    margin-left: 0.45ch;
+    padding: 3px 0 3px 12px;
+    min-width: 0;
+  }
+  .b-text:hover .lane-body {
+    border-left-color: color-mix(in srgb, var(--blue) 45%, var(--line));
+  }
+  .lane-foot {
+    display: block;
+    line-height: 1;
+    user-select: none;
   }
   .cursor {
     color: var(--green);
@@ -209,15 +249,15 @@
     margin-left: 8px;
   }
   .b-text .hover-act {
-    position: absolute;
-    top: 0;
-    right: 0;
+    margin-left: auto;
   }
   .b-text:hover .hover-act,
   .tool:hover .hover-act,
   .b-slash:hover .hover-act {
     visibility: visible;
   }
+  /* Thinking, as in the TUI: italic, dim, `•` markers on a tinted background —
+     never a lane, never a rail, so it cannot be mistaken for the reply. */
   .b-think {
     width: 100%;
   }
@@ -242,10 +282,13 @@
   }
   .think-line {
     color: var(--dim);
+    font-style: italic;
+    font-size: 12.5px;
     white-space: pre-wrap;
   }
   .t-marker {
     color: var(--faint);
+    font-style: normal;
   }
   /* Tool / pack cards: CSS rail, hover accent — never glyph gutters. */
   .tool {
@@ -346,6 +389,9 @@
   }
   .st-magenta {
     color: var(--magenta);
+  }
+  .st-blue {
+    color: var(--blue);
   }
   .dim {
     color: var(--dim);

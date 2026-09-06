@@ -16,6 +16,7 @@
   } from "../lib/state.svelte";
   import { useSession } from "../lib/useSession.svelte";
   import { useDialog } from "../lib/dialog.svelte";
+  import { crew, crewEnabled, crewEscalations, crewLive, openRun, shortRun } from "../lib/crew.svelte";
 
   let query = $state("");
   let cursor = $state(0);
@@ -77,6 +78,24 @@
         group: "appr",
         run: () => activate(s.id),
       });
+    }
+    // Crew escalations are decisions too (answered on the run sheet); live
+    // runs follow — this is the crews surface on narrow screens (no rail).
+    if (crewEnabled()) {
+      for (const r of crewEscalations()) {
+        out.push({ slug: `crew.${r.id}.answer`, label: `answer crew escalation: ${r.escalation?.label ?? r.task.slice(0, 40)}`, hint: shortRun(r.id), group: "appr", run: () => openRun(r.id) });
+      }
+      for (const r of crew.runs) {
+        if (r.status === "paused" && r.escalation) continue;
+        const live = crewLive().includes(r);
+        out.push({
+          slug: `crew.${r.id}.open`,
+          label: `${live ? "●" : r.state === "failed" ? "✗" : "✓"} crew ${shortRun(r.id)} — ${r.task.slice(0, 48)}`,
+          hint: `${r.state} · ${r.counts.done}/${r.counts.total}`,
+          group: "crew",
+          run: () => openRun(r.id),
+        });
+      }
     }
     if (view?.working) {
       out.push({
