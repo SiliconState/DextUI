@@ -1,0 +1,113 @@
+{
+  "version": 1,
+  "command": "bin/invoice-runtime",
+  "timeout_seconds": 120,
+  "max_continuations": 0,
+  "tools": [
+    {
+      "name": "set_business",
+      "description": "Save the business details that go on every invoice: name, address, email, tax_rate (%), payment_terms_days, currency symbol, invoice number prefix and next number. Ask for missing details before creating invoices.",
+      "risk": "write",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string" },
+          "address": { "type": "string" },
+          "email": { "type": "string" },
+          "tax_rate": { "type": "number", "description": "percentage, e.g. 20 for 20%" },
+          "payment_terms_days": { "type": "integer" },
+          "currency": { "type": "string", "description": "symbol, e.g. $ or €" },
+          "prefix": { "type": "string" },
+          "next_number": { "type": "integer" },
+          "footer": { "type": "string" }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "add_client",
+      "description": "Save or update a client (name, email, address). Existing names (case-insensitive) are updated.",
+      "risk": "write",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string" },
+          "email": { "type": "string" },
+          "address": { "type": "string" }
+        },
+        "required": ["name"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "create_invoice",
+      "description": "Create an invoice for a saved client with numbered id, tax, due date and a printable .invoices/<number>.html. Show the created invoice card and mention the html file so the user can open it.",
+      "risk": "write",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "client": { "type": "string" },
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "description": { "type": "string" },
+                "qty": { "type": "number" },
+                "unit_price": { "description": "number or string like 450.00" }
+              },
+              "required": ["description", "unit_price"],
+              "additionalProperties": false
+            }
+          },
+          "tax_rate": { "type": "number" },
+          "date": { "type": "string", "description": "YYYY-MM-DD; default today" },
+          "due_days": { "type": "integer", "description": "override payment terms" },
+          "status": { "type": "string", "enum": ["draft", "sent"] },
+          "notes": { "type": "string" }
+        },
+        "required": ["client", "items"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "mark_paid",
+      "description": "Record a payment against an invoice. Amounts are summed; status becomes partial until the total is covered, then paid. Omit amount to mark fully paid.",
+      "risk": "write",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "number": { "type": "string", "description": "e.g. INV-0001" },
+          "amount": { "description": "number or string; default = remaining balance" },
+          "date": { "type": "string", "description": "YYYY-MM-DD; default today" }
+        },
+        "required": ["number"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "aging",
+      "description": "Who owes what: outstanding balances bucketed by age (current, 1-30, 31-60, 61-90, 90+ days) and by client, with the full list as a table.",
+      "risk": "read",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "as_of": { "type": "string", "description": "YYYY-MM-DD; default today" }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "list_invoices",
+      "description": "All invoices as a table (number, client, date, due, total, paid, status). Filter with status: draft|sent|paid|partial|void.",
+      "risk": "read",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "status": { "type": "string" }
+        },
+        "additionalProperties": false
+      }
+    }
+  ]
+}

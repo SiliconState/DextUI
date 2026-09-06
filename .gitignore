@@ -7,3 +7,6 @@ dist.broken-*/
 .DS_Store
 packages/agentlinkd/.selfedit-test-*/
 packages/agentlinkd/.packs-test-*/
+packages/agentlinkd/.dirs-test-*/
+packs/target/
+packs/*/ui/panel.html

@@ -1,0 +1,77 @@
+{
+  "version": 1,
+  "command": "bin/receipts-runtime",
+  "timeout_seconds": 120,
+  "max_continuations": 0,
+  "tools": [
+    {
+      "name": "list_receipt_files",
+      "description": "List receipt-like files (pdf/jpg/png/heic/webp/txt/md/csv) in the folder that are not yet recorded in the ledger. Text files include a best-guess vendor/date/amount to verify. Call this first, then read each pending file and record it with add_receipt.",
+      "risk": "read",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "folder": { "type": "string", "description": "sub-folder relative to the workspace root; default is the root" }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "add_receipt",
+      "description": "Record one receipt in the ledger (date, vendor, amount). Category is applied from vendor rules when not given. Duplicates (same date+vendor+amount) are refused unless force=true.",
+      "risk": "write",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "date": { "type": "string", "description": "YYYY-MM-DD (common forms accepted)" },
+          "vendor": { "type": "string" },
+          "amount": { "description": "number or string like 12.50" },
+          "category": { "type": "string" },
+          "note": { "type": "string" },
+          "source": { "type": "string", "description": "receipt file path, relative to the workspace root" },
+          "force": { "type": "boolean" }
+        },
+        "required": ["date", "vendor", "amount"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "set_category_rule",
+      "description": "Teach a rule: this vendor (or name fragment) maps to a category. Existing receipts with a matching vendor are recategorised.",
+      "risk": "write",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "vendor": { "type": "string" },
+          "category": { "type": "string" }
+        },
+        "required": ["vendor", "category"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "receipts_summary",
+      "description": "Totals by category and month with the ledger as a table. Pass month (YYYY-MM) to scope to one month.",
+      "risk": "read",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "month": { "type": "string", "description": "YYYY-MM" }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "export_ledger",
+      "description": "Write the ledger (optionally one month) to .receipts/exports/ledger-<month|all>.csv for the accountant.",
+      "risk": "write",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "month": { "type": "string", "description": "YYYY-MM; empty = everything" }
+        },
+        "additionalProperties": false
+      }
+    }
+  ]
+}
