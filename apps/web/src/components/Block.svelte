@@ -133,7 +133,7 @@
     </details>
   {:else}
     <div class="b-think live" data-agent-id="block.thinking" data-state="thinking">
-      <p class="think-p stream" class:fade={thinkTail.startsWith("…")}><span class="t-marker pulse">✻</span> {thinkTail}</p>
+      <p class="think-p stream" class:fade={thinkTail.startsWith("…")}><span class="think-dots" aria-hidden="true"><span class="d"></span><span class="d"></span><span class="d"></span></span>{thinkTail}</p>
     </div>
   {/if}
 {:else if block.kind === "tool"}
@@ -292,10 +292,27 @@
     -webkit-mask-image: linear-gradient(to right, transparent, #000 45%);
     mask-image: linear-gradient(to right, transparent, #000 45%);
   }
-  .t-marker {
-    color: var(--faint);
-    margin-right: 2px;
-    font-style: normal;
+  /* Streaming thought indicator: three dots pulsing in sequence —
+     "working on it" in terminal language, borrowed from no one. */
+  .think-dots {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    margin-right: 6px;
+  }
+  .think-dots .d {
+    width: 3.5px;
+    height: 3.5px;
+    border-radius: 50%;
+    background: currentColor;
+    opacity: 0.25;
+    animation: think-dot 1.2s ease-in-out infinite;
+  }
+  .think-dots .d:nth-child(2) { animation-delay: 0.2s; }
+  .think-dots .d:nth-child(3) { animation-delay: 0.4s; }
+  @keyframes think-dot {
+    0%, 100% { opacity: 0.25; }
+    50% { opacity: 1; }
   }
   /* Tool / pack cards: CSS rail, hover accent — never glyph gutters. */
   .tool {
