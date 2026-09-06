@@ -17,14 +17,22 @@
   let reveal = $state(false);
   let fieldEl = $state<HTMLInputElement | null>(null);
 
+  // Markers that mean no usable credential: dext can say failed/expired when
+  // a stored login stopped working — those rows get "Sign in" back.
+  const NOT_SIGNED = new Set(["", "none", "failed", "expired", "missing", "absent", "disabled"]);
   function signedIn(auth: string): boolean {
-    return auth !== "none" && auth !== "";
+    return !NOT_SIGNED.has(auth);
   }
-  // How dext holds the credential, for the quiet sub-line.
+  // How dext holds the credential, for the quiet sub-line. Unknown markers
+  // render as nothing — never echo raw marker text into the page.
   function method(auth: string): string {
-    if (auth === "key") return "API key";
-    if (auth === "auth" || auth === "web") return "session";
-    return auth;
+    if (auth === "key" || auth === "token") return "API key";
+    if (auth === "auth" || auth === "web" || auth === "oauth" || auth === "session") return "session";
+    return "";
+  }
+  function subline(p: ProviderAuth): string {
+    const m = signedIn(p.auth) ? method(p.auth) : "";
+    return m ? `${p.model} · ${m}` : p.model;
   }
   const connected = $derived(
     providers.items.filter((p) => signedIn(p.auth)).sort((a, b) => Number(b.active) - Number(a.active) || a.label.localeCompare(b.label)),
@@ -83,8 +91,8 @@
       {:else}
         <ul class="list" data-agent-id="providers.list">
           {#each ordered as p, i (p.id)}
-            {#if i === 0 || (i === connected.length && connected.length > 0)}
-              <li class="sec" aria-hidden="true">{i === 0 && connected.length > 0 ? `Connected · ${connected.length}` : `Available · ${available.length}`}</li>
+            {#if (i === 0 && connected.length > 0) || (i === connected.length && available.length > 0)}
+              <li class="sec" aria-hidden="true">{i < connected.length ? `Connected · ${connected.length}` : `Available · ${available.length}`}</li>
             {/if}
             {@render row(p)}
           {/each}
@@ -105,7 +113,7 @@
             <span class="name">{p.label}</span>
             {#if p.active}<span class="pill">Active</span>{/if}
           </span>
-          <span class="sub">{p.model}{signedIn(p.auth) ? ` · ${method(p.auth)}` : ""}</span>
+          <span class="sub">{subline(p)}</span>
         </span>
       </div>
       {#if editing !== p.id}

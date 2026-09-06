@@ -203,14 +203,18 @@ if (DEFAULT_MODEL.provider && DEFAULT_MODEL.model) {
 // web's Providers dialog; login/logout shell out to `dext auth login|logout`
 // so dext's own auth store stays the single credential holder.
 const PROVIDER_ID_RE = /^[a-z0-9][a-z0-9_.-]{0,39}$/i;
+// Marker words safe to send to a browser. For API-key providers dext's marker
+// can echo credential-derived material — anything unrecognised collapses to
+// "key" ("a credential is held"), never the value itself.
+const AUTH_MARKERS = new Set(["auth", "key", "none", "web", "oauth", "token", "session", "failed", "expired", "missing", "absent", "unknown", "present", "ok", "disabled", "off"]);
 function parseProviderStatus(text) {
   const active = /^active provider:\s*(\S+)/m.exec(text)?.[1] ?? null;
   const providers = [];
   for (const line of text.split("\n")) {
     const m = /^\s*(\*)?\s*(\S+)\s+(.*?)\s+model=(\S+)(.*)$/.exec(line);
     if (!m || !PROVIDER_ID_RE.test(m[2])) continue;
-    const auth = /\bauth=(\S+)/.exec(m[5])?.[1] ?? "none";
-    providers.push({ id: m[2], label: m[3].trim() || m[2], model: m[4], auth, active: !!m[1] || m[2] === active });
+    const raw = /\bauth=(\S+)/.exec(m[5])?.[1] ?? "none";
+    providers.push({ id: m[2], label: m[3].trim() || m[2], model: m[4], auth: AUTH_MARKERS.has(raw) ? raw : "key", active: !!m[1] || m[2] === active });
   }
   return { active, providers };
 }

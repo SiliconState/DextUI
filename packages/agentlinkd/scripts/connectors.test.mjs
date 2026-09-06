@@ -365,7 +365,9 @@ test("host: connectors capability; add/sync/remove over the wire; listing is sec
   c.send("x-agentlinkd.auth.status");
   const status = await c.wait((e) => e.event === "x-agentlinkd.auth.status", mark);
   assert.equal(status.data.active, "fake-a");
-  assert.deepEqual(status.data.providers.map((p) => p.id), ["fake-a", "fake-b"]);
+  assert.deepEqual(status.data.providers.map((p) => p.id), ["fake-a", "fake-b", "fake-c"]);
+  assert.equal(status.data.providers.find((p) => p.id === "fake-c").auth, "key", "secret-looking markers collapse to key");
+  assert.ok(!JSON.stringify(c.events).includes("sk-fake"), "credential-derived marker never reaches the wire");
   assert.ok(Array.isArray(status.data.model_catalog));
 
   mark = c.events.length;
