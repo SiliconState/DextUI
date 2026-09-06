@@ -78,6 +78,35 @@
   function tailLines(t: string): string {
     return t.split("\n").slice(-8).join("\n");
   }
+
+  // Thinking is continuous reasoning, not a list — providers wrap it at
+  // arbitrary newlines, so per-line bullets landed mid-sentence. Paragraphs
+  // come from blank lines; soft wraps rejoin into sentences; explicit list
+  // items ("- "/"1. ") keep their own line (rendered via pre-line).
+  function thinkParas(t: string): string[] {
+    return (t ?? "")
+      .split(/\n\s*\n+/)
+      .map((para) => {
+        let out = "";
+        for (const raw of para.split("\n")) {
+          const line = raw.trim();
+          if (!line) continue;
+          out = out ? (/^([-*+]|\d+[.)])\s/.test(line) ? `${out}\n${line}` : `${out} ${line}`) : line;
+        }
+        return out;
+      })
+      .filter(Boolean);
+  }
+  const thinkWords = $derived(
+    block.kind === "thinking" ? (block.text.trim().match(/\S+/g) ?? []).length : 0,
+  );
+  // Live: one flowing tail of the current thought, whitespace collapsed —
+  // reads like the model's train of thought, not a stack of fragments.
+  const thinkTail = $derived.by(() => {
+    if (block.kind !== "thinking") return "";
+    const t = (block.text ?? "").replace(/\s+/g, " ").trim();
+    return t.length > 280 ? `… ${t.slice(-280)}` : t;
+  });
 </script>
 
 {#if block.kind === "user"}
@@ -95,18 +124,16 @@
 {:else if block.kind === "thinking"}
   {#if block.complete}
     <details class="b-think done" data-agent-id="block.thinking" data-state="complete">
-      <summary><span class="faint">▸ thinking ({block.text.split("\n").length} lines)</span></summary>
+      <summary><span class="faint">▸ thinking · {thinkWords} words</span></summary>
       <div class="think-body">
-        {#each block.text.split("\n").filter((l) => l.trim()) as line, i (i)}
-          <div class="think-line"><span class="t-marker">•</span> {line}</div>
+        {#each thinkParas(block.text) as p, i (i)}
+          <p class="think-p">{p}</p>
         {/each}
       </div>
     </details>
   {:else}
     <div class="b-think live" data-agent-id="block.thinking" data-state="thinking">
-      {#each block.text.split("\n").slice(-6) as line, i (i)}
-        <div class="think-line"><span class="t-marker">•</span> {line}</div>
-      {/each}
+      <p class="think-p stream" class:fade={thinkTail.startsWith("…")}><span class="t-marker pulse">✻</span> {thinkTail}</p>
     </div>
   {/if}
 {:else if block.kind === "tool"}
@@ -244,14 +271,31 @@
   }
   .think-body {
     background: var(--bg1);
-    padding: 4px 8px;
+    padding: 4px 10px 6px;
+    display: grid;
+    gap: 6px;
   }
-  .think-line {
+  /* Thinking is prose, not a list: quiet italic text. */
+  .think-p {
+    margin: 0;
     color: var(--dim);
-    white-space: pre-wrap;
+    font-style: italic;
+    line-height: 1.55;
+    white-space: pre-line; /* explicit list items keep their line */
+  }
+  .think-p.stream {
+    color: var(--faint);
+  }
+  /* While streaming, older words dissolve toward the left — only once the
+     tail is actually truncated, so short thoughts never fade. */
+  .think-p.stream.fade {
+    -webkit-mask-image: linear-gradient(to right, transparent, #000 45%);
+    mask-image: linear-gradient(to right, transparent, #000 45%);
   }
   .t-marker {
     color: var(--faint);
+    margin-right: 2px;
+    font-style: normal;
   }
   /* Tool / pack cards: CSS rail, hover accent — never glyph gutters. */
   .tool {
