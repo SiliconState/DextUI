@@ -5,6 +5,7 @@
   // while paused, deliverables + tails always). Keys are scoped to the dialog.
   import type { CrewGroup, CrewWorker } from "@dextui/protocol";
   import { crew, crewDur, crewAge, closeRun, requestTail, refreshTail, openFile, stopRun, answerRun, shortRun, GLYPH } from "../lib/crew.svelte";
+  import Tail from "./Tail.svelte";
 
   let { onClose }: { onClose?: () => void } = $props();
 
@@ -217,9 +218,9 @@
 
     <div class="body">
       {#if paused && run.escalation}
-        <section class="esc" data-agent-id={`crew.run.${run.id}.escalation`} data-state={crew.answering ? "answering" : "open"} aria-label="escalation">
-          <div class="esc-head"><span class="st-yellow">⚠ escalation</span> <span class="dim">· {run.escalation.label}{run.escalation.reason ? ` · ${run.escalation.reason}` : ""}</span></div>
-          <pre class="tail">{run.escalation.question}</pre>
+        <section class="esc" data-agent-id={`crew.run.${run.id}.escalation`} data-state={crew.answering ? "answering" : "open"} aria-label="Escalation">
+          <div class="esc-head"><span class="st-yellow">⚠ Escalation</span> <span class="dim">· {run.escalation.label}{run.escalation.reason ? ` · ${run.escalation.reason}` : ""}</span></div>
+          <Tail text={run.escalation.question} mode="md" />
           <textarea
             bind:this={answerEl}
             bind:value={answer}
@@ -271,7 +272,7 @@
                 <div class="tailpane" data-agent-id={`crew.run.${run.id}.tail`} data-state={crew.tailPending ? "loading" : "shown"}>
                   <div class="tail-head faint">live.log · {w.label}{crew.tail ? ` · last ${crew.tail.lines.length} lines${crew.tail.truncated ? " (truncated)" : ""}` : ""}
                     <button class="act" data-agent-id={`crew.run.${run.id}.tail.refresh`} onclick={refreshTail}>[r] refresh</button></div>
-                  <pre class="tail">{crew.tailPending && !crew.tail ? "…" : crew.tail?.lines.join("\n") || "(empty)"}</pre>
+                  <Tail text={crew.tailPending && !crew.tail ? "…" : crew.tail?.lines.join("\n") || "(empty)"} />
                 </div>
               {/if}
             {/each}
@@ -289,20 +290,20 @@
         <div class="filepane" data-agent-id={`crew.run.${run.id}.file`} data-state="shown">
           <div class="tail-head faint">{crew.file.path} · {crew.file.bytes} B{crew.file.truncated ? " (truncated)" : ""}
             <button class="act" onclick={() => (crew.file = null)}>Close</button></div>
-          <pre class="tail file">{crew.file.text}</pre>
+          <Tail text={crew.file.text} file />
         </div>
       {/if}
     </div>
 
     <div class="foot">
-      {#if paused}<button class="act" data-agent-id={`crew.run.${run.id}.answer.focus`} onclick={() => answerEl?.focus()}>[a] answer…</button>{/if}
+      {#if paused}<button class="act" data-agent-id={`crew.run.${run.id}.answer.focus`} onclick={() => answerEl?.focus()}>[a] Answer…</button>{/if}
       {#if live}
         <button class="act warn" data-agent-id={`crew.run.${run.id}.stop`} data-state={confirmStop ? "confirm" : crew.stopping ? "stopping" : "ready"} disabled={crew.stopping} onclick={stop}>
-          {confirmStop ? "confirm stop? [y]" : crew.stopping ? "stopping…" : "[x] stop"}
+          {confirmStop ? "Confirm stop? [y]" : crew.stopping ? "Stopping…" : "[x] Stop"}
         </button>
       {/if}
       {#if run.files.length}
-        <span class="faint">deliverables:</span>
+        <span class="faint">Deliverables:</span>
         {#each run.files as f (f)}<button class="act" data-agent-id={`crew.run.${run.id}.file.${f}`} onclick={() => openFile(f)}>{f}</button>{/each}
       {/if}
       <span class="faint hint">j/k workers · J/K groups · ⏎ tail{live ? " · x stop" : ""}{paused ? " · a answer" : ""}{!live ? " · terminal run: no stop, no answer" : ""}</span>
