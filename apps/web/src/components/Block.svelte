@@ -4,7 +4,7 @@
   // are CSS borders, never literal glyphs — glyph gutters shred when lines wrap.
   import type { ViewBlock as Block } from "@dextui/client";
   import { app, copyText, packOfPrompt, prefillComposer } from "../lib/state.svelte";
-  import { humanizeTool, humanizeLabel } from "../lib/display";
+  import { humanizeTool, humanizeLabel, parseRunMeta } from "../lib/display";
   import { fileUrl, htmlPathIn } from "../lib/files";
   import { prettyPath } from "../lib/markdown";
   import Markdown from "./Markdown.svelte";
@@ -74,6 +74,9 @@
     warn: "st-yellow",
     error: "st-red",
   };
+  // Core's run-status annotations ("[objective: … | checkpoints: …]",
+  // "[phase:probe] note") render as quiet meta rows, not raw prose.
+  const runMeta = $derived(block.kind === "marker" ? parseRunMeta(block.text) : null);
 
   const toolLabel: Record<string, string> = {
     preview: "… planned",
@@ -151,7 +154,7 @@
 {:else if block.kind === "thinking"}
   {#if block.complete}
     <details class="b-think done" data-agent-id="block.thinking" data-state="complete">
-      <summary><span class="faint">▸ Thinking · {thinkWords} words{thinkDur}</span></summary>
+      <summary><span class="faint"><span class="caret" aria-hidden="true">▸</span> Thinking · {thinkWords} words{thinkDur}</span></summary>
       <div class="think-body">
         {#each thinkParas(block.text) as p, i (i)}
           <p class="think-p">{p}</p>
@@ -160,8 +163,8 @@
     </details>
   {:else}
     <details class="b-think live" open data-agent-id="block.thinking" data-state="thinking">
-      <summary><span class="faint">▾ Thinking · Streaming…</span></summary>
-      <p class="think-p stream"><span class="think-radar" aria-hidden="true"><span class="core"></span><span class="ring"></span><span class="ring r2"></span></span>{thinkTail}</p>
+      <summary><span class="faint"><span class="caret" aria-hidden="true">▸</span> Thinking</span> <span class="think-radar" aria-hidden="true"><span class="core"></span><span class="ring"></span><span class="ring r2"></span></span></summary>
+      <p class="think-p stream">{thinkTail}</p>
     </details>
   {/if}
 {:else if block.kind === "tool"}
@@ -220,6 +223,29 @@
     <div class={`b-marker ${markerClass[block.level] ?? "st-faint"}`} data-agent-id="block.marker">
       {markerGlyph[block.level] ?? "⚠"} Batch · {n} {n === 1 ? "call" : "calls"} failed
     </div>
+  {:else if runMeta}
+    {@const meta = runMeta!}
+    {#if meta.phase}
+      <div class="b-meta phase" data-agent-id="block.marker.meta" data-state={block.level} title={block.text}>
+        <span class="meta-k">phase</span>
+        <span class="meta-pill">{meta.phase}</span>
+        {#if meta.note}<span class="meta-note">— {meta.note}</span>{/if}
+      </div>
+    {:else}
+      <details class="b-meta" data-agent-id="block.marker.meta" data-state={block.level}>
+        <summary>
+          <span class="meta-k">objective</span>
+          <span class="meta-line">{meta.objective}</span>
+          {#if meta.checkpoints.length}
+            <span class="meta-count">· {meta.checkpoints.length} {meta.checkpoints.length === 1 ? "checkpoint" : "checkpoints"}</span>
+          {/if}
+        </summary>
+        <div class="meta-body">
+          {#if meta.objective}<p class="meta-obj">{meta.objective}</p>{/if}
+          {#each meta.checkpoints as c, i (i)}<p class="meta-chk">— {c}</p>{/each}
+        </div>
+      </details>
+    {/if}
   {:else}
     <div class={`b-marker ${markerClass[block.level] ?? "st-faint"}`} data-agent-id="block.marker">
       {markerGlyph[block.level] ?? "·"} {block.text}
@@ -326,6 +352,16 @@
   .b-think.live summary::-webkit-details-marker {
     display: none;
   }
+  /* Caret follows the real open state (details[open]), so a live block the
+     user folds reads truthfully — the radar keeps pulsing in the header, the
+     caret shows which way it opens. */
+  .caret {
+    display: inline-block;
+    transition: rotate 0.12s ease-out;
+  }
+  .b-think[open] .caret {
+    rotate: 90deg;
+  }
   .think-body {
     background: var(--bg1);
     padding: 4px 10px 6px;
@@ -400,6 +436,69 @@
       transform: scale(0.65);
       opacity: 0.2;
     }
+  }
+  /* Run-status annotations (objective/phase info markers): steering state,
+     not conversation — one quiet line each. Label + CSS-clamped text buys back
+     the real estate raw prose wrapped over; details opens the full charter.
+     Tokens only, so light/dark themes both hold. */
+  .b-meta {
+    width: 100%;
+    min-width: 0;
+    font-size: 12px;
+    color: var(--faint);
+  }
+  .b-meta.phase {
+    display: flex;
+    gap: 8px;
+    align-items: baseline;
+  }
+  .b-meta summary {
+    cursor: pointer;
+    user-select: none;
+    list-style: none;
+    min-width: 0;
+    display: flex;
+    gap: 8px;
+    align-items: baseline;
+  }
+  .b-meta summary::-webkit-details-marker {
+    display: none;
+  }
+  .meta-k {
+    flex-shrink: 0;
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+  .meta-pill {
+    flex-shrink: 0;
+    font-size: 11px;
+    border: 1px solid var(--line);
+    background: var(--bg1);
+    padding: 0 5px;
+    color: var(--dim);
+  }
+  .meta-line,
+  .meta-note {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--dim);
+  }
+  .meta-count {
+    flex-shrink: 0;
+  }
+  .meta-body {
+    display: grid;
+    gap: 4px;
+    padding: 2px 0 2px 2px;
+    font-size: 12px;
+  }
+  .meta-body p {
+    margin: 0;
+    color: var(--dim);
   }
   /* Tool / pack cards: CSS rail, hover accent — never glyph gutters. */
   .tool {

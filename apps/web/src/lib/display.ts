@@ -80,3 +80,28 @@ export function humanizeLabel(l: string): string {
   const i = l.indexOf(": ");
   return i > 0 ? humanizeTool(l.slice(0, i), l.slice(i + 2)) : humanizeTool("", l);
 }
+
+/** Core's run-status annotations, emitted as info events: "[objective: … |
+ * checkpoints: a; b]" opens a turn, "[phase:probe] note" marks transitions.
+ * They are steering state, not conversation — the UI renders them as quiet
+ * meta rows. Anything else (runtime control, host notices) returns null and
+ * keeps the plain marker treatment. */
+export interface RunMeta {
+  objective?: string;
+  checkpoints: string[];
+  phase?: string;
+  note?: string;
+}
+export function parseRunMeta(text: string): RunMeta | null {
+  const t = (text ?? "").trim();
+  const obj = t.match(/^\[objective:\s*([\s\S]+?)\s*(?:\|\s*checkpoints:\s*([\s\S]+?))?\]$/);
+  if (obj?.[1] !== undefined) {
+    return {
+      objective: obj[1].trim(),
+      checkpoints: (obj[2] ?? "").split(";").map((c) => c.trim()).filter(Boolean),
+    };
+  }
+  const ph = t.match(/^\[phase:([a-z][a-z0-9-]*)\]\s*([\s\S]*)$/);
+  if (ph?.[1] !== undefined) return { phase: ph[1], note: (ph[2] ?? "").trim(), checkpoints: [] };
+  return null;
+}
