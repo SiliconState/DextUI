@@ -39,3 +39,28 @@ live copy in sync with the renderer's actual capabilities (`Markdown.svelte`,
 The Python/browser bullets describe one particular host; adjust them to what
 your machine actually has (the agent will otherwise plan around the wrong
 constraints).
+
+## Workbench (DextUI editing itself)
+
+For the **workbench session** — cwd `~/DextUI`, opened from the Finder — add
+these rules to that checkout's project policy (or keep them in the seeded
+prompt the Finder inserts):
+
+```markdown
+# DextUI workbench
+
+- This checkout is the app you are running in. Every edit is live after a rebuild.
+- Prefer adding an extension under `apps/web/src/ext/<name>/` (fence, panel,
+  Finder command, slash command, flow node) over editing App.svelte, Markdown.svelte,
+  Finder.svelte or Composer.svelte. Zero runtime deps stays true.
+- After web changes run `node packages/agentlinkd/scripts/ui-build.mjs` (add
+  `--tests` for a full run). It builds into a staging dir and swaps in only if
+  svelte-check passes; open tabs reload themselves. Do NOT run `vite build`
+  directly — it empties the served `dist` mid-build.
+- After host changes (`packages/agentlinkd/**`) write
+  `{"reason":"<what changed>"}` to the restart request file shown by
+  `/ui status` (default `~/.dextui/agentlinkd/restart.request`). The host
+  restarts after your turn ends; do not kill it yourself.
+- Run `npm test` before requesting a restart when you touched the host.
+- If the UI is broken after your change: `node packages/agentlinkd/scripts/ui-build.mjs --rollback`.
+```

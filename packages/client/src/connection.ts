@@ -6,6 +6,8 @@ import {
   isSessionRouted,
   CREW_EXT,
   PACK_EXT,
+  SELF_HOST_EXT,
+  SELF_UI_EXT,
   PROTOCOL_VERSION,
   type Envelope,
   type CrewsPayload,
@@ -13,6 +15,7 @@ import {
   type HostCommand,
   type ModelGroup,
   type PackInfo,
+  type SelfStatus,
   type SessionMeta,
   type ThinkingEffort,
 } from "@dextui/protocol";
@@ -32,6 +35,8 @@ export interface ConnectionOpts {
   onPacksChanged?: (packs: PackInfo[]) => void;
   /** Crew run summaries (hello_ok.crews and every x-agentlinkd.crew.changed). */
   onCrewsChanged?: (crews: CrewsPayload) => void;
+  /** Self-edit status (hello_ok.self and every x-agentlinkd.ui.status reply). */
+  onSelfChanged?: (self: SelfStatus) => void;
   onControlError?: (code: string, message: string, data?: Record<string, unknown>) => void;
   onSeqGap?: (sessionId: string, expected: number, got: number) => void;
   /** The host process changed between connections; all session stores were reset. */
@@ -53,6 +58,8 @@ export class Connection {
   packs: PackInfo[] = [];
   /** Last crew summary payload from the host (empty when the capability is absent). */
   crews: CrewsPayload = { runs: [], omitted: 0 };
+  /** Self-edit status; null on hosts without the `self_edit` capability. */
+  self: SelfStatus | null = null;
   /** Host process identity from the last hello_ok (undefined for legacy hosts). */
   instance?: string;
   sessions = new Map<string, SessionStore>();
@@ -148,7 +155,7 @@ export class Connection {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(frame));
   }
 
-  openSession(opts: { id?: string; cwd?: string; seat?: string } = {}): void {
+  openSession(opts: { id?: string; cwd?: string; seat?: string; approval?: string } = {}): void {
     this.sendRaw(cmd("session.open", { ...opts }));
   }
 
@@ -238,6 +245,28 @@ export class Connection {
 
   crewResume(run: string, answer: string): void {
     this.sendRaw(cmd(`${CREW_EXT}.resume`, { run, answer }));
+  }
+
+  // ---------- self-edit extension (host-prefixed until promoted) ----------
+
+  uiStatus(): void {
+    this.sendRaw(cmd(`${SELF_UI_EXT}.status`, {}));
+  }
+
+  uiBuild(opts: { check?: boolean; tests?: boolean } = {}): void {
+    this.sendRaw(cmd(`${SELF_UI_EXT}.build`, { ...opts }));
+  }
+
+  uiRollback(): void {
+    this.sendRaw(cmd(`${SELF_UI_EXT}.rollback`, {}));
+  }
+
+  hostRestart(reason = "", force = false): void {
+    this.sendRaw(cmd(`${SELF_HOST_EXT}.restart`, { reason, force }));
+  }
+
+  hostRestartCancel(): void {
+    this.sendRaw(cmd(`${SELF_HOST_EXT}.restart_cancel`, {}));
   }
 
   // ---------- pack file editing (host-prefixed until promoted) ----------
@@ -337,6 +366,7 @@ export class Connection {
           commands?: HostCommand[];
           packs?: PackInfo[];
           crews?: CrewsPayload;
+          self?: SelfStatus;
         };
         this.capabilities = d.capabilities;
         this.modelCatalog = d.model_catalog ?? [];
@@ -346,6 +376,8 @@ export class Connection {
         this.opts.onPacksChanged?.(this.packs);
         this.crews = d.crews ?? { runs: [], omitted: 0 };
         this.opts.onCrewsChanged?.(this.crews);
+        this.self = d.self ?? null;
+        if (this.self) this.opts.onSelfChanged?.(this.self);
         this.attempt = 0;
         // A different host process may reuse session ids and even tail seqs;
         // resuming by seq would splice the old transcript onto the new one.
@@ -411,6 +443,14 @@ export class Connection {
         const d = env.data as CrewsPayload | undefined;
         this.crews = { runs: d?.runs ?? [], omitted: d?.omitted ?? 0 };
         this.opts.onCrewsChanged?.(this.crews);
+        break;
+      }
+      case `${SELF_UI_EXT}.status`: {
+        const d = env.data as SelfStatus | undefined;
+        if (d && typeof d.repo === "string") {
+          this.self = d;
+          this.opts.onSelfChanged?.(d);
+        }
         break;
       }
       case "error": {

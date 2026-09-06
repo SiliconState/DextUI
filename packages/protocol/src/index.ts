@@ -238,6 +238,89 @@ export interface PackWriteReply {
   bytes: number;
 }
 
+// ---------- self-edit (host extension `x-agentlinkd.ui.*` / `x-agentlinkd.host.*`) ----------
+
+/** Extension prefixes for DextUI editing itself. Advertised as capability
+ *  `self_edit` only when the host runs from a buildable checkout. */
+export const SELF_UI_EXT = "x-agentlinkd.ui";
+export const SELF_HOST_EXT = "x-agentlinkd.host";
+
+/** Identity of a served build: vite's `sw.js?v=<id>` stamp, else the index mtime. */
+export interface UiBuildVersion {
+  id: string;
+  mtime: number;
+}
+
+export interface UiBuildBrief {
+  ok: boolean;
+  id?: string;
+  at: number;
+  by: string;
+  error?: string;
+  failed?: string;
+  rolled_back?: boolean;
+  duration_ms?: number;
+  version?: UiBuildVersion | null;
+  steps?: { label: string; ok: boolean; duration_ms: number }[];
+  /** Last ≤ 1200 chars of the failing step's output. */
+  tail?: string;
+}
+
+export interface HostRestartRequest {
+  reason: string;
+  by: string;
+  at: number;
+}
+
+/** `hello_ok.self`, `x-agentlinkd.ui.status`, `GET /__self`. */
+export interface SelfStatus {
+  enabled: boolean;
+  /** DextUI checkout the host runs from (the workbench session's cwd). */
+  repo: string;
+  static: string;
+  serving: "dist" | "lkg";
+  version: UiBuildVersion | null;
+  /** Last-known-good build kept beside `dist`, or null. */
+  lkg: UiBuildVersion | null;
+  building: { id: string; started_at: number; step: string; by: string } | null;
+  last: UiBuildBrief | null;
+  restart_pending: HostRestartRequest | null;
+  restart_exit_code: number;
+  /** Relative path of the build script the agent runs from bash. */
+  build_script: string;
+  /** Absolute path the agent writes to request a restart-when-idle. */
+  request_file: string;
+}
+
+/** Broadcast progress of one build (`x-agentlinkd.ui.build`). */
+export interface UiBuildEvent {
+  id: string;
+  phase: "start" | "step" | "ok" | "fail";
+  by?: string;
+  step?: string;
+  duration_ms?: number;
+  version?: UiBuildVersion | null;
+  error?: string;
+  failed?: string;
+  tail?: string;
+}
+
+/** Broadcast after any dist swap — host build, rollback, or one the agent ran itself. */
+export interface UiRebuiltEvent {
+  version: UiBuildVersion | null;
+  by: string;
+  build?: string;
+  rolled_back?: boolean;
+}
+
+/** Broadcast lifecycle of a host restart (`x-agentlinkd.host.restart`). */
+export interface HostRestartEvent extends Partial<HostRestartRequest> {
+  phase: "pending" | "restarting" | "cancelled";
+  busy?: { kind: string; session?: string; run?: string; title?: string }[] | null;
+  force?: boolean;
+  exit_code?: number;
+}
+
 // ---------- crew runs (host extension `x-agentlinkd.crew.*`) ----------
 
 /** Extension prefix. Host-prefixed per the `x-<host>.<thing>` rule until crew

@@ -1,4 +1,9 @@
 node_modules/
 dist/
+dist.lkg/
+dist.staging/
+dist.broken-*/
 *.local
 .DS_Store
+packages/agentlinkd/.selfedit-test-*/
+packages/agentlinkd/.packs-test-*/

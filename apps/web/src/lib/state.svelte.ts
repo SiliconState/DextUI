@@ -5,6 +5,7 @@ import type { Envelope, HostCommand, ModelGroup, PackInfo, SessionMeta, Thinking
 import { notifyEvent } from "./notify";
 import { acceptCrews, crewEscalations, onCrewControl, openRun } from "./crew.svelte";
 import { onPackControl } from "./packsheet.svelte";
+import { acceptSelf, onSelfControl, onSelfReconnected } from "./selfedit.svelte";
 
 export type Theme = "dark" | "light" | "system";
 export type NotifyState = "on" | "off" | "blocked";
@@ -511,6 +512,11 @@ export function start(token: string): void {
       if (app.conn !== c) return;
       acceptCrews(crews);
     },
+    onSelfChanged: (self) => {
+      if (app.conn !== c) return;
+      acceptSelf(self);
+      onSelfReconnected();
+    },
     onControlError: (code, message, data) => {
       if (app.conn !== c) return; // stale connection
       // A failed session.open must not leave the new-session latch armed, nor
@@ -562,6 +568,7 @@ export function start(token: string): void {
     if (app.conn !== c) return;
     onCrewControl(env);
     onPackControl(env);
+    onSelfControl(env);
     if (env.event === "sessions.deleted") {
       const d = env.data as { ids: string[] };
       finishSessionAction();

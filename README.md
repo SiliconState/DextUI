@@ -108,6 +108,50 @@ The sample `hello-chart` pack (guaranteed sub-10 s chart, no tools) ships in
 dext pack create samples/hello-chart && cp packages/agentlinkd/sample-packs/hello-chart/PACK.md ~/.dext/shelves/samples/packs/hello-chart/PACK.md
 ```
 
+## Self-editing (workbench)
+
+When `agentlinkd` runs from this checkout it advertises the `self_edit`
+capability: DextUI can rebuild and restart **itself**, whether the change
+comes from you (Finder → "rebuild UI") or from the agent in a **workbench
+session** (Finder → "open workbench — edit DextUI itself": a session whose
+cwd is this repo, `auto-write`, composer seeded with the contract below).
+
+Both drivers converge on the same primitives, so nothing is special-cased:
+
+| Path | Web change (`apps/web/**`) | Host change (`packages/agentlinkd/**`) |
+|---|---|---|
+| Human | Finder "rebuild UI" · `/ui build [--tests]` · `x-agentlinkd.ui.build` | Finder "restart host when idle" · `/ui restart [why]` |
+| Agent (bash, inside its turn) | `node packages/agentlinkd/scripts/ui-build.mjs` (`npm run ui:build`) | write `{"reason":"…"}` to `<state-dir>/restart.request` |
+
+- **Staged build → verify → atomic swap → LKG.** `ui-build.mjs` builds
+  protocol → client → svelte-check → vite into `apps/web/dist.staging`, then
+  renames `dist → dist.lkg` and `dist.staging → dist`. A failing step leaves
+  the served build untouched. `--tests` adds `npm test`; `--no-check` skips
+  svelte-check; `--rollback` (or `/ui rollback`, `npm run ui:rollback`)
+  serves the previous build again.
+- **The host notices, tabs reload.** agentlinkd watches `apps/web/dist` and
+  broadcasts `x-agentlinkd.ui.rebuilt` after *any* swap — including one the
+  agent ran from bash. Open tabs get a "reload" toast (hidden tabs reload on
+  their own). Each build writes `dist/build-id.txt`; a tab whose
+  `__BUILD_ID__` differs from the served one is offered a reload at hello.
+- **Restart when idle.** A restart request (command, slash, or the request
+  file) is refused-into-a-queue while any turn, crew run or build is live and
+  honored at the next idle boundary — which, for an agent editing the host,
+  is the end of its own turn. The host exits with status **75**; systemd's
+  `Restart=on-failure` brings it back. `--force` restarts now.
+- **`--safe`** serves `apps/web/dist.lkg` instead of `dist` so a broken build
+  can never lock you out of the UI that fixes it; a missing `dist/index.html`
+  falls back to the LKG automatically.
+- **Extensions, not surgery.** `apps/web/src/ext/<name>/index.ts` is
+  auto-imported; it registers fences (```lang → component), panels (above the
+  composer), Finder commands, client-side slash commands and flow-builder node
+  types. The reference extension `ext/csv` renders ```csv / ```tsv fences as
+  sortable tables. The workbench seed prompt tells the agent to prefer an
+  extension over editing core files.
+- Surface: `hello_ok.self`, `GET /__self` (auth), `POST /__self/{build,rollback,restart,restart_cancel}`,
+  `x-agentlinkd.ui.{status,build,rollback}`, `x-agentlinkd.host.{restart,restart_cancel}`,
+  broadcasts `x-agentlinkd.ui.build` (start/step/ok/fail), `x-agentlinkd.ui.rebuilt`, `x-agentlinkd.host.restart` (pending/restarting/cancelled).
+
 ## Agent affordances
 
 DextUI is designed to be drivable by other agents, not just humans:

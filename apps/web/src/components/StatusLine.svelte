@@ -5,6 +5,7 @@
   import type { ThinkingEffort } from "@dextui/protocol";
   import { app, toggleTheme, rePair, toggleSidebar, queueTotal, jumpToOldestPending, toggleNotify } from "../lib/state.svelte";
   import { crew, crewLive, crewDur, crewAge, openRun, shortRun } from "../lib/crew.svelte";
+  import { selfEdit, cancelRestart } from "../lib/selfedit.svelte";
   import { fmtTokens, fmtElapsed, prettyPath } from "../lib/markdown";
   import { useSession } from "../lib/useSession.svelte";
 
@@ -158,6 +159,16 @@
         · {crewDur(crewAge(ticker.top, now))}</span>
       <span class="tick-min">crew {ticker.c.paused ? `⚠${ticker.c.paused}` : `●${ticker.c.run}`}</span>
     </button>
+  {/if}
+  {#if selfEdit.build}
+    <span class="sep">│</span>
+    <span class="st-cyan" data-agent-id="status.ui.build" data-state="building" title={`UI build ${selfEdit.build.id}`}>⟳ ui:{selfEdit.build.step}</span>
+  {:else if selfEdit.restartPending}
+    <span class="sep">│</span>
+    <button class="act st-yellow" data-agent-id="status.host.restart" data-state="pending" title={`restart queued${selfEdit.restartPending.reason ? `: ${selfEdit.restartPending.reason}` : ""} — click to cancel`} onclick={cancelRestart}>↻ restart when idle</button>
+  {:else if selfEdit.restarting}
+    <span class="sep">│</span>
+    <span class="st-yellow" data-agent-id="status.host.restart" data-state="restarting">↻ host restarting</span>
   {/if}
   {#if view.contextChars}
     <span class="sep">│</span>

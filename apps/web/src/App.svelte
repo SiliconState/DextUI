@@ -27,6 +27,8 @@
   import Todos from "./components/Todos.svelte";
   import Shortcuts from "./components/Shortcuts.svelte";
   import PackGallery from "./components/PackGallery.svelte";
+  // Extensions register at import time (fences, panels, commands, slash, flow nodes).
+  import { activePanels } from "./ext";
   import CrewRun from "./components/CrewRun.svelte";
   import PackSheet from "./components/PackSheet.svelte";
   import { crew, closeRun, crewLive, openRun } from "./lib/crew.svelte";
@@ -287,6 +289,12 @@
       {#if activeStore}
         <Todos store={activeStore} />
       {/if}
+      <!-- extension panels (apps/web/src/ext/*): shown for the active session, gated by each panel's when() -->
+      {#each activePanels() as p (p.id)}
+        <section class="ext-panel" data-agent-id={`ext.panel.${p.id}`}>
+          <p.component store={activeStore} />
+        </section>
+      {/each}
     </div>
 
     <div class="statusline">

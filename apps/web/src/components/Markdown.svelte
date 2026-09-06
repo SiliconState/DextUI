@@ -5,6 +5,7 @@
   import { parseMarkdown, prettyPath, type Inline } from "../lib/markdown";
   import { fileUrl as fileUrlFor, isHtmlPath } from "../lib/files";
   import Chart from "./Chart.svelte";
+  import { fenceFor } from "../ext";
   import HtmlArtifact from "./HtmlArtifact.svelte";
   import { ChartLink } from "../lib/chartlink.svelte";
   import { app } from "../lib/state.svelte";
@@ -58,10 +59,18 @@
     {:else if b.kind === "para"}
       <p class="md-p">{@render inline(b.inline)}</p>
     {:else if b.kind === "code"}
-      <div class="md-code">
-        {#if b.lang}<span class="md-lang">{b.lang}</span>{/if}
-        <pre>{b.text}</pre>
-      </div>
+      {@const ext = fenceFor(b.lang)}
+      {#if ext}
+        <!-- registered fence extension (apps/web/src/ext/<name>): the component escapes its own content -->
+        <div class="md-chartbox" data-agent-id={`markdown.ext.${b.lang}`}>
+          <ext.component text={b.text} lang={b.lang ?? ""} />
+        </div>
+      {:else}
+        <div class="md-code">
+          {#if b.lang}<span class="md-lang">{b.lang}</span>{/if}
+          <pre>{b.text}</pre>
+        </div>
+      {/if}
     {:else if b.kind === "html"}
       <!-- inline markup from a ```html/```svg fence: sandboxed srcdoc frame with a code toggle -->
       <div class="md-chartbox" data-agent-id="markdown.html">

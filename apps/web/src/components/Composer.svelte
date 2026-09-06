@@ -5,6 +5,7 @@
   import { tick, untrack } from "svelte";
   import { app, connection, newSession, stepSession } from "../lib/state.svelte";
   import { useSession } from "../lib/useSession.svelte";
+  import { runSlash as runExtSlash, slashCommands as extSlashCommands } from "../ext";
 
   let { store }: { store: SessionStore } = $props();
 
@@ -33,9 +34,11 @@
   const sess = useSession(() => store);
   const view = $derived(sess.view ?? store.state);
 
-  const commands = $derived<HostCommand[]>(
-    app.commands.length > 0 ? app.commands : LEGACY_COMMANDS.filter((c) => app.caps.includes(c.cap)),
-  );
+  const commands = $derived<HostCommand[]>([
+    ...(app.commands.length > 0 ? app.commands : LEGACY_COMMANDS.filter((c) => app.caps.includes(c.cap))),
+    // Client-side slash commands registered by extensions (apps/web/src/ext/*).
+    ...extSlashCommands(),
+  ]);
   // The menu stays open while the text is still a prefix of some command —
   // including multi-word ones like `/pack run re<port>` — and closes once a
   // command is complete and followed by a space (the task is free text).
@@ -195,8 +198,10 @@
     const sid = app.activeId;
     const t = text;
     recordHistory(sid, t);
-    if (t.trim().startsWith("/")) c.slash(sid, t.trim());
-    else if (view.working && canSteer) c.steer(sid, t);
+    if (t.trim().startsWith("/")) {
+      // An extension may claim the command locally; otherwise the host handles it.
+      if (!runExtSlash(t, sid)) c.slash(sid, t.trim());
+    } else if (view.working && canSteer) c.steer(sid, t);
     else c.prompt(sid, t);
     localStorage.removeItem(`dextui.draft.${sid}`);
     text = "";

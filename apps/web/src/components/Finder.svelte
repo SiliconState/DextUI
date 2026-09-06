@@ -17,6 +17,8 @@
   import { useSession } from "../lib/useSession.svelte";
   import { useDialog } from "../lib/dialog.svelte";
   import { crew, crewEnabled, crewEscalations, crewLive, openRun, shortRun } from "../lib/crew.svelte";
+  import { selfEdit, selfEditEnabled, buildUi, rollbackUi, restartHost, cancelRestart, openWorkbench } from "../lib/selfedit.svelte";
+  import { activeCommands } from "../ext";
 
   let query = $state("");
   let cursor = $state(0);
@@ -158,6 +160,20 @@
       run: toggleTheme,
     });
     out.push({ slug: "pair.reset", label: "re-pair with agent host", hint: "clears token", group: "app", run: rePair });
+    if (selfEditEnabled()) {
+      // Self-edit: DextUI working on itself. Every action goes through the host.
+      out.push({ slug: "self.workbench", label: "open workbench — edit DextUI itself", hint: "~/DextUI", group: "self", run: openWorkbench });
+      if (selfEdit.build) out.push({ slug: "self.building", label: `UI build running: ${selfEdit.build.step}`, group: "self", run: () => {} });
+      else {
+        out.push({ slug: "self.build", label: "rebuild UI — staged, swaps in only if it passes", hint: "/ui build", group: "self", run: () => buildUi() });
+        out.push({ slug: "self.build.tests", label: "rebuild UI with tests", hint: "/ui build --tests", group: "self", run: () => buildUi({ tests: true }) });
+      }
+      if (selfEdit.status?.lkg) out.push({ slug: "self.rollback", label: `roll back UI to previous build ${selfEdit.status.lkg.id}`, hint: "/ui rollback", group: "self", run: rollbackUi });
+      if (selfEdit.restartPending) out.push({ slug: "self.restart.cancel", label: "cancel pending host restart", group: "self", run: cancelRestart });
+      else out.push({ slug: "self.restart", label: "restart host when idle — picks up host code changes", hint: "/ui restart", group: "self", run: () => restartHost("finder") });
+    }
+    // Extension-registered commands (apps/web/src/ext/*) come last.
+    for (const c of activeCommands()) out.push({ slug: `ext.${c.slug}`, label: c.label, hint: c.hint, group: c.group ?? "ext", run: c.run });
     return out;
   });
 

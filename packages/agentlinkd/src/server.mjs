@@ -33,6 +33,7 @@ import { fold, foldMeta } from "../../mock-server/src/fold.mjs";
 import { checkedPath, purgeSeat, seatFiles } from "./session-files.mjs";
 import { GALLERY_DEFAULTS, PACK_NAME_RE, buildCatalog, listPackFiles, listPackTree, loadGallery, packCommands, parsePackListingJson, parsePackSlash, readPackFile, renderPackList, unmetRequirements, writePackFile } from "./packs.mjs";
 import { RUN_ID_RE as CREW_RUN_ID_RE, TAIL_MAX_LINES, createCrewAdapter } from "./crew.mjs";
+import { createSelfEdit, resolveStaticDir } from "./selfedit.mjs";
 
 const here = path.dirname(url.fileURLToPath(import.meta.url));
 const repoRoot = path.join(here, "..", "..", "..");
@@ -59,7 +60,11 @@ const DEXT_BIN = resolveDext();
 const DEXT_HOME = process.env.DEXT_HOME ? path.resolve(process.env.DEXT_HOME) : path.join(process.env.HOME ?? "", ".dext");
 const DEFAULT_CWD = path.resolve(argValue("cwd", process.cwd()));
 const DEFAULT_APPROVAL = argValue("approval", process.env.DEXT_APPROVAL ?? "auto-read");
-const STATIC_DIR = path.resolve(argValue("static", path.join(repoRoot, "apps", "web", "dist")));
+// `--safe` serves the last-known-good build (apps/web/dist.lkg) so a broken
+// self-edit can never lock the operator out of the UI that fixes it.
+const SAFE_MODE = process.argv.includes("--safe");
+const STATIC_RESOLVED = resolveStaticDir({ staticDir: argValue("static", path.join(repoRoot, "apps", "web", "dist")), repoRoot, safe: SAFE_MODE });
+const STATIC_DIR = STATIC_RESOLVED.dir;
 const STATE_DIR = path.resolve(
   argValue("state-dir", process.env.AGENTLINKD_STATE_DIR ?? path.join(process.env.HOME ?? "", ".dextui", "agentlinkd")),
 );
@@ -334,6 +339,10 @@ const clients = new Set();
 
 // ---------- crew ----------
 
+// Assigned below (self-edit section); crew's constructor scans synchronously
+// and may fire onChanged before the adapter exists.
+let SELF = null;
+
 // Runs are global (detached, cwd-keyed), so the adapter lives beside the pack
 // catalog rather than inside any session. Roots: crew's home runs dir plus
 // every project's `.crew/runs` (the default cwd now, session cwds as they open).
@@ -342,7 +351,10 @@ const CREW = CREW_BIN
       roots: [path.join(DEXT_HOME, "crew", "runs"), path.join(DEFAULT_CWD, ".crew", "runs")],
       crewBin: CREW_BIN,
       dextBin: DEXT_BIN,
-      onChanged: (payload) => broadcastControl("x-agentlinkd.crew.changed", payload),
+      onChanged: (payload) => {
+        broadcastControl("x-agentlinkd.crew.changed", payload);
+        SELF?.tick();
+      },
       onRunChanged: (id, detail) => {
         for (const c of clients) if (c.phase === "live" && c.crewOpen.has(id)) sendControl(c, "x-agentlinkd.crew.run", detail);
       },
@@ -353,6 +365,44 @@ const CREW = CREW_BIN
 
 function crewRootFor(cwd) {
   if (CREW && typeof cwd === "string" && cwd) CREW.addRoot(path.join(cwd, ".crew", "runs"));
+}
+
+// ---------- self-edit ----------
+
+// DextUI editing itself: staged UI builds with LKG rollback, restart-when-idle,
+// and detection of rebuilds the agent performed from a workbench session.
+// Only advertised when this host runs from a buildable checkout.
+function hostIdle() {
+  return busyDetail().length === 0;
+}
+function busyDetail() {
+  const out = [];
+  for (const s of sessions.values()) if (s.working) out.push({ kind: "turn", session: s.id, title: s.title.slice(0, 40) });
+  if (CREW) for (const r of CREW.summaries().runs) if (r.status === "running" || r.status === "pending") out.push({ kind: "crew", run: r.id });
+  return out;
+}
+SELF = createSelfEdit({
+  repoRoot,
+  stateDir: STATE_DIR,
+  staticDir: STATIC_DIR,
+  broadcast: (event, data) => broadcastControl(event, data),
+  isIdle: hostIdle,
+  busyDetail,
+  onRestart: (code) => restartHost(code),
+  log: (m) => console.error(`agentlinkd: self-edit: ${m}`),
+});
+// hello_ok.self + x-agentlinkd.ui.{build,rollback,status} + x-agentlinkd.host.{restart,restart_cancel} + /ui + GET /__self.
+if (SELF.enabled) {
+  CAPABILITIES.push("self_edit");
+  COMMANDS.push({ cmd: "/ui", desc: "self-edit: status | build [--tests] | rollback | restart [why] | cancel" });
+}
+
+function restartHost(code) {
+  shuttingDown = true;
+  server.close();
+  for (const s of sessions.values()) killChild(s);
+  persistIndex(true);
+  setTimeout(() => process.exit(code), 300);
 }
 
 async function handleCrewCommand(client, frame) {
@@ -914,6 +964,9 @@ function runTurn(s, prompt) {
     }
     persistIndex();
     scheduleList();
+    // Idle boundary: a restart requested mid-turn (by a human, or by the agent
+    // editing the host from a workbench session) is honored here.
+    SELF.tick();
   };
 
   child.stdout.on("data", (chunk) => {
@@ -1116,12 +1169,71 @@ const HOST_HELP = [
   "  /help                 this text",
   "  /approval <profile>   set this session's dext approval profile",
   `                        (${[...APPROVALS].join(" | ")}) — applies from the next turn`,
+  "  /pack …               list | run <name> <task> | inspect <name> | create <shelf>/<name> [--from <pack>]",
+  "  /ui status            self-edit: served build, last build, pending restart",
+  "  /ui build [--tests] [--no-check]   staged rebuild of the web app; swaps in only if it passes",
+  "  /ui rollback          serve the previous (last-known-good) build again",
+  "  /ui restart [why]     restart the host when idle (after this turn); --force = now",
   "",
   "steering: input sent while a turn runs is queued and delivered",
   "automatically as the next turn — no stopping required (^c keeps it queued).",
   "interactive approvals still need the upstream dext bridge; dext's",
   "--approval profile governs tool policy.",
 ].join("\n");
+
+/** `/ui …`: the self-edit verbs, journaled so an agent-driven edit loop is
+ *  legible in the transcript. Same primitives as the x-agentlinkd.ui.* commands. */
+async function handleUiSlash(client, s, rest) {
+  if (!SELF.enabled) {
+    sendError(client, "unsupported", "self-edit is off: this host is not running from a buildable DextUI checkout");
+    return;
+  }
+  const words = rest.split(/\s+/).filter(Boolean);
+  const verb = words[0] ?? "status";
+  const flags = new Set(words.slice(1).filter((w) => w.startsWith("--")));
+  switch (verb) {
+    case "status": {
+      const st = SELF.status();
+      const lines = [
+        `ui: serving ${st.serving} ${st.version?.id ?? "?"} from ${st.static}`,
+        `lkg: ${st.lkg ? st.lkg.id : "none"}`,
+        st.building ? `building: ${st.building.id} (${st.building.step})` : "building: no",
+        st.last ? `last build: ${st.last.ok ? "ok" : `FAILED ${st.last.error}${st.last.failed ? ` at ${st.last.failed}` : ""}`} · ${st.last.duration_ms ?? 0} ms · by ${st.last.by}` : "last build: none this host lifetime",
+        st.restart_pending ? `restart pending (${st.restart_pending.by}${st.restart_pending.reason ? `: ${st.restart_pending.reason}` : ""}) — waits for idle` : "restart pending: no",
+        `agent path: node ${st.build_script}   ·   restart: write ${st.request_file}`,
+      ];
+      publish(journalData(s, "structured_slash", lines.join("\n")));
+      return;
+    }
+    case "build": {
+      publish(journalData(s, "slash", `ui build started (${flags.has("--tests") ? "with tests, " : ""}${flags.has("--no-check") ? "no svelte-check" : "svelte-check"}) — served build stays until it passes`));
+      const r = await SELF.build({ check: !flags.has("--no-check"), tests: flags.has("--tests"), by: `session:${s.id}` });
+      if (s.deleted) return;
+      publish(journalData(s, r.ok ? "slash" : "structured_slash", r.ok
+        ? `ui build ok · ${r.version?.id ?? "?"} · ${r.duration_ms} ms — open tabs reload; previous build kept as LKG`
+        : `ui build FAILED (${r.error}${r.failed ? ` at ${r.failed}` : ""}) — served build untouched\n${String(r.tail ?? r.message ?? "").slice(-2000)}`));
+      return;
+    }
+    case "rollback": {
+      const r = SELF.rollback({ by: `session:${s.id}` });
+      publish(journalData(s, "slash", r.ok ? `ui rolled back to ${r.version?.id ?? "previous build"}` : `ui rollback failed: ${r.message ?? r.error}`));
+      return;
+    }
+    case "restart": {
+      const reason = words.slice(1).filter((w) => !w.startsWith("--")).join(" ");
+      const r = SELF.requestRestart({ reason, by: `session:${s.id}`, force: flags.has("--force") });
+      publish(journalData(s, "slash", r.pending
+        ? `host restart queued${reason ? ` (${reason})` : ""} — happens when idle: ${r.busy?.map((b) => b.kind).join(", ") || "after this turn"}`
+        : "host restarting now — tabs reconnect automatically"));
+      return;
+    }
+    case "cancel":
+      publish(journalData(s, "slash", SELF.cancelRestart() ? "pending host restart cancelled" : "no restart was pending"));
+      return;
+    default:
+      sendError(client, "bad_request", `unknown /ui verb '${verb}'; try /ui status | build [--tests] [--no-check] | rollback | restart [why] [--force] | cancel`);
+  }
+}
 
 function handleSlash(client, s, raw) {
   const trimmed = String(raw ?? "").trim();
@@ -1139,6 +1251,8 @@ function handleSlash(client, s, raw) {
     publish(journalData(s, "slash", HOST_HELP));
     return;
   }
+  const ui = /^\/ui\b\s*(.*)$/s.exec(trimmed);
+  if (ui) return handleUiSlash(client, s, ui[1].trim());
   const m = /^\/approval\s+(\S+)$/.exec(trimmed);
   if (m) {
     const profile = m[1];
@@ -1152,7 +1266,7 @@ function handleSlash(client, s, raw) {
     publish(journalData(s, "slash", `approval profile → ${profile} (next turn)`));
     return;
   }
-  sendError(client, "unsupported", `host handles /help, /approval and /pack; '${trimmed.split(/\s/)[0]}' needs interactive dext`);
+  sendError(client, "unsupported", `host handles /help, /approval, /pack and /ui; '${trimmed.split(/\s/)[0]}' needs interactive dext`);
 }
 
 // ---------- packs: slash + prompt routing ----------
@@ -1311,6 +1425,7 @@ async function handleCommand(client, frame) {
       commands: hostCommands(),
       packs: PACKS,
       ...(CREW ? { crews: CREW.summaries() } : {}),
+      ...(SELF.enabled ? { self: SELF.status() } : {}),
     });
     for (const s of sessions.values()) crewRootFor(s.cwd);
     return;
@@ -1583,7 +1698,52 @@ async function handleCommand(client, frame) {
         await handleCrewCommand(client, frame);
         return;
       }
+      if (typeof frame.cmd === "string" && (frame.cmd.startsWith("x-agentlinkd.ui.") || frame.cmd.startsWith("x-agentlinkd.host."))) {
+        await handleSelfEditCommand(client, frame);
+        return;
+      }
       sendError(client, "unknown_command", `unsupported cmd ${String(frame.cmd)}`);
+  }
+}
+
+// ---------- self-edit commands (x-agentlinkd.ui.* / x-agentlinkd.host.*) ----------
+
+async function handleSelfEditCommand(client, frame) {
+  if (!SELF.enabled) {
+    sendError(client, "unsupported", "self-edit is off on this host (not a buildable DextUI checkout)", frame.cmd);
+    return;
+  }
+  switch (frame.cmd) {
+    case "x-agentlinkd.ui.status":
+      sendControl(client, "x-agentlinkd.ui.status", SELF.status());
+      return;
+    case "x-agentlinkd.ui.build": {
+      if (SELF.isBuilding()) {
+        sendError(client, "busy", "a UI build is already running", frame.cmd);
+        return;
+      }
+      // Progress and the result ride the broadcast x-agentlinkd.ui.build events.
+      void SELF.build({ check: frame.check !== false, tests: frame.tests === true, by: `client:${client.id}` });
+      sendControl(client, "x-agentlinkd.ui.status", SELF.status());
+      return;
+    }
+    case "x-agentlinkd.ui.rollback": {
+      const r = SELF.rollback({ by: `client:${client.id}` });
+      if (!r.ok) sendError(client, r.error === "busy" ? "busy" : "bad_request", r.message ?? r.error, frame.cmd);
+      else sendControl(client, "x-agentlinkd.ui.status", SELF.status());
+      return;
+    }
+    case "x-agentlinkd.host.restart": {
+      const r = SELF.requestRestart({ reason: typeof frame.reason === "string" ? frame.reason : "", by: `client:${client.id}`, force: frame.force === true });
+      sendControl(client, "x-agentlinkd.ui.status", { ...SELF.status(), restart: r });
+      return;
+    }
+    case "x-agentlinkd.host.restart_cancel":
+      SELF.cancelRestart();
+      sendControl(client, "x-agentlinkd.ui.status", SELF.status());
+      return;
+    default:
+      sendError(client, "unknown_command", `unsupported cmd ${String(frame.cmd)}`, frame.cmd);
   }
 }
 
@@ -1904,6 +2064,45 @@ const server = http.createServer((req, res) => {
     res.end(JSON.stringify({ pack: { ...pack, files: listPackFiles(pack.path) } }));
     return;
   }
+  if (pathName === "/__self" || pathName.startsWith("/__self/")) {
+    // Self-edit surface for `/__agent` drivers and the agent's own bash:
+    // GET status; POST build|rollback|restart|restart_cancel (JSON body optional).
+    if (!checkAuth(req, res)) return;
+    if (!SELF.enabled) {
+      res.writeHead(404, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "unsupported", message: "self-edit is off on this host" }));
+      return;
+    }
+    const verb = pathName.slice("/__self".length).replace(/^\//, "");
+    if (req.method === "GET" && !verb) {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify(SELF.status()));
+      return;
+    }
+    if (req.method === "POST" && ["build", "rollback", "restart", "restart_cancel"].includes(verb)) {
+      let body = "";
+      req.on("data", (d) => { body = (body + d.toString("utf8")).slice(0, 4096); });
+      req.on("end", async () => {
+        let opts = {};
+        try { opts = body.trim() ? JSON.parse(body) : {}; } catch { /* ignore */ }
+        if (!opts || typeof opts !== "object") opts = {};
+        let out;
+        if (verb === "build") {
+          if (SELF.isBuilding()) out = { ok: false, error: "busy" };
+          else if (opts.wait === true) out = await SELF.build({ check: opts.check !== false, tests: opts.tests === true, by: "rest" });
+          else { void SELF.build({ check: opts.check !== false, tests: opts.tests === true, by: "rest" }); out = { ok: true, started: true }; }
+        } else if (verb === "rollback") out = SELF.rollback({ by: "rest" });
+        else if (verb === "restart") out = SELF.requestRestart({ reason: typeof opts.reason === "string" ? opts.reason : "", by: "rest", force: opts.force === true });
+        else out = { ok: true, cancelled: SELF.cancelRestart() };
+        res.writeHead(out.ok === false ? (out.error === "busy" ? 409 : 400) : 200, { "content-type": "application/json" });
+        res.end(JSON.stringify(out));
+      });
+      return;
+    }
+    res.writeHead(405, { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: "method_not_allowed" }));
+    return;
+  }
   if (pathName === "/sessions" || pathName === "/__agent" || pathName.startsWith("/sessions/")) {
     // The file endpoint also accepts ?t=<token> (subresource loads cannot send
     // Authorization headers); every other surface is header-only.
@@ -2057,6 +2256,7 @@ process.once("SIGTERM", shutdown);
 initStateDir();
 restoreSessions();
 watchPackRoots();
+SELF.start();
 
 server.listen(PORT, "127.0.0.1", () => {
   console.log(`agentlinkd listening on http://127.0.0.1:${server.address().port}`);
@@ -2064,6 +2264,8 @@ server.listen(PORT, "127.0.0.1", () => {
   console.log(`  dext:     ${DEXT_BIN}`);
   console.log(`  cwd:      ${DEFAULT_CWD}`);
   console.log(`  state:    ${STATE_DIR}`);
+  console.log(`  static:   ${STATIC_DIR} (${STATIC_RESOLVED.mode}${SAFE_MODE ? ", --safe" : ""})`);
+  console.log(`  self-edit: ${SELF.enabled ? `on — /ui build, exit ${SELF.status().restart_exit_code} = restart` : "off (not a buildable checkout)"}`);
   console.log(`  approval: ${DEFAULT_APPROVAL} (per-session: /approval <profile>)`);
   console.log(`  models:   ${MODEL_CATALOG.reduce((n, g) => n + g.models.length, 0)} across ${MODEL_CATALOG.length} provider(s)`);
 });
