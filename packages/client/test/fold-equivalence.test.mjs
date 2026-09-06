@@ -112,8 +112,8 @@ test("(d) thinking deltas + complete collapse into one completed thinking block"
   ]);
   const store = assertEquivalent(envelopes);
   assert.deepStrictEqual(stripIds(store.state.blocks), [
-    { kind: "thinking", text: "hmm...", complete: true },
-    { kind: "text", text: "ok", complete: true },
+    { kind: "thinking", text: "hmm...", complete: true, startedAt: 1000, endedAt: 1002 },
+    { kind: "text", text: "ok", complete: true, startedAt: 1003, endedAt: 1004 },
   ]);
 });
 
@@ -239,7 +239,7 @@ test("(g) interrupted seals the open text block and appends the marker", () => {
   ]);
   const store = assertEquivalent(envelopes);
   assert.deepStrictEqual(stripIds(store.state.blocks), [
-    { kind: "text", text: "half", complete: true },
+    { kind: "text", text: "half", complete: true, startedAt: 1001 },
     { kind: "marker", level: "warn", text: "Interrupted." },
   ]);
 });
@@ -264,8 +264,8 @@ test("(h) user_message after a completed text block starts a new text block", ()
   ]);
   const store = assertEquivalent(envelopes);
   assert.deepStrictEqual(stripIds(store.state.blocks), [
-    { kind: "text", text: "first", complete: true },
+    { kind: "text", text: "first", complete: true, startedAt: 1000, endedAt: 1001 },
     { kind: "user", text: "again" },
-    { kind: "text", text: "second", complete: false },
+    { kind: "text", text: "second", complete: false, startedAt: 1003 },
   ]);
 });

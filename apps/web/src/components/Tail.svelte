@@ -10,18 +10,24 @@
     mode = "auto",
     file = false,
     sessionId = "",
-  }: { text: string; mode?: "auto" | "md" | "log"; file?: boolean; sessionId?: string } = $props();
+    raw = $bindable(false),
+  }: { text: string; mode?: "auto" | "md" | "log"; file?: boolean; sessionId?: string; raw?: boolean } = $props();
 
-  const MD_HINTS: RegExp[] = [
-    /^\s{0,3}#{1,6}\s+\S/m, // ATX headings
-    /```/, // fenced code
-    /^\s{0,3}([-*+]|\d+\.)\s+\S/m, // lists
-    /\*\*[^*\n]+\*\*/, // bold
-    /^\|.+\|$/m, // tables
-  ];
-  const isMd = $derived(mode === "md" || (mode === "auto" && MD_HINTS.some((re) => re.test(text ?? ""))));
+  // Markdown sniffing: a strong signal alone decides, weak ones need two,
+  // and timestamped log output never counts — whatever tokens it carries.
+  const STRONG: RegExp[] = [/^\s{0,3}#{1,6}\s+\S/m, /```/, /^\|.+\|$/m];
+  const WEAK: RegExp[] = [/^\s{0,3}([-*+]|\d+\.)\s+\S/m, /\*\*[^*\n]+\*\*/];
+  const STAMPED = /^(\[\d{4}-|\d{4}-\d{2}-\d{2}[T ]|\d{2}:\d{2}:\d{2})/;
+  function isMarkdown(t: string): boolean {
+    const s = t ?? "";
+    const lines = s.split("\n").filter((l) => l.trim());
+    if (!lines.length) return false;
+    if (lines.filter((l) => STAMPED.test(l.trim())).length / lines.length >= 0.4) return false;
+    if (STRONG.some((re) => re.test(s))) return true;
+    return WEAK.filter((re) => re.test(s)).length >= 2;
+  }
+  const isMd = $derived(mode === "md" || (mode === "auto" && isMarkdown(text)));
   const lines = $derived((text ?? "").split("\n"));
-  let raw = $state(false);
 
   function level(l: string): string {
     if (/\b(error|failed|failure|fatal|panic|✗)\b/i.test(l)) return "err";

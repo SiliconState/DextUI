@@ -107,6 +107,14 @@
     const t = (block.text ?? "").replace(/\s+/g, " ").trim();
     return t.length > 280 ? `… ${t.slice(-280)}` : t;
   });
+  // Duration from the envelope timestamps the store stamps on the stream —
+  // no host change needed. Sealed-without-complete blocks simply lack it.
+  const thinkDur = $derived.by(() => {
+    if (block.kind !== "thinking" || !block.complete) return "";
+    const { startedAt, endedAt } = block;
+    if (!startedAt || !endedAt || endedAt - startedAt < 1000) return "";
+    return ` · ${Math.round((endedAt - startedAt) / 1000)}s`;
+  });
 </script>
 
 {#if block.kind === "user"}
@@ -124,7 +132,7 @@
 {:else if block.kind === "thinking"}
   {#if block.complete}
     <details class="b-think done" data-agent-id="block.thinking" data-state="complete">
-      <summary><span class="faint">▸ thinking · {thinkWords} words</span></summary>
+      <summary><span class="faint">▸ thinking · {thinkWords} words{thinkDur}</span></summary>
       <div class="think-body">
         {#each thinkParas(block.text) as p, i (i)}
           <p class="think-p">{p}</p>
@@ -132,9 +140,10 @@
       </div>
     </details>
   {:else}
-    <div class="b-think live" data-agent-id="block.thinking" data-state="thinking">
-      <p class="think-p stream" class:fade={thinkTail.startsWith("…")}><span class="think-dots" aria-hidden="true"><span class="d"></span><span class="d"></span><span class="d"></span></span>{thinkTail}</p>
-    </div>
+    <details class="b-think live" open data-agent-id="block.thinking" data-state="thinking">
+      <summary><span class="faint">▾ thinking · streaming…</span></summary>
+      <p class="think-p stream"><span class="think-dots" aria-hidden="true"><span class="d"></span><span class="d"></span><span class="d"></span></span>{thinkTail}</p>
+    </details>
   {/if}
 {:else if block.kind === "tool"}
   <div class="tool" data-agent-id={`tool.${block.call_id}`} data-state={block.status}>
@@ -269,6 +278,14 @@
   .b-think.done[open] summary {
     margin-bottom: 2px;
   }
+  .b-think.live summary {
+    cursor: pointer;
+    user-select: none;
+    list-style: none;
+  }
+  .b-think.live summary::-webkit-details-marker {
+    display: none;
+  }
   .think-body {
     background: var(--bg1);
     padding: 4px 10px 6px;
@@ -284,13 +301,7 @@
     white-space: pre-line; /* explicit list items keep their line */
   }
   .think-p.stream {
-    color: var(--faint);
-  }
-  /* While streaming, older words dissolve toward the left — only once the
-     tail is actually truncated, so short thoughts never fade. */
-  .think-p.stream.fade {
-    -webkit-mask-image: linear-gradient(to right, transparent, #000 45%);
-    mask-image: linear-gradient(to right, transparent, #000 45%);
+    color: var(--dim);
   }
   /* Streaming thought indicator: three dots pulsing in sequence —
      "working on it" in terminal language, borrowed from no one. */

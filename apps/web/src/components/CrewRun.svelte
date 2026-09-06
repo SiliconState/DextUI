@@ -23,6 +23,7 @@
   let showDone = $state<Record<number, boolean>>({});
   let showAll = $state<Record<number, boolean>>({});
   let focus = $state(""); // worker key under j/k
+  let rawView = $state(false);
   let confirmStop = $state(false);
   let answer = $state("");
   let answerEl: HTMLTextAreaElement | null = $state(null);
@@ -40,6 +41,7 @@
       focus = "";
       confirmStop = false;
       answer = "";
+      rawView = false;
     }
   });
 
@@ -175,6 +177,7 @@
       case "y": if (confirmStop) stop(); else return; break;
       case "a": if (paused) answerEl?.focus(); else return; break;
       case "r": if (crew.tailWorker) refreshTail(); else return; break;
+      case "v": rawView = !rawView; break;
       default: return;
     }
     e.preventDefault();
@@ -220,7 +223,7 @@
       {#if paused && run.escalation}
         <section class="esc" data-agent-id={`crew.run.${run.id}.escalation`} data-state={crew.answering ? "answering" : "open"} aria-label="Escalation">
           <div class="esc-head"><span class="st-yellow">⚠ Escalation</span> <span class="dim">· {run.escalation.label}{run.escalation.reason ? ` · ${run.escalation.reason}` : ""}</span></div>
-          <Tail text={run.escalation.question} mode="md" />
+          <Tail text={run.escalation.question} mode="md" bind:raw={rawView} />
           <textarea
             bind:this={answerEl}
             bind:value={answer}
@@ -272,7 +275,7 @@
                 <div class="tailpane" data-agent-id={`crew.run.${run.id}.tail`} data-state={crew.tailPending ? "loading" : "shown"}>
                   <div class="tail-head faint">live.log · {w.label}{crew.tail ? ` · last ${crew.tail.lines.length} lines${crew.tail.truncated ? " (truncated)" : ""}` : ""}
                     <button class="act" data-agent-id={`crew.run.${run.id}.tail.refresh`} onclick={refreshTail}>[r] refresh</button></div>
-                  <Tail text={crew.tailPending && !crew.tail ? "…" : crew.tail?.lines.join("\n") || "(empty)"} />
+                  <Tail text={crew.tailPending && !crew.tail ? "…" : crew.tail?.lines.join("\n") || "(empty)"} bind:raw={rawView} />
                 </div>
               {/if}
             {/each}
@@ -290,7 +293,7 @@
         <div class="filepane" data-agent-id={`crew.run.${run.id}.file`} data-state="shown">
           <div class="tail-head faint">{crew.file.path} · {crew.file.bytes} B{crew.file.truncated ? " (truncated)" : ""}
             <button class="act" onclick={() => (crew.file = null)}>Close</button></div>
-          <Tail text={crew.file.text} file />
+          <Tail text={crew.file.text} file bind:raw={rawView} />
         </div>
       {/if}
     </div>
@@ -306,7 +309,7 @@
         <span class="faint">Deliverables:</span>
         {#each run.files as f (f)}<button class="act" data-agent-id={`crew.run.${run.id}.file.${f}`} onclick={() => openFile(f)}>{f}</button>{/each}
       {/if}
-      <span class="faint hint">j/k workers · J/K groups · ⏎ tail{live ? " · x stop" : ""}{paused ? " · a answer" : ""}{!live ? " · terminal run: no stop, no answer" : ""}</span>
+      <span class="faint hint">j/k workers · J/K groups · ⏎ tail · v raw{live ? " · x stop" : ""}{paused ? " · a answer" : ""}{!live ? " · terminal run: no stop, no answer" : ""}</span>
     </div>
   {/if}
 </div>

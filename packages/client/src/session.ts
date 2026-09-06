@@ -141,25 +141,28 @@ export class SessionStore {
     return last && last.kind === kind && !last.complete ? i : -1;
   }
 
-  private appendStream(kind: "text" | "thinking", delta: string): void {
+  private appendStream(kind: "text" | "thinking", delta: string, ts: number): void {
     // A stream of one kind ends the other: providers may start text without an
     // explicit thinking_block_complete, and a still-"live" thinking block would
     // otherwise keep rendering its tail beside the reply until turn_end.
     this.sealOpenOf(kind === "text" ? "thinking" : "text");
     const i = this.lastOpen(kind);
     if (i < 0) {
-      this.pushBlock({ kind, text: delta, complete: false });
+      this.pushBlock({ kind, text: delta, complete: false, startedAt: ts });
       return;
     }
     const open = this.state.blocks[i] as Extract<ViewBlock, { kind: "text" | "thinking" }>;
-    this.replaceBlock(i, { kind, text: open.text + delta, complete: false });
+    this.replaceBlock(i, { kind, text: open.text + delta, complete: false, startedAt: open.startedAt });
   }
 
-  private completeStream(kind: "text" | "thinking", full: string): void {
+  private completeStream(kind: "text" | "thinking", full: string, ts: number): void {
     this.sealOpenOf(kind === "text" ? "thinking" : "text");
     const i = this.lastOpen(kind);
-    if (i < 0) this.pushBlock({ kind, text: full, complete: true });
-    else this.replaceBlock(i, { kind, text: full, complete: true });
+    if (i < 0) this.pushBlock({ kind, text: full, complete: true, startedAt: ts, endedAt: ts });
+    else {
+      const open = this.state.blocks[i] as Extract<ViewBlock, { kind: "text" | "thinking" }>;
+      this.replaceBlock(i, { kind, text: full, complete: true, startedAt: open.startedAt, endedAt: ts });
+    }
   }
 
   private remember(e: Envelope): void {
@@ -249,16 +252,16 @@ export class SessionStore {
         return;
       // --- text / thinking ---
       case "text_delta":
-        this.appendStream("text", d as string);
+        this.appendStream("text", d as string, e.ts);
         return;
       case "text_block_complete":
-        this.completeStream("text", d as string);
+        this.completeStream("text", d as string, e.ts);
         return;
       case "thinking_delta":
-        this.appendStream("thinking", d as string);
+        this.appendStream("thinking", d as string, e.ts);
         return;
       case "thinking_block_complete":
-        this.completeStream("thinking", d as string);
+        this.completeStream("thinking", d as string, e.ts);
         return;
       // --- tools ---
       case "tool_call_preview": {

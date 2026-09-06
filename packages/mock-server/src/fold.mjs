@@ -104,7 +104,7 @@ export function fold(journal) {
         // cards or markers in between must start a fresh block (client parity).
         if (openText && blocks[blocks.length - 1] === openText) openText.text += d;
         else {
-          openText = { kind: "text", text: d, complete: false };
+          openText = { kind: "text", text: d, complete: false, startedAt: env.ts };
           blocks.push(openText);
         }
         break;
@@ -112,7 +112,8 @@ export function fold(journal) {
         if (openText && blocks[blocks.length - 1] === openText) {
           openText.text = d;
           openText.complete = true;
-        } else blocks.push({ kind: "text", text: d, complete: true });
+          openText.endedAt = env.ts;
+        } else blocks.push({ kind: "text", text: d, complete: true, startedAt: env.ts, endedAt: env.ts });
         openText = null;
         break;
       case "thinking_delta":
@@ -122,7 +123,7 @@ export function fold(journal) {
         }
         if (openThinking && blocks[blocks.length - 1] === openThinking) openThinking.text += d;
         else {
-          openThinking = { kind: "thinking", text: d, complete: false };
+          openThinking = { kind: "thinking", text: d, complete: false, startedAt: env.ts };
           blocks.push(openThinking);
         }
         break;
@@ -130,7 +131,8 @@ export function fold(journal) {
         if (openThinking && blocks[blocks.length - 1] === openThinking) {
           openThinking.text = d;
           openThinking.complete = true;
-        } else blocks.push({ kind: "thinking", text: d, complete: true });
+          openThinking.endedAt = env.ts;
+        } else blocks.push({ kind: "thinking", text: d, complete: true, startedAt: env.ts, endedAt: env.ts });
         openThinking = null;
         break;
       case "tool_call_preview":

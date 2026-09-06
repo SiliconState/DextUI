@@ -590,8 +590,8 @@ export interface PermissionResolvedEvent {
 
 /** Projection unit shared by snapshots and client stores. */
 export type Block =
-  | { kind: "text"; text: string; complete: boolean }
-  | { kind: "thinking"; text: string; complete: boolean }
+  | { kind: "text"; text: string; complete: boolean; startedAt?: number; endedAt?: number }
+  | { kind: "thinking"; text: string; complete: boolean; startedAt?: number; endedAt?: number }
   | {
       kind: "tool";
       call_id: string;
