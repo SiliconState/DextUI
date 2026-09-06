@@ -41,7 +41,7 @@
     if (/<html[\s>]/i.test(html)) {
       return /<head[\s>]/i.test(html) ? html.replace(/<head([^>]*)>/i, `<head$1>${scheme}${boot}${PROBE}`) : html.replace(/<html([^>]*)>/i, `<html$1><head>${scheme}${boot}${PROBE}</head>`);
     }
-    return `<!doctype html><html><head>${scheme}${boot}${PROBE}<style>body{margin:8px;font:13px/1.45 system-ui,sans-serif;color:CanvasText;background:Canvas}</style></head><body>${html}</body></html>`;
+    return `<!doctype html><html><head>${scheme}${boot}${PROBE}<style>body{margin:8px;font:13px/1.45 system-ui,sans-serif;color:light-dark(#242830,#c8cfd9);background:light-dark(#f4f2ec,#0b0d10)}</style></head><body>${html}</body></html>`;
   });
 
   $effect(() => {

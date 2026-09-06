@@ -82,7 +82,7 @@ HTML artifacts render in opaque-origin sandboxed iframes — they cannot see the
 
 Producers: `files.ts:fileUrl` appends `theme=` (images ignore it); `HtmlArtifact.svelte` injects the bootstrap next to the height probe and re-renders embeds when the theme toggles. Pack panels (`PackSheet`) are out of scope — packs declare their own styles. Docs opened standalone ("open ↗") fall back to OS `prefers-color-scheme`.
 
-Agents authoring workspace `.html` artifacts SHOULD follow this contract: light default, dark block keyed to both channels, `<meta name="color-scheme" content="light dark">`, param reader limited to the whitelisted `theme=dark|light` regex setting `data-theme`.
+Agents authoring workspace `.html` artifacts SHOULD follow this contract: light default mirroring the app's paper palette (`html[data-theme="light"]` in `apps/web/src/app.css`: body `#f4f2ec`, panels `#ffffff`, boxes `#ebe9e1`, lines `#d4d0c2`, fg `#242830`, dim `#5d6470`) — a generic white light theme reads as a glaring card against warm paper; dark block keyed to both channels; `<meta name="color-scheme" content="light dark">`; param reader limited to the whitelisted `theme=dark|light` regex setting `data-theme`.
 
 ## Repo map
 
