@@ -62,11 +62,12 @@ const CAPABILITIES = [
 // In-memory connectors + provider auth so the picker's Connected section and
 // the Providers dialog are exercisable against the mock.
 const MOCK_CONNECTORS = new Map();
+const MOCK_TICKETS = new Map();
 const MOCK_AUTH = new Map([["mock-a", "auth"], ["mock-b", "none"]]);
 function mockConnectorsList(extra = {}) {
   return {
     connectors: [...MOCK_CONNECTORS.values()],
-    tools: { git: true, rclone: false, gh: false },
+    tools: { git: true, rclone: true, gh: false },
     root: `${MOCK_HOME}/Connected`,
     ...extra,
   };
@@ -901,11 +902,32 @@ function handleCommand(client, frame) {
     case "x-agentlinkd.connectors.list":
       sendControl(client, "x-agentlinkd.connectors.list", mockConnectorsList());
       return;
+    case "x-agentlinkd.connectors.authorize": {
+      // Mock sign-in: a consent URL now, the token 1.5 s later (no browser round-trip).
+      if (frame.kind !== "gdrive" && frame.kind !== "dropbox") { sendError(client, "bad_request", "unknown connector kind", frame.cmd); return; }
+      const ticket = Math.random().toString(16).slice(2, 18).padEnd(16, "0");
+      MOCK_TICKETS.set(ticket, { kind: frame.kind, ready: false });
+      broadcastControl("x-agentlinkd.connectors.authorize", { ticket, kind: frame.kind, url: `https://accounts.example/consent?mock=${ticket}` });
+      setTimeout(() => { const t = MOCK_TICKETS.get(ticket); if (t) { t.ready = true; broadcastControl("x-agentlinkd.connectors.authorize", { ticket, done: true }); } }, 1500);
+      return;
+    }
+    case "x-agentlinkd.connectors.relay":
+      if (!MOCK_TICKETS.has(frame.ticket)) { sendError(client, "no_auth", "sign in first — the sign-in expired or was cancelled", frame.cmd); return; }
+      sendControl(client, "x-agentlinkd.connectors.authorize", { ticket: frame.ticket, relayed: true });
+      return;
+    case "x-agentlinkd.connectors.cancel":
+      MOCK_TICKETS.delete(frame.ticket);
+      sendControl(client, "x-agentlinkd.connectors.authorize", { ticket: frame.ticket ?? null, cancelled: true });
+      return;
     case "x-agentlinkd.connectors.add": {
       const label = typeof frame.label === "string" ? frame.label.trim() : "";
       if (!/^[A-Za-z0-9][A-Za-z0-9 ._()-]{0,79}$/.test(label) || typeof frame.remote !== "string") { sendError(client, "bad_request", "label: letters, numbers, spaces, . _ ( ) - (max 80)", frame.cmd); return; }
       if ([...MOCK_CONNECTORS.values()].some((c) => c.label.toLowerCase() === label.toLowerCase())) { sendError(client, "exists", "a connector or folder with that name already exists", frame.cmd); return; }
-      if (frame.kind === "gdrive" || frame.kind === "dropbox") { sendError(client, "unsupported", "rclone is not installed on the host — install it to connect Drive or Dropbox", frame.cmd); return; }
+      if (frame.kind === "gdrive" || frame.kind === "dropbox") {
+        const t = MOCK_TICKETS.get(frame.ticket);
+        if (!t || !t.ready || t.kind !== frame.kind) { sendError(client, "no_auth", "sign in first — the sign-in expired or was cancelled", frame.cmd); return; }
+        MOCK_TICKETS.delete(frame.ticket);
+      }
       const id = Math.random().toString(16).slice(2, 10).padEnd(8, "0");
       const c = { id, kind: frame.kind, label, remote: frame.kind === "github" && !frame.remote.startsWith("https://") ? `https://github.com/${frame.remote}` : frame.remote, local: `${MOCK_HOME}/Connected/${label}`, created: Date.now(), has_secret: !!frame.secret, status: "syncing" };
       MOCK_CONNECTORS.set(id, c);

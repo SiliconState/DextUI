@@ -3,7 +3,7 @@
 // providers are model vendors dext can sign in to (x-agentlinkd.auth.*).
 // Credentials pass through exactly once on their way to the host and are
 // never stored here; listings arrive secret-free by contract.
-import type { AuthStatusReply, ConnectorInfo, ConnectorKind, ConnectorsListReply, Envelope, ProviderAuth } from "@dextui/protocol";
+import type { AuthStatusReply, ConnectorAuthEvent, ConnectorInfo, ConnectorKind, ConnectorsListReply, Envelope, ProviderAuth } from "@dextui/protocol";
 import { app, pushToast } from "./state.svelte";
 
 export const connectors = $state({
@@ -26,6 +26,20 @@ export const providers = $state({
   open: false,
 });
 
+/** OAuth sign-in for a drive kind. `waiting` = consent page open somewhere;
+ *  `done` = the host holds a token under `ticket` until `add` consumes it. */
+export const signin = $state({
+  phase: "idle" as "idle" | "starting" | "waiting" | "done" | "error",
+  kind: null as ConnectorKind | null,
+  ticket: null as string | null,
+  url: "",
+  error: "",
+});
+// Tab pre-opened on the click that starts a sign-in (popup blockers only
+// allow window.open inside a user gesture); pointed at the consent URL when
+// the host replies. Not reactive state — it is a browser handle.
+let signinTab: Window | null = null;
+
 export const KIND_LABEL: Record<ConnectorKind, string> = {
   github: "GitHub",
   git: "Git",
@@ -44,10 +58,50 @@ export function loadConnectors(): void {
   if (!connectorsEnabled() || !app.conn) return;
   app.conn.connectorsList();
 }
-export function addConnector(opts: { kind: ConnectorKind; label: string; remote: string; secret?: string }): void {
+export function addConnector(opts: { kind: ConnectorKind; label: string; remote: string; secret?: string; ticket?: string }): void {
   if (!connectorsEnabled() || !app.conn) return;
   connectors.pending = true;
   app.conn.connectorsAdd(opts);
+}
+
+/** Start "Sign in with Google/Dropbox". Must run inside the click handler. */
+export function startSignIn(kind: ConnectorKind): void {
+  if (!connectorsEnabled() || !app.conn) return;
+  if (signinTab && !signinTab.closed) signinTab.close();
+  signinTab = window.open("", "_blank");
+  if (signinTab) signinTab.document.title = "Signing in…";
+  signin.phase = "starting";
+  signin.kind = kind;
+  signin.ticket = null;
+  signin.url = "";
+  signin.error = "";
+  app.conn.connectorsAuthorize(kind);
+}
+/** Re-open the consent page (the pre-opened tab was closed or blocked). */
+export function reopenSignIn(): void {
+  if (signin.url) window.open(signin.url, "_blank", "noopener");
+}
+export function relaySignIn(landing: string): void {
+  if (!app.conn || !signin.ticket) return;
+  app.conn.connectorsRelay(signin.ticket, landing);
+}
+export function cancelSignIn(): void {
+  if (signinTab && !signinTab.closed) signinTab.close();
+  signinTab = null;
+  if (app.conn && signin.ticket) app.conn.connectorsCancelAuth(signin.ticket);
+  signin.phase = "idle";
+  signin.ticket = null;
+  signin.url = "";
+  signin.error = "";
+}
+/** After `add` consumed the ticket (or the form closed). */
+export function resetSignIn(): void {
+  signinTab = null;
+  signin.phase = "idle";
+  signin.kind = null;
+  signin.ticket = null;
+  signin.url = "";
+  signin.error = "";
 }
 export function syncConnector(id: string): void {
   if (!connectorsEnabled() || !app.conn) return;
@@ -106,10 +160,48 @@ export function onConnectorsControl(env: Envelope): void {
       if (c?.status === "error") pushToast("warn", `${c.label}: ${c.error ?? "could not connect"}`);
       else pushToast("ok", `Connected ${by(d.added)}`);
       connectors.formOpen = false;
+      resetSignIn();
     }
     if (d.synced) pushToast("ok", `${by(d.synced)} is up to date`);
     if (d.pushed) pushToast("ok", `Pushed ${by(d.pushed)}`);
     if (d.removed) pushToast("ok", "Connector removed");
+    return;
+  }
+  if (env.event === "x-agentlinkd.connectors.authorize") {
+    const d = env.data as ConnectorAuthEvent;
+    if (!d) return;
+    // Only the attempt this tab started (or none yet, for a broadcast that
+    // arrives before our own reply) drives local state.
+    if (signin.ticket && d.ticket !== signin.ticket) return;
+    if (d.url && d.kind) {
+      if (signin.phase !== "starting" && signin.phase !== "waiting") return; // another tab's sign-in
+      signin.ticket = d.ticket;
+      signin.kind = d.kind;
+      signin.url = d.url;
+      signin.phase = "waiting";
+      if (signinTab && !signinTab.closed) {
+        try { signinTab.location.href = d.url; } catch { signinTab = null; }
+      }
+      return;
+    }
+    if (d.done) {
+      signin.phase = "done";
+      if (signinTab && !signinTab.closed) { try { signinTab.close(); } catch { /* cross-origin now */ } }
+      signinTab = null;
+      return;
+    }
+    if (d.error) {
+      signin.phase = "error";
+      signin.error = d.error;
+      if (signinTab && !signinTab.closed) { try { signinTab.close(); } catch { /* ignore */ } }
+      signinTab = null;
+      return;
+    }
+    if (d.cancelled) {
+      if (signin.phase !== "idle") resetSignIn();
+      return;
+    }
+    if (d.relayed) pushToast("ok", "Address received — finishing sign-in…");
     return;
   }
   if (env.event === "x-agentlinkd.auth.status") {
@@ -131,6 +223,12 @@ export function onConnectorsControl(env: Envelope): void {
     if (typeof d?.cmd !== "string") return;
     if (d.cmd.startsWith("x-agentlinkd.connectors.")) {
       connectors.pending = false;
+      if (d.cmd.endsWith(".authorize") || d.cmd.endsWith(".relay")) {
+        signin.phase = d.cmd.endsWith(".authorize") ? "error" : signin.phase;
+        signin.error = d.message;
+        if (signinTab && !signinTab.closed) { try { signinTab.close(); } catch { /* ignore */ } }
+        signinTab = null;
+      }
       pushToast("warn", d.message);
     } else if (d.cmd.startsWith("x-agentlinkd.auth.")) {
       providers.pending = false;

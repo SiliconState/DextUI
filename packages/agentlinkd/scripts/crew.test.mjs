@@ -176,3 +176,40 @@ test("adapter stop/resume guard on state without spawning", async () => {
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("remove/clearFinished: finished runs only, records gone, live runs and deliverables survive", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "crew-rm-"));
+  const mk = (name, status) => {
+    const dir = path.join(root, name);
+    const chain = path.join(root, "shared-chain");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.mkdirSync(chain, { recursive: true });
+    fs.writeFileSync(path.join(chain, "review.md"), "# deliverable\n");
+    fs.writeFileSync(path.join(dir, "manifest.json"), JSON.stringify(manifest({ runId: name, chainDir: chain, cwd: root, status })));
+    return { dir, chain };
+  };
+  const done = mk("run-111111111111", "completed");
+  const failed = mk("run-222222222222", "failed");
+  const live = mk("run-333333333333", "running");
+  const a = createCrewAdapter({ roots: [root], crewBin: "/nonexistent/crew" });
+  try {
+    assert.equal(a.remove("run-333333333333").ok, false, "a live run must be refused");
+    assert.match(a.remove("run-333333333333").message, /running/);
+    assert.equal(a.remove("run-00000000000f").ok, false, "unknown run");
+    const r = a.remove("run-111111111111");
+    assert.equal(r.ok, true);
+    assert.equal(fs.existsSync(done.dir), false, "the run record is deleted");
+    assert.equal(a.detail("run-111111111111"), null);
+    const c = a.clearFinished();
+    assert.equal(c.ok, true);
+    assert.equal(c.removed, 1, "only the failed run was left to sweep");
+    assert.equal(fs.existsSync(failed.dir), false);
+    assert.equal(fs.existsSync(live.dir), true, "the live run survives a sweep");
+    assert.notEqual(a.detail("run-333333333333"), null);
+    assert.equal(fs.existsSync(path.join(live.chain, "review.md")), true, "deliverables are never touched");
+    assert.equal(a.clearFinished().removed, 0, "an empty sweep is a no-op");
+  } finally {
+    a.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

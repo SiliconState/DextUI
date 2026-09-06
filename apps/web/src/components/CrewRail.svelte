@@ -3,7 +3,7 @@
   // Global (runs outlive sessions), attention-sorted by the host, 3 visible +
   // "n more", unmounts when empty. Observation only: the one decision
   // (escalation) also lives in the queue as a row — this list never badges.
-  import { crew, crewEnabled, crewDur, crewAge, crewIdle, openRun, shortRun, toggleCrewRail, GLYPH } from "../lib/crew.svelte";
+  import { crew, crewEnabled, crewDur, crewAge, crewIdle, openRun, shortRun, toggleCrewRail, GLYPH, crewFinished, clearFinishedRuns } from "../lib/crew.svelte";
   import type { CrewRun } from "../lib/crew.svelte";
 
   let { onPick }: { onPick?: () => void } = $props();
@@ -38,6 +38,21 @@
     openRun(id);
     onPick?.();
   }
+
+  // Bulk cleanup: two clicks, the second within 4 s (the same pattern the
+  // run sheet uses for stop and delete). Deletes records only — deliverables
+  // inside the project are never touched.
+  const finished = $derived(crew.runs.filter(crewFinished).length);
+  let confirmClear = $state(false);
+  function clearAll() {
+    if (!confirmClear) {
+      confirmClear = true;
+      setTimeout(() => (confirmClear = false), 4000);
+      return;
+    }
+    confirmClear = false;
+    clearFinishedRuns();
+  }
 </script>
 
 {#if enabled}
@@ -62,6 +77,11 @@
             <span class="dim meta">{meta(r)}</span>
           </button>
         {/each}
+        {#if finished > 0}
+          <button class="crew-more faint" data-agent-id="crew.rail.clear" data-state={confirmClear ? "confirm" : "ready"} onclick={clearAll}>
+            {confirmClear ? "✕ sure? deletes every finished run" : `✕ Clear ${finished} finished`}
+          </button>
+        {/if}
         {#if hidden > 0 || crew.railAll}
           <button class="crew-more faint" data-agent-id="crew.rail.more" data-state={crew.railAll ? "expanded" : "collapsed"} onclick={() => (crew.railAll = !crew.railAll)}>
             {crew.railAll ? "▴ Fewer" : `▾ ${hidden} more`}{crew.omitted > 0 && crew.railAll ? ` · ${crew.omitted} not listed by host` : ""}

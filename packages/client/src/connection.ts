@@ -255,6 +255,16 @@ export class Connection {
     this.sendRaw(cmd(`${CREW_EXT}.resume`, { run, answer }));
   }
 
+  /** Delete one finished run's record (manifest, worker dirs, logs). */
+  crewRemove(run: string): void {
+    this.sendRaw(cmd(`${CREW_EXT}.remove`, { run }));
+  }
+
+  /** Delete every finished run's record in one sweep. */
+  crewClearFinished(): void {
+    this.sendRaw(cmd(`${CREW_EXT}.clear`, {}));
+  }
+
   // ---------- self-edit extension (host-prefixed until promoted) ----------
 
   uiStatus(): void {
@@ -319,9 +329,24 @@ export class Connection {
     this.sendRaw(cmd(`${CONNECTORS_EXT}.list`, {}));
   }
 
-  /** `secret`: git token, or the token JSON printed by `rclone authorize`. Sent once; never echoed. */
-  connectorsAdd(opts: { kind: ConnectorKind; label: string; remote: string; secret?: string }): void {
+  /** `secret`: git token, or the token JSON printed by `rclone authorize`;
+   *  `ticket`: from a completed `connectorsAuthorize` sign-in. Sent once; never echoed. */
+  connectorsAdd(opts: { kind: ConnectorKind; label: string; remote: string; secret?: string; ticket?: string }): void {
     this.sendRaw(cmd(`${CONNECTORS_EXT}.add`, opts));
+  }
+
+  /** Start an OAuth sign-in for a drive kind; the consent URL arrives as a `connectors.authorize` event. */
+  connectorsAuthorize(kind: ConnectorKind): void {
+    this.sendRaw(cmd(`${CONNECTORS_EXT}.authorize`, { kind }));
+  }
+
+  /** Browser on another device: replay the loopback landing address through the host. */
+  connectorsRelay(ticket: string, landing: string): void {
+    this.sendRaw(cmd(`${CONNECTORS_EXT}.relay`, { ticket, landing }));
+  }
+
+  connectorsCancelAuth(ticket?: string): void {
+    this.sendRaw(cmd(`${CONNECTORS_EXT}.cancel`, ticket ? { ticket } : {}));
   }
 
   connectorsRemove(id: string, purge = false): void {

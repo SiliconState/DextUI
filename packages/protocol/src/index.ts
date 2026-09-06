@@ -398,6 +398,21 @@ export interface ConnectorsListReply {
   pushed?: string;
 }
 
+/** OAuth sign-in progress for drive kinds (`x-agentlinkd.connectors.authorize`).
+ *  `url` = the provider's consent page (open it); `done` = token in hand, pass
+ *  `ticket` to `add`; `relayed` = a pasted landing address was replayed to the
+ *  host's loopback listener; `cancelled`/`error` end the attempt. Broadcast to
+ *  every client: the consent page may be finished on another device. */
+export interface ConnectorAuthEvent {
+  ticket: string | null;
+  kind?: ConnectorKind;
+  url?: string;
+  done?: boolean;
+  relayed?: boolean;
+  cancelled?: boolean;
+  error?: string;
+}
+
 // ---------- provider sign-in (host extension `x-agentlinkd.auth.*`) ----------
 
 /** Sign in/out of model providers through `dext auth login|logout`; dext's own
@@ -615,12 +630,15 @@ export interface CrewFileReply {
   bytes: number;
 }
 
-/** Result of a control verb, broadcast so every client sees the same truth. */
+/** Result of a control verb, broadcast so every client sees the same truth.
+ *  `run` is absent on `clear` (it addresses every finished run; `removed`
+ *  counts them). */
 export interface CrewControlEvent {
-  run: string;
-  verb: "stop" | "resume";
+  run?: string;
+  verb: "stop" | "resume" | "remove" | "clear";
   ok: boolean;
   by?: string;
+  removed?: number;
   message?: string;
 }
 
@@ -876,7 +894,7 @@ export const CAPABILITIES = [
 ] as const;
 
 /** Client commands under the crew extension (`cmd: "x-agentlinkd.crew.<verb>"`). */
-export const CREW_COMMANDS = ["open", "close", "tail", "file", "stop", "resume"] as const;
+export const CREW_COMMANDS = ["open", "close", "tail", "file", "stop", "resume", "remove", "clear"] as const;
 export const CREW_RUN_ID_RE = /^run-[a-f0-9]{12}$/;
 
 // ---------- helpers ----------

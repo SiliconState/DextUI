@@ -1,8 +1,8 @@
 // Crew run adapter for agentlinkd: project crew 0.1.0 manifests into the
 // summary/detail tiers the web app renders, watch the runs directories, and
-// execute the two operator verbs (stop, resume). Result *text* never leaves
-// the host — summaries carry ids and counts, detail carries per-worker
-// status, and logs ride the bounded `tail` reply on demand.
+// execute the operator verbs (stop, resume, remove, clear). Result *text*
+// never leaves the host — summaries carry ids and counts, detail carries
+// per-worker status, and logs ride the bounded `tail` reply on demand.
 //
 // Coupling note: this reads crew's on-disk layout directly (manifest.json,
 // <worker>/.state, <worker>/live.log). Writes are atomic per crew's PACK.md,
@@ -468,6 +468,43 @@ export function createCrewAdapter({ roots = [], crewBin = "crew", dextBin, env =
     }
   }
 
+  /** Terminal display states: nothing on disk still needs these runs. */
+  const FINISHED = new Set(["completed", "failed", "stopped"]);
+
+  /** Delete a run's record (manifest, worker dirs, logs). Finished runs only —
+   *  a live one must be stopped first. Only the runs directory goes; the
+   *  deliverables in the project's chain dir stay where the crew left them. */
+  function remove(id) {
+    const r = runs.get(id);
+    if (!r) return { ok: false, message: "unknown run" };
+    if (!FINISHED.has(r.summary.state)) return { ok: false, message: `run is ${r.summary.state} — stop it first` };
+    try {
+      fs.rmSync(r.dir, { recursive: true, force: true });
+    } catch (err) {
+      return { ok: false, message: err.message.slice(0, 200) };
+    }
+    runs.delete(id);
+    schedule();
+    return { ok: true, message: "removed" };
+  }
+
+  /** Sweep every finished run off the list in one go. */
+  function clearFinished() {
+    let n = 0;
+    for (const [id, r] of [...runs]) {
+      if (!FINISHED.has(r.summary.state)) continue;
+      try {
+        fs.rmSync(r.dir, { recursive: true, force: true });
+        runs.delete(id);
+        n++;
+      } catch {
+        /* a dir that refuses stays listed; the rest of the sweep proceeds */
+      }
+    }
+    if (n) schedule();
+    return { ok: true, removed: n, message: `${n} finished run${n === 1 ? "" : "s"} removed` };
+  }
+
   function close() {
     clearTimeout(timer);
     clearInterval(heartbeat);
@@ -475,5 +512,5 @@ export function createCrewAdapter({ roots = [], crewBin = "crew", dextBin, env =
 
   for (const root of [...roots]) addRoot(root);
   try { scan(); } catch (err) { log(`crew: initial scan failed: ${err.message}`); }
-  return { addRoot, scan, schedule, summaries, detail, tail, file, stop, resume, close, runs };
+  return { addRoot, scan, schedule, summaries, detail, tail, file, stop, resume, remove, clearFinished, close, runs };
 }

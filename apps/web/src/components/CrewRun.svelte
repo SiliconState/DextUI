@@ -4,7 +4,7 @@
   // tail pane; actions conditional on run state (stop while live, answer
   // while paused, deliverables + tails always). Keys are scoped to the dialog.
   import type { CrewGroup, CrewWorker } from "@dextui/protocol";
-  import { crew, crewDur, crewAge, closeRun, requestTail, refreshTail, openFile, stopRun, answerRun, shortRun, GLYPH } from "../lib/crew.svelte";
+  import { crew, crewDur, crewAge, closeRun, requestTail, refreshTail, openFile, stopRun, answerRun, removeRun, crewFinished, shortRun, GLYPH } from "../lib/crew.svelte";
   import Tail from "./Tail.svelte";
 
   let { onClose }: { onClose?: () => void } = $props();
@@ -146,6 +146,21 @@
     stopRun(run.id);
   }
 
+  // Finished runs only: the sheet closes itself when the host confirms the
+  // removal (control event), so a refused delete leaves everything as it was.
+  const finished = $derived(run ? crewFinished(run) : false);
+  let confirmRemove = $state(false);
+  function remove() {
+    if (!run || !finished) return;
+    if (!confirmRemove) {
+      confirmRemove = true;
+      setTimeout(() => (confirmRemove = false), 4000);
+      return;
+    }
+    confirmRemove = false;
+    removeRun(run.id);
+  }
+
   function submit() {
     if (!run || !paused) return;
     if (answerRun(run.id, answer)) answer = "";
@@ -215,6 +230,15 @@
         {#if run.counts.paused}<span class="st-yellow">⚠{run.counts.paused}</span>{/if}
         {#if run.counts.pending}<span class="faint">○{run.counts.pending}</span>{/if}
       </span>
+      {#if finished}
+        <button
+          class="act"
+          data-agent-id={`crew.run.${run.id}.remove`}
+          data-state={confirmRemove ? "confirm" : "ready"}
+          title="Delete this run's record — files in your project stay"
+          onclick={remove}
+        >{confirmRemove ? "sure?" : "delete"}</button>
+      {/if}
       <button class="act close" data-agent-id={`crew.run.${run.id}.close`} onclick={close}>esc</button>
     </div>
     <div class="task faint" title={run.cwd}>{run.task}</div>

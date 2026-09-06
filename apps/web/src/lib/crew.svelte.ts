@@ -202,6 +202,19 @@ export function stopRun(id: string): void {
   c.crewStop(id);
 }
 
+/** Terminal display states a user may clean up (delete one, or clear all). */
+export function crewFinished(r: { state: string }): boolean {
+  return r.state === "completed" || r.state === "failed" || r.state === "stopped";
+}
+
+export function removeRun(id: string): void {
+  app.conn?.crewRemove(id);
+}
+
+export function clearFinishedRuns(): void {
+  app.conn?.crewClearFinished();
+}
+
 export function answerRun(id: string, answer: string): boolean {
   const c = app.conn;
   const text = answer.trim();
@@ -240,9 +253,13 @@ export function onCrewControl(env: Envelope): void {
       if (!d) return;
       if (d.verb === "resume") crew.answering = false;
       if (d.verb === "stop") crew.stopping = false;
+      // A removed run's sheet closes itself; a sweep closes it only when the
+      // open run was finished (live runs survive a clear).
+      if (d.ok && ((d.verb === "remove" && d.run === crew.openId) || (d.verb === "clear" && crew.open && crewFinished(crew.open)))) closeRun();
       // Broadcast to every client so all tabs see the same truth; the toast is
       // the receipt, the state flip arrives via x-agentlinkd.crew.changed.
-      pushToast(d.ok ? "ok" : "err", `crew ${shortRun(d.run)} · ${d.verb} ${d.ok ? "✓" : "✗"}${d.message ? ` · ${d.message}` : ""}`);
+      const who = d.run ? `crew ${shortRun(d.run)} · ` : "crew · ";
+      pushToast(d.ok ? "ok" : "err", `${who}${d.verb} ${d.ok ? "✓" : "✗"}${d.message ? ` · ${d.message}` : ""}`);
       return;
     }
     case "hello_ok": {

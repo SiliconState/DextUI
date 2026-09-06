@@ -6,43 +6,76 @@
   import { folders, navigate, pickCurrent, closeFolderPicker, createFolder, recentFolders, shortFolder } from "../lib/folders.svelte";
   import { app } from "../lib/state.svelte";
   import { useDialog } from "../lib/dialog.svelte";
-  import { KIND_LABEL, addConnector, connectors, connectorsEnabled, removeConnector, syncConnector } from "../lib/connectors.svelte";
+  import { KIND_LABEL, addConnector, cancelSignIn, connectors, connectorsEnabled, relaySignIn, removeConnector, reopenSignIn, resetSignIn, signin, startSignIn, syncConnector } from "../lib/connectors.svelte";
   import type { ConnectorKind } from "@dextui/protocol";
 
-  // Connect form (inside the picker footer). The secret field is sent once
-  // and cleared; it is never kept in state after submit.
+  // Connect form (inside the picker footer). Git kinds take an optional token
+  // (sent once, cleared). Drive kinds sign in with the provider: the host runs
+  // rclone's OAuth listener, we open the consent page, and `add` redeems the
+  // resulting ticket — no token ever passes through this component.
   let kind = $state<ConnectorKind>("github");
   let cLabel = $state("");
   let cRemote = $state("");
   let cSecret = $state("");
-  const kindOk = $derived(kind === "github" || kind === "git" ? connectors.tools.git : connectors.tools.rclone);
-  const needsSecret = $derived(kind === "gdrive" || kind === "dropbox");
+  let landing = $state("");
+  let relayOpen = $state(false);
+  const isDrive = $derived(kind === "gdrive" || kind === "dropbox");
+  const kindOk = $derived(isDrive ? connectors.tools.rclone : connectors.tools.git);
+  const signedIn = $derived(isDrive && signin.phase === "done" && signin.kind === kind && !!signin.ticket);
   const remoteHint = $derived(
     kind === "github" ? "owner/repo" : kind === "git" ? "https://…/repo.git" : "Folder inside the drive (blank = everything)",
   );
-  const secretHint = $derived(
-    kind === "github" ? "Personal access token (optional for public repos)" : kind === "git" ? "Token (optional)" : `Token from: rclone authorize "${kind === "gdrive" ? "drive" : "dropbox"}"`,
-  );
+  const secretHint = $derived(kind === "github" ? "Personal access token (optional for public repos)" : "Token (optional)");
+  const providerName = $derived(kind === "gdrive" ? "Google" : "Dropbox");
+  /** Folder name when the user leaves it blank: last path segment sans .git, or the drive's name. */
+  const defaultLabel = $derived.by(() => {
+    const seg = cRemote.trim().split("/").filter(Boolean).pop() ?? "";
+    const clean = seg.replace(/\.git$/i, "");
+    return clean || (isDrive ? KIND_LABEL[kind] : "");
+  });
   function openConnect() {
     connectors.formOpen = true;
     creating = false;
-    if (!cLabel && cRemote) cLabel = cRemote.split("/").pop() ?? "";
   }
   function closeConnect() {
     connectors.formOpen = false;
     cSecret = "";
+    landing = "";
+    relayOpen = false;
+    if (signin.phase !== "idle") cancelSignIn();
+    resetSignIn();
+  }
+  function pickKind(k: ConnectorKind) {
+    if (k === kind) return;
+    if (signin.phase !== "idle") cancelSignIn();
+    kind = k;
   }
   function submitConnect(e: Event) {
     e.preventDefault();
-    const label = cLabel.trim() || cRemote.trim().split("/").filter(Boolean).pop() || "";
-    if (!label || (!cRemote.trim() && kind !== "gdrive" && kind !== "dropbox")) return;
+    const label = cLabel.trim() || defaultLabel;
+    if (!label) return;
+    if (!isDrive && !cRemote.trim()) return;
+    if (isDrive) {
+      if (!signedIn || !signin.ticket) return;
+      addConnector({ kind, label, remote: cRemote.trim(), ticket: signin.ticket });
+      return;
+    }
     addConnector({ kind, label, remote: cRemote.trim(), ...(cSecret.trim() ? { secret: cSecret.trim() } : {}) });
     cSecret = "";
+  }
+  function submitRelay() {
+    const l = landing.trim();
+    if (!l) return;
+    relaySignIn(l);
+    landing = "";
+  }
+  function relayKey(e: KeyboardEvent) {
+    if (e.key === "Enter") { e.preventDefault(); submitRelay(); }
   }
   // The host confirms an add by listing (formOpen is cleared by the store);
   // reset the text fields then so the next connect starts clean.
   $effect(() => {
-    if (!connectors.formOpen) { cLabel = ""; cRemote = ""; }
+    if (!connectors.formOpen) { cLabel = ""; cRemote = ""; landing = ""; relayOpen = false; }
   });
 
   const dlg = useDialog(() => folders.open);
@@ -190,9 +223,11 @@
                     <span class="faint tiny">syncing…</span>
                   {:else if c.status === "error"}
                     <button class="tiny st-red" title={c.error} onclick={() => syncConnector(c.id)}>retry</button>
-                    <button class="tiny faint" title="Remove this connector (keeps the folder)" onclick={() => removeConnector(c.id)}>×</button>
                   {:else}
                     <button class="tiny faint" title="Pull the latest from the source" onclick={() => syncConnector(c.id)}>↻</button>
+                  {/if}
+                  {#if c.status !== "syncing"}
+                    <button class="tiny faint" title="Disconnect (keeps the folder on disk)" aria-label={`Disconnect ${c.label}`} onclick={() => removeConnector(c.id)}>×</button>
                   {/if}
                 </span>
               {/each}
@@ -233,19 +268,43 @@
             <form class="connect" onsubmit={submitConnect} data-agent-id="folders.connect.form" data-state={connectors.pending ? "pending" : "ready"}>
               <div class="kinds" role="radiogroup" aria-label="Source">
                 {#each ["github", "gdrive", "dropbox", "git"] as k (k)}
-                  <button type="button" class="chip" class:sel={kind === k} role="radio" aria-checked={kind === k} onclick={() => (kind = k as ConnectorKind)}>{KIND_LABEL[k as ConnectorKind]}</button>
+                  <button type="button" class="chip" class:sel={kind === k} role="radio" aria-checked={kind === k} onclick={() => pickKind(k as ConnectorKind)}>{KIND_LABEL[k as ConnectorKind]}</button>
                 {/each}
               </div>
               {#if !kindOk}
-                <p class="faint tiny">{kind === "github" || kind === "git" ? "git is not installed on the host." : "rclone is not installed on the host — install it to connect Drive or Dropbox."}</p>
+                <p class="faint tiny">{isDrive ? "rclone is not installed on the host — install it to connect Drive or Dropbox." : "git is not installed on the host."}</p>
+              {/if}
+              {#if isDrive}
+                <div class="signin" data-agent-id="folders.connect.signin" data-state={signin.phase}>
+                  {#if signedIn}
+                    <span class="st-green">✓ Signed in to {providerName}</span>
+                    <button type="button" class="tiny faint" onclick={cancelSignIn}>Use a different account</button>
+                  {:else if signin.phase === "starting" || signin.phase === "waiting"}
+                    <span class="dim">Waiting for {providerName}… finish in the tab that opened.</span>
+                    {#if signin.url}<button type="button" class="tiny" onclick={reopenSignIn}>Open it again</button>{/if}
+                    <button type="button" class="tiny faint" onclick={cancelSignIn}>Cancel</button>
+                    <details class="relay" bind:open={relayOpen}>
+                      <summary class="faint tiny">Signed in on another device and it ended on a page that would not load?</summary>
+                      <div class="relayf">
+                        <input bind:value={landing} placeholder="Paste the address of that page (http://127.0.0.1:53682/?state=…)" spellcheck="false" autocomplete="off" aria-label="Landing address" onkeydown={relayKey} data-agent-id="folders.connect.landing" />
+                        <button type="button" class="act" disabled={!landing.trim()} onclick={submitRelay}>Finish</button>
+                      </div>
+                    </details>
+                  {:else}
+                    <button type="button" class="act accent" disabled={!kindOk} data-agent-id="folders.connect.signin.start" onclick={() => startSignIn(kind)}>Sign in with {providerName}</button>
+                    {#if signin.phase === "error" && signin.error}<span class="st-red tiny">{signin.error}</span>{/if}
+                  {/if}
+                </div>
               {/if}
               <input bind:value={cRemote} placeholder={remoteHint} spellcheck="false" autocomplete="off" aria-label="Source" data-agent-id="folders.connect.remote" />
-              <input bind:value={cLabel} placeholder="Folder name (defaults to the source name)" maxlength="80" aria-label="Folder name" data-agent-id="folders.connect.label" />
-              <input bind:value={cSecret} type="password" placeholder={secretHint} autocomplete="off" spellcheck="false" aria-label="Credential" data-agent-id="folders.connect.secret" />
+              <input bind:value={cLabel} placeholder={`Folder name (default: ${defaultLabel || "from the source"})`} maxlength="80" aria-label="Folder name" data-agent-id="folders.connect.label" />
+              {#if !isDrive}
+                <input bind:value={cSecret} type="password" placeholder={secretHint} autocomplete="off" spellcheck="false" aria-label="Credential" data-agent-id="folders.connect.secret" />
+              {/if}
               <div class="acts">
-                <button type="submit" class="act accent" disabled={!kindOk || connectors.pending || (needsSecret && !cSecret.trim())} data-agent-id="folders.connect.submit">{connectors.pending ? "Connecting…" : "Connect"}</button>
+                <button type="submit" class="act accent" disabled={!kindOk || connectors.pending || (isDrive ? !signedIn : !cRemote.trim())} data-agent-id="folders.connect.submit">{connectors.pending ? "Connecting…" : "Connect"}</button>
                 <button type="button" class="act" onclick={closeConnect}>Cancel</button>
-                <span class="faint tiny">Appears under Connected/{cLabel.trim() || "…"}. {kind === "github" || kind === "git" ? "Pull is fast-forward only; push commits everything." : "Copies both ways; never deletes."}</span>
+                <span class="faint tiny">Appears under Connected/{cLabel.trim() || defaultLabel || "…"}. {isDrive ? "Copies both ways; never deletes." : "Pull is fast-forward only; push commits everything."}</span>
               </div>
             </form>
           {:else if creating}
@@ -373,12 +432,32 @@
     font-size: 11px;
   }
   .tiny {
+    font: inherit;
     font-size: 11px;
     background: none;
     border: 0;
     padding: 0 2px;
-    font: inherit;
-    font-size: 11px;
+  }
+  .signin {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: baseline;
+  }
+  .relay {
+    flex: 1 1 100%;
+  }
+  .relay summary {
+    cursor: pointer;
+  }
+  .relayf {
+    display: flex;
+    gap: 6px;
+    margin-top: 4px;
+  }
+  .relayf input {
+    flex: 1;
+    min-width: 0;
   }
   .connect {
     display: flex;

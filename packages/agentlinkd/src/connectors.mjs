@@ -17,13 +17,18 @@
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
-import { execFile } from "node:child_process";
+import http from "node:http";
+import { execFile, spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { confine, DIR_NAME_RE } from "./dirs.mjs";
 
 export const CONNECTOR_KINDS = ["github", "git", "gdrive", "dropbox"];
 export const CONNECTED_DIR = "Connected";
 export const ID_RE = /^[a-f0-9]{8}$/;
+export const TICKET_RE = /^[a-f0-9]{16}$/;
+/** rclone's OAuth loopback listener — fixed by rclone (its registered redirect URI). */
+export const RCLONE_AUTH_ORIGIN = "http://127.0.0.1:53682";
+const AUTHORIZE_TTL_MS = 10 * 60_000;
 const GITHUB_SHORT_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const GITHUB_URL_RE = /^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(?:\.git)?\/?$/;
 const HTTPS_RE = /^https:\/\/[A-Za-z0-9._-]+(?::\d+)?\/[^\s@]*$/;
@@ -111,7 +116,35 @@ export function extractRcloneToken(secret) {
   }
 }
 
-export function createConnectors({ home, root, allowLocal = false, exec = run, bins } = {}) {
+/** Fetch `url` without following redirects; resolves `{status, location, body}`. */
+function httpGet(url, timeout = 10_000) {
+  return new Promise((resolve) => {
+    const req = http.get(url, { timeout }, (res) => {
+      let body = "";
+      res.setEncoding("utf8");
+      res.on("data", (d) => { if (body.length < 65536) body += d; });
+      res.on("end", () => resolve({ status: res.statusCode ?? 0, location: res.headers.location ?? null, body }));
+    });
+    req.on("timeout", () => req.destroy(new Error("timeout")));
+    req.on("error", (err) => resolve({ status: 0, location: null, body: "", error: err.message }));
+  });
+}
+
+/** The landing URL a browser on another device ends up on (rclone's loopback
+ *  callback, unreachable from there). Accept it only if it is exactly that
+ *  callback for `state`; returns the path+query to relay, or null. */
+export function relayTarget(landing, state, origin = RCLONE_AUTH_ORIGIN) {
+  if (typeof landing !== "string" || landing.length > 4096) return null;
+  let u;
+  try { u = new URL(landing.trim()); } catch { return null; }
+  const o = new URL(origin);
+  const hostOk = (u.hostname === "127.0.0.1" || u.hostname === "localhost") && u.port === o.port && u.protocol === "http:";
+  if (!hostOk || u.pathname !== "/") return null;
+  if (u.searchParams.get("state") !== state || !u.searchParams.get("code")) return null;
+  return `/?${u.searchParams.toString()}`;
+}
+
+export function createConnectors({ home, root, allowLocal = false, exec = run, bins, spawnFn = spawn, authOrigin = RCLONE_AUTH_ORIGIN } = {}) {
   if (!home || !root) throw new Error("connectors need home and root");
   const file = path.join(home, "connectors.json");
   const rcloneConf = path.join(home, "rclone.conf");
@@ -119,6 +152,11 @@ export function createConnectors({ home, root, allowLocal = false, exec = run, b
   const busy = new Set();
   const runtime = new Map(); // id → { status, error }
   let listeners = [];
+  let authListeners = [];
+  // One OAuth sign-in at a time (rclone's listener port is fixed). The token
+  // rclone prints is parked in memory under a ticket until `add` consumes it.
+  let pendingAuth = null; // { ticket, kind, state, child, timer }
+  const tokens = new Map(); // ticket → { kind, token, expires }
 
   function load() {
     try {
@@ -156,6 +194,21 @@ export function createConnectors({ home, root, allowLocal = false, exec = run, b
     const l = listing();
     for (const fn of listeners) fn(l);
   }
+  function emitAuth(data) {
+    for (const fn of authListeners) fn(data);
+  }
+  function clearPendingAuth(kill = true) {
+    if (!pendingAuth) return;
+    clearTimeout(pendingAuth.timer);
+    if (kill) try { pendingAuth.child.kill("SIGTERM"); } catch { /* gone */ }
+    pendingAuth = null;
+  }
+  function takeToken(ticket) {
+    const t = tokens.get(ticket);
+    if (!t) return null;
+    tokens.delete(ticket);
+    return t.expires > Date.now() ? t : null;
+  }
   function setRuntime(id, status, error) {
     runtime.set(id, { status, ...(error ? { error } : {}) });
     notify();
@@ -169,7 +222,7 @@ export function createConnectors({ home, root, allowLocal = false, exec = run, b
   }
   function gitEnv(c) {
     const env = { GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: ASKPASS, GIT_CONFIG_NOSYSTEM: "1" };
-    let token = c.secret ?? "";
+    const token = c.secret ?? "";
     if (!token && c.kind === "github" && tools.gh) env.DEXTUI_GH_FALLBACK = "1";
     if (token) env.DEXTUI_GIT_TOKEN = token;
     return env;
@@ -205,8 +258,7 @@ export function createConnectors({ home, root, allowLocal = false, exec = run, b
   }
 
   async function guard(id, fn) {
-    const items = load();
-    const c = items.find((x) => x.id === id);
+    const c = load().find((x) => x.id === id);
     if (!c) return { error: "no_connector" };
     if (busy.has(id)) return { error: "busy" };
     busy.add(id);
@@ -217,11 +269,13 @@ export function createConnectors({ home, root, allowLocal = false, exec = run, b
         setRuntime(id, "error", `local folder refused: ${l.error}`);
         return { error: "bad_path" };
       }
-      const out = await fn(c, l.abs, items);
+      const out = await fn(c, l.abs);
       if (out.error) setRuntime(id, "error", out.error);
       else {
-        c.last_sync = Date.now();
-        save(items.map((x) => (x.id === id ? c : x)));
+        // Reload before writing: a clone can take minutes and other
+        // connectors may have been added/removed meanwhile.
+        const now = Date.now();
+        save(load().map((x) => (x.id === id ? { ...x, last_sync: now } : x)));
         setRuntime(id, "idle");
       }
       return out;
@@ -236,19 +290,105 @@ export function createConnectors({ home, root, allowLocal = false, exec = run, b
       listeners.push(fn);
       return () => { listeners = listeners.filter((f) => f !== fn); };
     },
+    /** Sign-in progress: `{ticket, kind, url}` when the consent page is ready,
+     *  `{ticket, done: true}` once the token is in hand, `{ticket, error}` otherwise. */
+    onAuth(fn) {
+      authListeners.push(fn);
+      return () => { authListeners = authListeners.filter((f) => f !== fn); };
+    },
     list: listing,
 
-    /** Validate, register, then materialise. Resolves with the listing (+ `added`) or `{error}`. */
-    async add({ kind, label, remote, secret }) {
+    /** Start an OAuth sign-in for a drive kind: runs `rclone authorize` headless,
+     *  resolves the provider's consent URL from rclone's loopback redirector, and
+     *  parks the resulting token under a ticket. Resolves `{ticket, kind, url, state}`. */
+    async authorize({ kind }) {
+      if (kind !== "gdrive" && kind !== "dropbox") return { error: "bad_kind" };
+      if (!tools.rclone) return { error: "no_rclone" };
+      clearPendingAuth(); // a fresh sign-in replaces an abandoned one
+      const ticket = crypto.randomBytes(8).toString("hex");
+      const type = kind === "gdrive" ? "drive" : "dropbox";
+      const child = spawnFn(tools.rclone, ["authorize", type, "--auth-no-open-browser"], { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+      let out = "";
+      let err = "";
+      child.stdout.on("data", (d) => { out += d; });
+      child.stderr.on("data", (d) => { err += d; });
+      const state = await new Promise((resolve) => {
+        const look = () => {
+          const m = /\/auth\?state=([A-Za-z0-9_-]+)/.exec(err);
+          if (m) resolve(m[1]);
+        };
+        child.stderr.on("data", look);
+        child.on("exit", () => resolve(null));
+        setTimeout(() => resolve(null), 15_000);
+      });
+      if (!state) {
+        try { child.kill("SIGTERM"); } catch { /* gone */ }
+        return { error: "tool_failed", detail: failLine({ stdout: out, stderr: err, code: child.exitCode ?? 1 }) };
+      }
+      const r = await httpGet(`${authOrigin}/auth?state=${state}`);
+      if (!r.location || !/^https:\/\//.test(r.location)) {
+        try { child.kill("SIGTERM"); } catch { /* gone */ }
+        return { error: "tool_failed", detail: "rclone did not offer a sign-in link" };
+      }
+      const timer = setTimeout(() => {
+        if (pendingAuth?.ticket === ticket) {
+          clearPendingAuth();
+          emitAuth({ ticket, error: "sign-in timed out — try again" });
+        }
+      }, AUTHORIZE_TTL_MS);
+      pendingAuth = { ticket, kind, state, child, timer };
+      child.on("exit", (code) => {
+        if (pendingAuth?.ticket !== ticket) return;
+        clearPendingAuth(false);
+        const token = extractRcloneToken(out);
+        if (code === 0 && token) {
+          tokens.set(ticket, { kind, token, expires: Date.now() + AUTHORIZE_TTL_MS });
+          emitAuth({ ticket, done: true });
+        } else {
+          emitAuth({ ticket, error: failLine({ stdout: out, stderr: err, code: code ?? 1 }) });
+        }
+      });
+      const url = r.location;
+      emitAuth({ ticket, kind, url });
+      return { ticket, kind, url, state };
+    },
+
+    /** Browser on another device: the provider redirected it to rclone's
+     *  loopback, which it cannot reach. The user pastes that address; we make
+     *  the same request from here so rclone completes. */
+    async relay({ ticket, landing }) {
+      if (!pendingAuth || pendingAuth.ticket !== ticket) return { error: "no_auth" };
+      const target = relayTarget(landing, pendingAuth.state, authOrigin);
+      if (!target) return { error: "bad_landing" };
+      const r = await httpGet(`${authOrigin}${target}`);
+      if (r.status === 0) return { error: "tool_failed", detail: r.error ?? "rclone is not listening" };
+      return { ticket, relayed: true };
+    },
+
+    cancelAuthorize({ ticket }) {
+      if (pendingAuth && (!ticket || pendingAuth.ticket === ticket)) clearPendingAuth();
+      if (ticket) tokens.delete(ticket);
+      return { cancelled: true };
+    },
+
+    /** Validate, register, then materialise. Resolves with the listing (+ `added`) or `{error}`.
+     *  Drive kinds take either a `ticket` from `authorize` or a pasted `secret`. */
+    async add({ kind, label, remote, secret, ticket }) {
       if (!CONNECTOR_KINDS.includes(kind)) return { error: "bad_kind" };
       if (typeof label !== "string" || !DIR_NAME_RE.test(label)) return { error: "bad_label" };
       const n = normaliseRemote(kind, remote, { allowLocal });
       if (n.error) return { error: n.error };
       const rclone = kind === "gdrive" || kind === "dropbox";
       if (rclone) {
-        // Token pasted from `rclone authorize` — banner lines and all.
-        secret = extractRcloneToken(secret);
-        if (!secret) return { error: "bad_secret" };
+        if (typeof ticket === "string" && TICKET_RE.test(ticket)) {
+          const t = takeToken(ticket);
+          if (!t || t.kind !== kind) return { error: "no_auth" };
+          secret = t.token;
+        } else {
+          // Token pasted from `rclone authorize` — banner lines and all.
+          secret = extractRcloneToken(secret);
+          if (!secret) return { error: "bad_secret" };
+        }
       }
       if (secret !== undefined && (typeof secret !== "string" || secret.length > 8192 || /[\r\n]/.test(secret))) return { error: "bad_secret" };
       if (rclone && !tools.rclone) return { error: "no_rclone" };
@@ -260,8 +400,9 @@ export function createConnectors({ home, root, allowLocal = false, exec = run, b
       if (fs.existsSync(l.abs)) return { error: "exists" };
       const c = { id: crypto.randomBytes(4).toString("hex"), kind, label, remote: n.remote, created: Date.now() };
       if (kind === "gdrive" || kind === "dropbox") {
-        // The user ran `rclone authorize "<drive|dropbox>"` on their own machine
-        // and pasted the printed token; rclone stores it in its per-user config.
+        // The token came from `authorize` (ticket) or a pasted `rclone authorize`
+        // banner; either way rclone stores it in its own per-user config.
+        fs.mkdirSync(home, { recursive: true, mode: 0o700 }); // rclone.conf lives here — do not rely on rclone creating it
         const type = kind === "gdrive" ? "drive" : "dropbox";
         const r = await exec(tools.rclone, rcloneArgs(["config", "create", rcloneRemote(c), type, `token=${secret}`, ...(type === "drive" ? ["scope=drive"] : []), "--non-interactive"]), { timeout: 60_000 });
         if (!r.ok) return { error: "tool_failed", detail: failLine(r) };
@@ -333,7 +474,8 @@ export function createConnectors({ home, root, allowLocal = false, exec = run, b
           return r.ok ? {} : { error: failLine(r) };
         }
         if (!tools.rclone) return { error: "rclone not found on the host" };
-        const r = await exec(tools.rclone, rcloneArgs(["copy", local, `${rcloneRemote(c)}:${c.remote}`]));
+        // Never ship DextUI's own per-folder state (flows, run logs) to the user's drive.
+        const r = await exec(tools.rclone, rcloneArgs(["copy", "--exclude", ".dext/**", local, `${rcloneRemote(c)}:${c.remote}`]));
         return r.ok ? {} : { error: failLine(r) };
       });
       return out.error ? out : listing({ pushed: id });

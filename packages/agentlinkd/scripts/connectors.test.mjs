@@ -9,7 +9,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawn, execFileSync } from "node:child_process";
 import { once } from "node:events";
-import { CONNECTED_DIR, createConnectors, extractRcloneToken, normaliseRemote } from "../src/connectors.mjs";
+import { CONNECTED_DIR, createConnectors, extractRcloneToken, normaliseRemote, relayTarget } from "../src/connectors.mjs";
 
 const root = path.resolve("packages/agentlinkd");
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -156,6 +156,109 @@ test("registry: add materialises under Connected/<label>, secrets stay out of li
   const purged = await conn.remove({ id: re2.added, purge: true });
   assert.equal(purged.connectors.length, 0);
   assert.equal(fs.existsSync(local), false);
+});
+
+// Fake rclone mimicking what `rclone authorize <type> --auth-no-open-browser`
+// was observed to do (v1.75.1): stderr NOTICE with a loopback redirector URL,
+// 307 from that URL to the provider's consent page, and on the callback a
+// token banner on stdout + exit 0. `config create` writes a stub conf; `copy`
+// fails (no network in tests).
+const FAKE_RCLONE = `#!/usr/bin/env node
+import http from "node:http";
+import fs from "node:fs";
+const a = process.argv.slice(2);
+if (a[0] === "authorize") {
+  const state = "st_" + Math.random().toString(36).slice(2, 10);
+  const srv = http.createServer((req, res) => {
+    const u = new URL(req.url, "http://x");
+    if (u.pathname === "/auth" && u.searchParams.get("state") === state) { res.writeHead(307, { location: "https://accounts.example/consent?state=" + state }); res.end(); return; }
+    if (u.pathname === "/" && u.searchParams.get("state") === state && u.searchParams.get("code")) {
+      res.end("Success!");
+      process.stdout.write("Paste the following into your remote machine --->\\n{\\"access_token\\":\\"ya29.fake\\",\\"token_type\\":\\"Bearer\\",\\"refresh_token\\":\\"1//r\\",\\"expiry\\":\\"2030-01-01T00:00:00Z\\"}\\n<---End paste\\n");
+      srv.close(); setTimeout(() => process.exit(0), 50); return;
+    }
+    res.writeHead(404); res.end();
+  });
+  srv.listen(Number(process.env.FAKE_AUTH_PORT), "127.0.0.1", () => {
+    process.stderr.write("2026/09/06 16:52:10 NOTICE: Please go to the following link: http://127.0.0.1:" + srv.address().port + "/auth?state=" + state + "\\n2026/09/06 16:52:10 NOTICE: Waiting for code...\\n");
+  });
+} else if (a.includes("config")) {
+  const conf = a[a.indexOf("--config") + 1];
+  if (a.includes("create")) fs.appendFileSync(conf, "[" + a[a.indexOf("create") + 1] + "]\\ntype = " + a[a.indexOf("create") + 2] + "\\n", { mode: 0o600 });
+  if (a.includes("delete")) fs.writeFileSync(conf, "");
+  process.exit(0);
+} else if (a.includes("copy")) {
+  process.stderr.write("2026/09/06 16:46:02 CRITICAL: Failed to create file system: no network in tests\\n");
+  process.exit(1);
+} else process.exit(2);
+`;
+
+function fakeRclone(t) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "fake-rclone-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const bin = path.join(dir, "rclone.mjs");
+  fs.writeFileSync(bin, FAKE_RCLONE, { mode: 0o755 });
+  return bin;
+}
+
+test("relayTarget: accepts exactly rclone's loopback callback for the pending state, nothing else", () => {
+  const origin = "http://127.0.0.1:53682";
+  assert.equal(relayTarget("http://127.0.0.1:53682/?state=abc&code=4%2Fxyz&scope=drive", "abc", origin), "/?state=abc&code=4%2Fxyz&scope=drive");
+  assert.equal(relayTarget("http://localhost:53682/?state=abc&code=c", "abc", origin), "/?state=abc&code=c");
+  assert.equal(relayTarget("http://127.0.0.1:53682/?state=other&code=c", "abc", origin), null, "state must match");
+  assert.equal(relayTarget("http://127.0.0.1:53682/?state=abc", "abc", origin), null, "code required");
+  assert.equal(relayTarget("http://127.0.0.1:53682/evil?state=abc&code=c", "abc", origin), null, "only the root path");
+  assert.equal(relayTarget("http://127.0.0.1:9999/?state=abc&code=c", "abc", origin), null, "only rclone's port");
+  assert.equal(relayTarget("https://evil.example/?state=abc&code=c", "abc", origin), null);
+  assert.equal(relayTarget("not a url", "abc", origin), null);
+});
+
+test("sign-in: authorize resolves the consent URL, the callback (direct or relayed) yields a ticket, add consumes it once; cancel refuses", { timeout: 30000 }, async (t) => {
+  const r = bareRepo(t);
+  const port = 40000 + Math.floor(Math.random() * 20000);
+  const bin = fakeRclone(t);
+  let fakeErr = "";
+  const spawnFn = (_bin, args, opts) => {
+    const c = spawn(process.execPath, [bin, ...args], { ...opts, env: { ...process.env, FAKE_AUTH_PORT: String(port) } });
+    c.stderr.on("data", (d) => { fakeErr += d; });
+    return c;
+  };
+  const { execFile } = await import("node:child_process");
+  const exec = (_b, args, opts = {}) => new Promise((resolve) => {
+    execFile(process.execPath, [bin, ...args], { ...opts, env: { ...process.env, ...(opts.env ?? {}) } }, (err, stdout, stderr) => resolve({ ok: !err, code: err?.code ?? 0, stdout: String(stdout ?? ""), stderr: String(stderr ?? "") }));
+  });
+  const conn = createConnectors({ home: r.home, root: r.picker, bins: { git: "git", rclone: bin, gh: null }, spawnFn, exec, authOrigin: `http://127.0.0.1:${port}` });
+  const events = [];
+  conn.onAuth((e) => events.push(e));
+
+  assert.equal((await conn.authorize({ kind: "github" })).error, "bad_kind");
+  const a = await conn.authorize({ kind: "gdrive" });
+  assert.ok(a.ticket && /^[a-f0-9]{16}$/.test(a.ticket), `${JSON.stringify(a)}\nfake rclone stderr:\n${fakeErr}`);
+  assert.match(a.url, /^https:\/\/accounts\.example\/consent\?state=/, "the provider's page, not rclone's loopback redirector");
+  assert.equal(events.at(-1).url, a.url, "listeners saw the consent URL");
+
+  // Add before sign-in completes → refused.
+  assert.equal((await conn.add({ kind: "gdrive", label: "Drive", remote: "", ticket: a.ticket })).error, "no_auth");
+
+  // Browser on another device: relay the landing URL. Wrong state/junk refused.
+  assert.equal((await conn.relay({ ticket: a.ticket, landing: "https://evil/?state=x&code=y" })).error, "bad_landing");
+  assert.equal((await conn.relay({ ticket: "0000000000000000", landing: `http://127.0.0.1:${port}/?state=${a.state}&code=c` })).error, "no_auth");
+  const relayed = await conn.relay({ ticket: a.ticket, landing: `http://127.0.0.1:${port}/?state=${a.state}&code=4%2Fcode` });
+  assert.equal(relayed.relayed, true, JSON.stringify(relayed));
+  for (let i = 0; i < 100 && !events.some((e) => e.done); i++) await sleep(25);
+  assert.ok(events.some((e) => e.ticket === a.ticket && e.done), `token arrived: ${JSON.stringify(events)}`);
+
+  // Ticket → connector. Consumed once.
+  const added = await conn.add({ kind: "gdrive", label: "Drive", remote: "Projects", ticket: a.ticket });
+  assert.ok(added.added, JSON.stringify(added));
+  assert.ok(fs.readFileSync(path.join(r.home, "rclone.conf"), "utf8").includes("type = drive"));
+  assert.equal((await conn.add({ kind: "gdrive", label: "Drive2", remote: "", ticket: a.ticket })).error, "no_auth", "a ticket is single-use");
+
+  // A second sign-in can be cancelled; its ticket is then worthless.
+  const b = await conn.authorize({ kind: "dropbox" });
+  assert.ok(b.ticket);
+  conn.cancelAuthorize({ ticket: b.ticket });
+  assert.equal((await conn.relay({ ticket: b.ticket, landing: `http://127.0.0.1:${port}/?state=${b.state}&code=c` })).error, "no_auth");
 });
 
 test("failure: a bad remote leaves a visible error and no half-clone; drive kinds are gated on rclone", { timeout: 30000 }, async (t) => {

@@ -145,11 +145,11 @@ function dextOutput(args) {
   return result.status === 0 ? result.stdout : "";
 }
 
-function discoverModels() {
+function parseModels(text) {
   const groups = [];
   let current = null;
   let readingModels = false;
-  for (const line of dextOutput(["auth", "models"]).split("\n")) {
+  for (const line of text.split("\n")) {
     const header = /^\s*\*?\s*provider '([^']+)' models:/.exec(line);
     const fallback = /^\s*\*?\s*provider '([^']+)' default model:\s*(\S+)/.exec(line);
     if (header) {
@@ -171,6 +171,9 @@ function discoverModels() {
     }
   }
   return groups.filter((g) => g.models.length > 0);
+}
+function discoverModels() {
+  return parseModels(dextOutput(["auth", "models"]));
 }
 
 function discoverActiveModel(catalog) {
@@ -211,15 +214,20 @@ function parseProviderStatus(text) {
   }
   return { active, providers };
 }
-function providerStatus() {
-  return parseProviderStatus(dextOutput(["auth", "status"]));
+// Request handlers use these async twins: the sync spawns above are boot-only —
+// a spawnSync inside a handler would freeze every connected client for up to
+// 15 s per dext invocation.
+async function providerStatusAsync() {
+  const r = await dextOutputAsync(["auth", "status"]);
+  return parseProviderStatus(r.ok ? r.out : "");
 }
 // After a login the model list may grow (a provider's models appear once it
 // is authenticated): refresh the catalog in place so hello_ok and the status
 // reply agree.
-function refreshModelCatalog() {
-  const fresh = discoverModels();
-  MODEL_CATALOG.splice(0, MODEL_CATALOG.length, ...fresh);
+async function refreshModelCatalog() {
+  const r = await dextOutputAsync(["auth", "models"]);
+  if (!r.ok) return MODEL_CATALOG;
+  MODEL_CATALOG.splice(0, MODEL_CATALOG.length, ...parseModels(r.out));
   return MODEL_CATALOG;
 }
 function runDext(args, timeout = 60_000) {
@@ -484,7 +492,7 @@ async function handleCrewCommand(client, frame) {
     return;
   }
   const run = typeof frame.run === "string" && CREW_RUN_ID_RE.test(frame.run) ? frame.run : null;
-  if (!run) {
+  if (!run && verb !== "clear") {
     sendError(client, "bad_request", "run must match run-<12 hex>");
     return;
   }
@@ -522,6 +530,16 @@ async function handleCrewCommand(client, frame) {
       const r = await CREW.resume(run, answer);
       if (!r.ok) return sendError(client, r.code ?? "crew_failed", r.message);
       broadcastControl("x-agentlinkd.crew.control", { run, verb: "resume", ok: true, by: client.id, message: r.message });
+      return;
+    }
+    case "remove": {
+      const r = CREW.remove(run);
+      broadcastControl("x-agentlinkd.crew.control", { run, verb: "remove", ok: r.ok, by: client.id, message: r.message });
+      return;
+    }
+    case "clear": {
+      const r = CREW.clearFinished();
+      broadcastControl("x-agentlinkd.crew.control", { verb: "clear", ok: r.ok, by: client.id, removed: r.removed, message: r.message });
       return;
     }
     default:
@@ -1813,15 +1831,19 @@ async function handleCommand(client, frame) {
 // added/removed/synced/pushed. Errors are cmd-tagged; a tool's last line
 // rides in `detail` (already secret-scrubbed by the module).
 CONNECTORS.onChange((l) => broadcastControl("x-agentlinkd.connectors.list", l));
+// OAuth sign-in progress (consent URL ready / token in hand / failed) goes to
+// every tab: the user may finish the Google page on another device.
+CONNECTORS.onAuth((a) => broadcastControl("x-agentlinkd.connectors.authorize", a));
 
 const CONNECTOR_ERROR_CODES = {
-  bad_kind: "bad_request", bad_label: "bad_request", bad_remote: "bad_request", bad_secret: "bad_request", bad_request: "bad_request",
-  no_rclone: "unsupported", no_git: "unsupported", exists: "exists", no_connector: "no_connector", busy: "busy", bad_path: "bad_path", tool_failed: "tool_failed",
+  bad_kind: "bad_request", bad_label: "bad_request", bad_remote: "bad_request", bad_secret: "bad_request", bad_request: "bad_request", bad_landing: "bad_request",
+  no_rclone: "unsupported", no_git: "unsupported", exists: "exists", no_connector: "no_connector", no_auth: "no_auth", busy: "busy", bad_path: "bad_path", tool_failed: "tool_failed",
 };
 const CONNECTOR_ERROR_TEXT = {
   bad_kind: "unknown connector kind", bad_label: "label: letters, numbers, spaces, . _ ( ) - (max 80)", bad_remote: "remote must be owner/repo, an https URL, or a folder path",
   bad_secret: "a credential is required for this kind (single line)", no_rclone: "rclone is not installed on the host — install it to connect Drive or Dropbox",
   no_git: "git is not installed on the host", exists: "a connector or folder with that name already exists", no_connector: "unknown connector",
+  no_auth: "sign in first — the sign-in expired or was cancelled", bad_landing: "that is not the address the sign-in landed on (expected http://127.0.0.1:53682/?state=…&code=…)",
   busy: "that connector is already syncing", bad_path: "connected folder refused", tool_failed: "the sync tool failed", bad_request: "bad request",
 };
 
@@ -1830,10 +1852,27 @@ async function handleConnectorsCommand(client, frame) {
   let r;
   switch (op) {
     case "list": r = CONNECTORS.list(); break;
-    case "add": r = await CONNECTORS.add({ kind: frame.kind, label: frame.label, remote: frame.remote, secret: typeof frame.secret === "string" && frame.secret.trim() ? frame.secret.trim() : undefined }); break;
+    case "add": r = await CONNECTORS.add({ kind: frame.kind, label: frame.label, remote: frame.remote, secret: typeof frame.secret === "string" && frame.secret.trim() ? frame.secret.trim() : undefined, ticket: typeof frame.ticket === "string" ? frame.ticket : undefined }); break;
     case "remove": r = await CONNECTORS.remove({ id: frame.id, purge: frame.purge === true }); break;
     case "sync": r = await CONNECTORS.sync({ id: frame.id }); break;
     case "push": r = await CONNECTORS.push({ id: frame.id, message: frame.message }); break;
+    case "authorize": {
+      const a = await CONNECTORS.authorize({ kind: frame.kind });
+      if (a.error) { r = a; break; }
+      // The listener already broadcast {ticket, kind, url}; this client gets it as its reply too.
+      sendControl(client, "x-agentlinkd.connectors.authorize", { ticket: a.ticket, kind: a.kind, url: a.url });
+      return;
+    }
+    case "relay": {
+      const a = await CONNECTORS.relay({ ticket: frame.ticket, landing: frame.landing });
+      if (a.error) { r = a; break; }
+      sendControl(client, "x-agentlinkd.connectors.authorize", { ticket: a.ticket, relayed: true });
+      return;
+    }
+    case "cancel":
+      CONNECTORS.cancelAuthorize({ ticket: typeof frame.ticket === "string" ? frame.ticket : undefined });
+      sendControl(client, "x-agentlinkd.connectors.authorize", { ticket: frame.ticket ?? null, cancelled: true });
+      return;
     default:
       sendError(client, "unknown_command", `unsupported cmd ${frame.cmd}`);
       return;
@@ -1856,7 +1895,7 @@ async function handleConnectorsCommand(client, frame) {
 async function handleAuthCommand(client, frame) {
   const op = frame.cmd.slice("x-agentlinkd.auth.".length);
   if (op === "status") {
-    sendControl(client, "x-agentlinkd.auth.status", { ...providerStatus(), model_catalog: MODEL_CATALOG });
+    sendControl(client, "x-agentlinkd.auth.status", { ...(await providerStatusAsync()), model_catalog: MODEL_CATALOG });
     return;
   }
   if (op !== "login" && op !== "logout") {
@@ -1864,13 +1903,14 @@ async function handleAuthCommand(client, frame) {
     return;
   }
   const provider = typeof frame.provider === "string" ? frame.provider.trim() : "";
-  if (!PROVIDER_ID_RE.test(provider) || !providerStatus().providers.some((p) => p.id === provider)) {
+  if (!PROVIDER_ID_RE.test(provider) || !(await providerStatusAsync()).providers.some((p) => p.id === provider)) {
     sendError(client, "bad_request", "unknown provider", frame.cmd);
     return;
   }
   let args;
+  let credential = "";
   if (op === "login") {
-    const credential = typeof frame.credential === "string" ? frame.credential.trim() : "";
+    credential = typeof frame.credential === "string" ? frame.credential.trim() : "";
     if (!credential || credential.length > 8192 || /[\r\n]/.test(credential)) {
       sendError(client, "bad_request", "paste the API key or token (single line)", frame.cmd);
       return;
@@ -1885,12 +1925,14 @@ async function handleAuthCommand(client, frame) {
   }
   const r = await runDext(args);
   if (!r.ok) {
-    const line = `${r.stderr}\n${r.stdout}`.split("\n").map((l) => l.trim()).filter(Boolean).at(-1) ?? "dext refused";
+    let line = `${r.stderr}\n${r.stdout}`.split("\n").map((l) => l.trim()).filter(Boolean).at(-1) ?? "dext refused";
+    // Never let the pasted value ride back out, whatever dext printed.
+    if (credential) line = line.split(credential).join("…");
     sendError(client, "tool_failed", `${op} failed: ${line.slice(0, 200)}`, frame.cmd);
     return;
   }
-  refreshModelCatalog();
-  const status = { ...providerStatus(), model_catalog: MODEL_CATALOG, changed: provider };
+  await refreshModelCatalog();
+  const status = { ...(await providerStatusAsync()), model_catalog: MODEL_CATALOG, changed: provider };
   broadcastControl("x-agentlinkd.auth.status", status);
 }
 
@@ -2157,6 +2199,7 @@ function agentDigest() {
               const acts = [{ cmd: "x-agentlinkd.crew.open", run: r.id }];
               if (r.escalation) acts.push({ cmd: "x-agentlinkd.crew.resume", run: r.id, note: "answer: <text>" });
               if (["running", "pending", "paused"].includes(r.status)) acts.push({ cmd: "x-agentlinkd.crew.stop", run: r.id });
+              if (["completed", "failed", "stopped"].includes(r.state)) acts.push({ cmd: "x-agentlinkd.crew.remove", run: r.id });
               return acts;
             })
           : []),
