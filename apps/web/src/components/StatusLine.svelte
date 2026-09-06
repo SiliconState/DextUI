@@ -4,6 +4,7 @@
   import type { SessionStore } from "@dextui/client";
   import type { ThinkingEffort } from "@dextui/protocol";
   import { app, toggleTheme, rePair, toggleSidebar, queueTotal, jumpToOldestPending, toggleNotify } from "../lib/state.svelte";
+  import { connectorFor, connectors, openProviders, providersEnabled, pushConnector, syncConnector } from "../lib/connectors.svelte";
   import { crew, crewLive, crewDur, crewAge, openRun, shortRun } from "../lib/crew.svelte";
   import { selfEdit, cancelRestart } from "../lib/selfedit.svelte";
   import { fmtTokens, fmtElapsed, prettyPath } from "../lib/markdown";
@@ -84,6 +85,22 @@
     const thinking_effort = (e.currentTarget as HTMLSelectElement).value as ThinkingEffort;
     app.conn?.configureSession(view.id, { thinking_effort });
   }
+
+  // Sessions inside a connected folder get a sync affordance: pull is
+  // fast-forward/copy (never destroys local work); push commits everything
+  // (git) or copies up (rclone). Disabled while a turn runs so the agent's
+  // files never move underneath it.
+  const connector = $derived(connectorFor(view.cwd));
+  const canSync = $derived(!!connector && connector.status !== "syncing" && !view.working && !connectors.pending);
+  function connAge(ms: number | undefined): string {
+    if (!ms) return "never";
+    const m = Math.floor((Date.now() - ms) / 60_000);
+    if (m < 1) return "just now";
+    if (m < 60) return `${m}m ago`;
+    const h = Math.floor(m / 60);
+    if (h < 24) return `${h}h ago`;
+    return `${Math.floor(h / 24)}d ago`;
+  }
 </script>
 
 <div class="sl" data-agent-id="status.hud" data-state={view.working ? "working" : "idle"}>
@@ -95,6 +112,13 @@
   {/if}
   <span class={`dot ${dotClass}`} data-agent-id="status.phase" data-state={app.phase}>●</span>
   <span class="st-green truncate">{view.cwd ? prettyPath(view.cwd, view.cwd) : "DextUI"}</span>
+  {#if connector}
+    <span class="conn" data-agent-id="status.connector" data-state={connector.status} title={`${connector.remote}\nLast sync: ${connAge(connector.last_sync)}${connector.error ? `\n${connector.error}` : ""}`}>
+      <span class="faint">{connector.status === "syncing" ? "syncing…" : connector.status === "error" ? "sync failed" : `synced ${connAge(connector.last_sync)}`}</span>
+      <button class="act" disabled={!canSync} data-agent-id="status.connector.pull" onclick={() => syncConnector(connector.id)} title="Pull the latest from the source">Pull</button>
+      <button class="act" disabled={!canSync} data-agent-id="status.connector.push" onclick={() => pushConnector(connector.id)} title={connector.kind === "github" || connector.kind === "git" ? "Commit everything and push" : "Copy this folder up to the source"}>Push</button>
+    </span>
+  {/if}
   {#if view.title && view.title !== view.id}
     <span class="sep">|</span>
     <span class="dim truncate">{view.title}</span>
@@ -224,11 +248,23 @@
     <button class="act" data-agent-id="theme.toggle" onclick={toggleTheme} title="Cycle theme: dark → light → system">
       Theme:{app.theme}
     </button>
-    <button class="act" data-agent-id="pair.reset" onclick={rePair} title="Clear token and re-pair">Re-pair</button>
+    {#if providersEnabled()}
+      <button class="act" data-agent-id="providers.open" onclick={openProviders} title="Sign in to model providers">Providers</button>
+    {/if}
+    <button class="act" data-agent-id="pair.reset" onclick={rePair} title="Forget the access code on this device">Sign out</button>
   </span>
 </div>
 
 <style>
+  .conn {
+    display: inline-flex;
+    gap: 4px;
+    align-items: baseline;
+    font-size: 0.9em;
+  }
+  .conn[data-state="error"] > .faint {
+    color: var(--red);
+  }
   .sl {
     display: flex;
     align-items: baseline;

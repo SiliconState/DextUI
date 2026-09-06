@@ -162,6 +162,16 @@ Tool cards are keyed by `call_id`, and `name`/`summary` are **sticky**: an event
 
 Advertised in `hello_ok`: `approvals`, `steering`, `interrupt`, `slash`, `multi_session`, `usage`, `thinking`, `model_select`, `effort_select`, `todos_read`, `files_read`, `session_manage`, `packs`, `checkpoints`, `seats`, `push`. A host without `approvals` never sends `permission.request`; a client without approval UI must not subscribe to sessions that require them. Model/effort controls require both their capability and option data. Extensions are namespaced: `x-<host>.<thing>`.
 
+### Extension: connectors (`x-agentlinkd.connectors.*`, capability `connectors`)
+
+External sources materialised as ordinary folders under `<hello_ok.home>/Connected/<label>` so the folder picker, sessions, and packs see plain directories. Kinds: `github` / `git` (via git: clone, `pull --ff-only`, commit-all + push) and `gdrive` / `dropbox` (via rclone: copy each way, never deletes). Commands: `list`, `add {kind,label,remote,secret?}`, `remove {id,purge?}`, `sync {id}`, `push {id,message?}`. Every reply is the full listing (`x-agentlinkd.connectors.list {connectors,tools,root}`) tagged with `added|removed|synced|pushed`; progress (`status: syncing → idle|error`) is broadcast to all live clients. Errors are cmd-tagged (`bad_request`, `exists`, `no_connector`, `busy`, `unsupported` when the tool is missing, `tool_failed` with the tool's last line).
+
+Multi-user posture: the registry (`DEXT_HOME/connectors.json`, 0600) and rclone's config (`DEXT_HOME/rclone.conf`) are per `DEXT_HOME`; one agentlinkd per user/sandbox scopes everything without host-level tenancy. Secrets: a git token reaches git only via `GIT_ASKPASS` + environment (never argv, `.git/config`, or a URL); `gh auth token` is borrowed per-process when none is stored; rclone tokens come from the user running `rclone authorize "<drive|dropbox>"` on their own machine and pasting the result (works over LAN/hosted — no browser flow on the host). Listings never carry a secret; failure lines are token-scrubbed. Sync buttons are disabled while a turn runs so files never move under the agent.
+
+### Extension: provider sign-in (`x-agentlinkd.auth.*`, capability `provider_auth`)
+
+`status` → `x-agentlinkd.auth.status {active, providers:[{id,label,model,auth,active}], model_catalog}` parsed from `dext auth status`. `login {provider, credential}` and `logout {provider}` shell out to `dext auth login|logout` — dext's own auth store is the only credential holder; the host stores nothing and never echoes the credential in any frame. `web`/`import`/`cancel` are refused (`bad_request`): the host may be headless or paired remotely, so browser OAuth logins happen from the host's terminal. After a change the refreshed status (`changed: <provider>`) and model catalog are broadcast so every tab's model picker agrees.
+
 ## Agent surface
 
 - `GET /__agent` (auth): bounded (<4 KiB) scene digest, shape `AgentDigest` in `packages/protocol`:

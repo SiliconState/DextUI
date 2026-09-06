@@ -14,6 +14,7 @@
     closeSession,
     wakeSession,
   } from "../lib/state.svelte";
+  import { openProviders, providersEnabled } from "../lib/connectors.svelte";
   import { useSession } from "../lib/useSession.svelte";
   import { useDialog } from "../lib/dialog.svelte";
   import { crew, crewEnabled, crewEscalations, crewLive, openRun, shortRun } from "../lib/crew.svelte";
@@ -159,7 +160,8 @@
       group: "app",
       run: toggleTheme,
     });
-    out.push({ slug: "pair.reset", label: "Re-pair with agent host", hint: "Clears token", group: "app", run: rePair });
+    out.push({ slug: "pair.reset", label: "Sign out of this device", hint: "Forgets the access code", group: "app", run: rePair });
+    if (providersEnabled()) out.push({ slug: "providers.open", label: "Providers — sign in to a model vendor", hint: "API key", group: "app", run: openProviders });
     if (selfEditEnabled()) {
       // Self-edit: DextUI working on itself. Every action goes through the host.
       out.push({ slug: "self.workbench", label: "Open workbench — edit DextUI itself", hint: "~/DextUI", group: "self", run: openWorkbench });

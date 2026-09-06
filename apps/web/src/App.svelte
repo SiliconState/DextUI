@@ -32,7 +32,9 @@
   import CrewRun from "./components/CrewRun.svelte";
   import PackSheet from "./components/PackSheet.svelte";
   import FolderPicker from "./components/FolderPicker.svelte";
+  import Providers from "./components/Providers.svelte";
   import { folders, closeFolderPicker } from "./lib/folders.svelte";
+  import { providers, closeProviders } from "./lib/connectors.svelte";
   import FlowCanvas from "./components/FlowCanvas.svelte";
   import { flows, openFlows, closeFlows } from "./lib/flows.svelte";
   import { crew, closeRun, crewLive, openRun } from "./lib/crew.svelte";
@@ -119,6 +121,7 @@
       dlgCrew.onKey(e);
       if (e.key === "Escape") {
         if (inspect) inspect = null;
+        else if (providers.open) closeProviders();
         else if (folders.open) closeFolderPicker();
         else if (flows.open) closeFlows();
         else if (packSheet.panelOpen) closePackPanel();
@@ -227,23 +230,28 @@
 {#if app.needsToken}
   <div class="pair" data-state="connect" data-agent-id="app.root">
     <form onsubmit={connectSubmit} class="pair-box" data-agent-id="connect.form">
-      <p class="pair-title"><span class="st-green">Dext</span><span class="blink st-green">▊</span> <span class="dim">Web console</span></p>
-      <p class="dim">Pair with the agent host — paste the token printed by <span class="st-cyan">Agentlinkd</span></p>
-      <p class="faint">(mock host default: dev-token)</p>
+      <p class="pair-title"><span class="st-green">Dext</span><span class="blink st-green">▊</span></p>
+      <h1 class="pair-h">Sign in</h1>
+      <p class="dim">Enter the access code for your agent host to open your workspace.</p>
       {#if app.lastError}
         <p class="st-red" data-agent-id="connect.error">✗ {app.lastError}</p>
       {/if}
       <div class="pair-row">
-        <span class="st-green">❯</span>
         <input
           bind:value={tokenInput}
           type="password"
-          autocomplete="off"
-          placeholder="Pairing token"
+          autocomplete="current-password"
+          placeholder="Access code"
+          aria-label="Access code"
           data-agent-id="connect.token"
         />
-        <button type="submit" class="act accent" data-agent-id="connect.submit">[⏎] connect</button>
+        <button type="submit" class="act accent" data-agent-id="connect.submit">Sign in</button>
       </div>
+      <details class="pair-help">
+        <summary class="faint">Where do I find this?</summary>
+        <p class="dim">The host prints it when it starts (<span class="st-cyan">agentlinkd</span> → “token:”), and shows it as a QR code when started with <code>--lan</code>. It stays on this device until you sign out.</p>
+        {#if import.meta.env.DEV}<p class="faint">Mock host: <code>dev-token</code></p>{/if}
+      </details>
     </form>
   </div>
 {:else}
@@ -399,6 +407,7 @@
 
 <PackSheet />
 <FolderPicker />
+<Providers />
 <FlowCanvas />
 
 {#if app.galleryOpen}
@@ -442,25 +451,49 @@
     display: flex;
     flex-direction: column;
     gap: 6px;
-    width: min(520px, 100%);
+    width: min(440px, 100%);
     border: 1px solid var(--line);
     background: var(--bg1);
-    padding: 18px 20px;
+    padding: 22px 24px 18px;
+    border-radius: 6px;
   }
   .pair-title {
     font-weight: bold;
-    margin-bottom: 4px;
+    margin: 0;
+  }
+  .pair-h {
+    font-size: 1.25em;
+    font-weight: 600;
+    margin: 6px 0 0;
   }
   .pair-row {
     display: flex;
     gap: 8px;
-    align-items: baseline;
-    margin-top: 8px;
-    border-top: 1px solid var(--line);
-    padding-top: 10px;
+    align-items: stretch;
+    margin-top: 10px;
   }
   .pair-row input {
     flex: 1;
+    padding: 8px 10px;
+  }
+  .pair-help {
+    margin-top: 10px;
+    border-top: 1px solid var(--line);
+    padding-top: 8px;
+  }
+  .pair-help summary {
+    cursor: pointer;
+    list-style: none;
+  }
+  .pair-help summary::before {
+    content: "▸ ";
+  }
+  .pair-help[open] summary::before {
+    content: "▾ ";
+  }
+  .pair-help p {
+    margin: 6px 0 0;
+    line-height: 1.45;
   }
   .errbar {
     display: flex;

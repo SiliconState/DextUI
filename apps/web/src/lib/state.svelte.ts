@@ -7,6 +7,7 @@ import { acceptCrews, crewEscalations, onCrewControl, openRun } from "./crew.sve
 import { onPackControl } from "./packsheet.svelte";
 import { acceptSelf, onSelfControl, onSelfReconnected } from "./selfedit.svelte";
 import { onDirsControl } from "./folders.svelte";
+import { onConnectorsControl } from "./connectors.svelte";
 import { onFlowsControl } from "./flows.svelte";
 import { packTitle } from "./display";
 
@@ -386,6 +387,9 @@ export function start(token: string): void {
         app.modelCatalog = c.modelCatalog.map((g) => ({ ...g, models: [...g.models] }));
         app.effortOptions = [...c.effortOptions];
         app.commands = c.commands.map((x) => ({ ...x }));
+        // Connected folders drive the picker's Connected section and the
+        // status line's sync affordance: fetch once per (re)connect.
+        if (c.capabilities.includes("connectors")) c.connectorsList();
         if (everLive) pushToast("ok", "Reconnected");
         everLive = true;
         // The Connection re-attaches every subscribed tail itself (seq-resume on
@@ -581,6 +585,7 @@ export function start(token: string): void {
     onPackControl(env);
     onSelfControl(env);
     onDirsControl(env);
+    onConnectorsControl(env);
     onFlowsControl(env);
     if (env.event === "sessions.deleted") {
       const d = env.data as { ids: string[] };

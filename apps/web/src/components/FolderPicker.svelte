@@ -6,6 +6,44 @@
   import { folders, navigate, pickCurrent, closeFolderPicker, createFolder, recentFolders, shortFolder } from "../lib/folders.svelte";
   import { app } from "../lib/state.svelte";
   import { useDialog } from "../lib/dialog.svelte";
+  import { KIND_LABEL, addConnector, connectors, connectorsEnabled, removeConnector, syncConnector } from "../lib/connectors.svelte";
+  import type { ConnectorKind } from "@dextui/protocol";
+
+  // Connect form (inside the picker footer). The secret field is sent once
+  // and cleared; it is never kept in state after submit.
+  let kind = $state<ConnectorKind>("github");
+  let cLabel = $state("");
+  let cRemote = $state("");
+  let cSecret = $state("");
+  const kindOk = $derived(kind === "github" || kind === "git" ? connectors.tools.git : connectors.tools.rclone);
+  const needsSecret = $derived(kind === "gdrive" || kind === "dropbox");
+  const remoteHint = $derived(
+    kind === "github" ? "owner/repo" : kind === "git" ? "https://…/repo.git" : "Folder inside the drive (blank = everything)",
+  );
+  const secretHint = $derived(
+    kind === "github" ? "Personal access token (optional for public repos)" : kind === "git" ? "Token (optional)" : `Token from: rclone authorize "${kind === "gdrive" ? "drive" : "dropbox"}"`,
+  );
+  function openConnect() {
+    connectors.formOpen = true;
+    creating = false;
+    if (!cLabel && cRemote) cLabel = cRemote.split("/").pop() ?? "";
+  }
+  function closeConnect() {
+    connectors.formOpen = false;
+    cSecret = "";
+  }
+  function submitConnect(e: Event) {
+    e.preventDefault();
+    const label = cLabel.trim() || cRemote.trim().split("/").filter(Boolean).pop() || "";
+    if (!label || (!cRemote.trim() && kind !== "gdrive" && kind !== "dropbox")) return;
+    addConnector({ kind, label, remote: cRemote.trim(), ...(cSecret.trim() ? { secret: cSecret.trim() } : {}) });
+    cSecret = "";
+  }
+  // The host confirms an add by listing (formOpen is cleared by the store);
+  // reset the text fields then so the next connect starts clean.
+  $effect(() => {
+    if (!connectors.formOpen) { cLabel = ""; cRemote = ""; }
+  });
 
   const dlg = useDialog(() => folders.open);
   let cursor = $state(-1); // index into `visible`; -1 = the current folder itself
@@ -69,8 +107,8 @@
   }
   function onKey(e: KeyboardEvent) {
     dlg.onKey(e); // Tab trap while the modal is open
-    if (creating) {
-      if (e.key === "Escape") { creating = false; e.preventDefault(); e.stopPropagation(); }
+    if (creating || connectors.formOpen) {
+      if (e.key === "Escape") { creating = false; closeConnect(); e.preventDefault(); e.stopPropagation(); }
       return;
     }
     if (e.key === "Escape") {
@@ -140,6 +178,27 @@
               {/each}
             </div>
           {/if}
+          {#if connectorsEnabled() && !listing.rel && !q}
+            <div class="recents connected" data-agent-id="folders.connected">
+              <span class="faint lbl">Connected</span>
+              {#each connectors.items as c (c.id)}
+                <span class="conn" data-state={c.status} data-agent-id={`folders.conn.${c.id}`}>
+                  <button class="chip" title={`${KIND_LABEL[c.kind]} · ${c.remote}${c.error ? `\n${c.error}` : ""}`} onclick={() => pickCurrent(c.local)} disabled={c.status === "syncing"}>
+                    <span class="kind">{KIND_LABEL[c.kind]}</span> {c.label}
+                  </button>
+                  {#if c.status === "syncing"}
+                    <span class="faint tiny">syncing…</span>
+                  {:else if c.status === "error"}
+                    <button class="tiny st-red" title={c.error} onclick={() => syncConnector(c.id)}>retry</button>
+                    <button class="tiny faint" title="Remove this connector (keeps the folder)" onclick={() => removeConnector(c.id)}>×</button>
+                  {:else}
+                    <button class="tiny faint" title="Pull the latest from the source" onclick={() => syncConnector(c.id)}>↻</button>
+                  {/if}
+                </span>
+              {/each}
+              <button class="chip add" data-agent-id="folders.connect" onclick={openConnect} title="Connect a GitHub repo, Google Drive or Dropbox folder">+ Connect…</button>
+            </div>
+          {/if}
           <nav class="crumbs" aria-label="Path" data-agent-id="folders.crumbs">
             {#each crumbs as c, i (c.path)}
               {#if i > 0}<span class="faint">/</span>{/if}
@@ -170,7 +229,26 @@
           </ul>
         </div>
         <div class="foot">
-          {#if creating}
+          {#if connectors.formOpen}
+            <form class="connect" onsubmit={submitConnect} data-agent-id="folders.connect.form" data-state={connectors.pending ? "pending" : "ready"}>
+              <div class="kinds" role="radiogroup" aria-label="Source">
+                {#each ["github", "gdrive", "dropbox", "git"] as k (k)}
+                  <button type="button" class="chip" class:sel={kind === k} role="radio" aria-checked={kind === k} onclick={() => (kind = k as ConnectorKind)}>{KIND_LABEL[k as ConnectorKind]}</button>
+                {/each}
+              </div>
+              {#if !kindOk}
+                <p class="faint tiny">{kind === "github" || kind === "git" ? "git is not installed on the host." : "rclone is not installed on the host — install it to connect Drive or Dropbox."}</p>
+              {/if}
+              <input bind:value={cRemote} placeholder={remoteHint} spellcheck="false" autocomplete="off" aria-label="Source" data-agent-id="folders.connect.remote" />
+              <input bind:value={cLabel} placeholder="Folder name (defaults to the source name)" maxlength="80" aria-label="Folder name" data-agent-id="folders.connect.label" />
+              <input bind:value={cSecret} type="password" placeholder={secretHint} autocomplete="off" spellcheck="false" aria-label="Credential" data-agent-id="folders.connect.secret" />
+              <div class="acts">
+                <button type="submit" class="act accent" disabled={!kindOk || connectors.pending || (needsSecret && !cSecret.trim())} data-agent-id="folders.connect.submit">{connectors.pending ? "Connecting…" : "Connect"}</button>
+                <button type="button" class="act" onclick={closeConnect}>Cancel</button>
+                <span class="faint tiny">Appears under Connected/{cLabel.trim() || "…"}. {kind === "github" || kind === "git" ? "Pull is fast-forward only; push commits everything." : "Copies both ways; never deletes."}</span>
+              </div>
+            </form>
+          {:else if creating}
             <form class="newf" onsubmit={submitNew}>
               <input bind:value={newName} placeholder="New folder name" maxlength="80" data-agent-id="folders.new.name" />
               <button type="submit" class="act" data-agent-id="folders.new.submit">Create</button>
@@ -183,7 +261,7 @@
             </button>
             <button class="act" data-agent-id="folders.new" onclick={() => (creating = true)}>[n] New folder here</button>
           {/if}
-          <span class="faint hint">↑↓ move · → open · ← up</span>
+          {#if !connectors.formOpen}<span class="faint hint">↑↓ move · → open · ← up</span>{/if}
         </div>
       </div>
     {:else}
@@ -270,6 +348,62 @@
   }
   .chip:hover {
     border-color: var(--cyan);
+  }
+  .chip:disabled {
+    opacity: 0.6;
+  }
+  .chip.add {
+    color: var(--dim);
+    border-style: dashed;
+  }
+  .chip.sel {
+    border-color: var(--cyan);
+    background: var(--bg1);
+  }
+  .conn {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 3px;
+  }
+  .conn[data-state="error"] .chip {
+    border-color: var(--red);
+  }
+  .kind {
+    color: var(--dim);
+    font-size: 11px;
+  }
+  .tiny {
+    font-size: 11px;
+    background: none;
+    border: 0;
+    padding: 0 2px;
+    font: inherit;
+    font-size: 11px;
+  }
+  .connect {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    flex: 1;
+  }
+  .connect input {
+    border: 1px solid var(--line);
+    background: var(--bg2);
+    padding: 4px 8px;
+  }
+  .connect input:focus {
+    border-color: var(--cyan);
+    outline: none;
+  }
+  .connect .kinds,
+  .connect .acts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: baseline;
+  }
+  .connect p {
+    margin: 0;
   }
   .crumbs {
     display: flex;
