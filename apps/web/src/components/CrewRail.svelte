@@ -79,7 +79,7 @@
         {/each}
         {#if finished > 0}
           <button class="crew-more faint" data-agent-id="crew.rail.clear" data-state={confirmClear ? "confirm" : "ready"} onclick={clearAll}>
-            {confirmClear ? "✕ sure? deletes every finished run" : `✕ Clear ${finished} finished`}
+            {confirmClear ? "✕ sure? deletes every finished run" : crew.omitted > 0 ? "✕ Clear finished" : `✕ Clear ${finished} finished`}
           </button>
         {/if}
         {#if hidden > 0 || crew.railAll}

@@ -471,6 +471,29 @@ export function createCrewAdapter({ roots = [], crewBin = "crew", dextBin, env =
   /** Terminal display states: nothing on disk still needs these runs. */
   const FINISHED = new Set(["completed", "failed", "stopped"]);
 
+  /** Detached runs leave a systemd user unit behind; stop it best-effort so a
+   *  cleanup really cleans up everywhere (a finished run's unit is inert but
+   *  lingers in the user manager until it is stopped). */
+  function stopUnit(unit) {
+    if (typeof unit !== "string" || !/^[A-Za-z0-9:@_.\\-]+$/.test(unit)) return;
+    try {
+      execFile("systemctl", ["--user", "stop", unit], { timeout: 5000 }, () => { /* best effort */ });
+    } catch { /* systemctl missing: nothing to stop */ }
+  }
+
+  /** Crew's default layout nests runs under `project-<hash>` dirs; drop the
+   *  ones a cleanup emptied so nothing lingers. */
+  function pruneEmpty(runDir) {
+    let dir = path.dirname(path.resolve(runDir));
+    while (/^project-[a-f0-9]{16}$/.test(path.basename(dir))) {
+      try {
+        if (fs.readdirSync(dir).length > 0) return;
+        fs.rmdirSync(dir);
+      } catch { return; }
+      dir = path.dirname(dir);
+    }
+  }
+
   /** Delete a run's record (manifest, worker dirs, logs). Finished runs only —
    *  a live one must be stopped first. Only the runs directory goes; the
    *  deliverables in the project's chain dir stay where the crew left them. */
@@ -478,12 +501,14 @@ export function createCrewAdapter({ roots = [], crewBin = "crew", dextBin, env =
     const r = runs.get(id);
     if (!r) return { ok: false, message: "unknown run" };
     if (!FINISHED.has(r.summary.state)) return { ok: false, message: `run is ${r.summary.state} — stop it first` };
+    stopUnit(r.manifest.unit);
     try {
       fs.rmSync(r.dir, { recursive: true, force: true });
     } catch (err) {
       return { ok: false, message: err.message.slice(0, 200) };
     }
     runs.delete(id);
+    pruneEmpty(r.dir);
     schedule();
     return { ok: true, message: "removed" };
   }
@@ -493,9 +518,11 @@ export function createCrewAdapter({ roots = [], crewBin = "crew", dextBin, env =
     let n = 0;
     for (const [id, r] of [...runs]) {
       if (!FINISHED.has(r.summary.state)) continue;
+      stopUnit(r.manifest.unit);
       try {
         fs.rmSync(r.dir, { recursive: true, force: true });
         runs.delete(id);
+        pruneEmpty(r.dir);
         n++;
       } catch {
         /* a dir that refuses stays listed; the rest of the sweep proceeds */

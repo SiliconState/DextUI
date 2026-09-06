@@ -80,7 +80,9 @@ test("rclone kinds: banner paste → config create (0600 conf, drive section); c
   assert.equal((await conn.add({ kind: "gdrive", label: "Drive", remote: "Projects", secret: "ya29.bare" })).error, "bad_secret");
   const added = await conn.add({ kind: "gdrive", label: "Drive", remote: "Projects", secret: `Paste the following into your remote machine --->\n${tok}\n<---End paste` });
   assert.ok(added.added, JSON.stringify(added));
-  const [c] = added.connectors;
+  assert.equal(added.connectors[0].status, "syncing", "the first copy runs in the background, not in the request");
+  await conn.drain();
+  const [c] = conn.list().connectors;
   const conf = path.join(r.home, "rclone.conf");
   assert.equal(fs.statSync(conf).mode & 0o777, 0o600);
   const text = fs.readFileSync(conf, "utf8");
@@ -253,6 +255,7 @@ test("sign-in: authorize resolves the consent URL, the callback (direct or relay
   assert.ok(added.added, JSON.stringify(added));
   assert.ok(fs.readFileSync(path.join(r.home, "rclone.conf"), "utf8").includes("type = drive"));
   assert.equal((await conn.add({ kind: "gdrive", label: "Drive2", remote: "", ticket: a.ticket })).error, "no_auth", "a ticket is single-use");
+  await conn.drain();
 
   // A second sign-in can be cancelled; its ticket is then worthless.
   const b = await conn.authorize({ kind: "dropbox" });

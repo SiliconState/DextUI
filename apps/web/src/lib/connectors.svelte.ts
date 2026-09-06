@@ -79,7 +79,9 @@ export function startSignIn(kind: ConnectorKind): void {
 }
 /** Re-open the consent page (the pre-opened tab was closed or blocked). */
 export function reopenSignIn(): void {
-  if (signin.url) window.open(signin.url, "_blank", "noopener");
+  if (!signin.url) return;
+  // Keep the handle (no noopener) so `done` can close this tab too.
+  signinTab = window.open(signin.url, "_blank");
 }
 export function relaySignIn(landing: string): void {
   if (!app.conn || !signin.ticket) return;
@@ -170,20 +172,28 @@ export function onConnectorsControl(env: Envelope): void {
   if (env.event === "x-agentlinkd.connectors.authorize") {
     const d = env.data as ConnectorAuthEvent;
     if (!d) return;
-    // Only the attempt this tab started (or none yet, for a broadcast that
-    // arrives before our own reply) drives local state.
+    // Only the attempt this tab started drives local state — the host also
+    // broadcasts progress, and another tab's sign-in is not ours to adopt.
     if (signin.ticket && d.ticket !== signin.ticket) return;
     if (d.url && d.kind) {
       if (signin.phase !== "starting" && signin.phase !== "waiting") return; // another tab's sign-in
+      const first = signin.phase === "starting";
       signin.ticket = d.ticket;
       signin.kind = d.kind;
       signin.url = d.url;
       signin.phase = "waiting";
-      if (signinTab && !signinTab.closed) {
+      // The URL arrives twice (our reply + the broadcast); only the first one
+      // navigates the pre-opened tab — a repeat would reload the consent page.
+      if (first && signinTab && !signinTab.closed) {
         try { signinTab.location.href = d.url; } catch { signinTab = null; }
       }
       return;
     }
+    if (d.cancelled) {
+      if (signin.phase !== "idle") resetSignIn();
+      return;
+    }
+    if (signin.phase !== "starting" && signin.phase !== "waiting") return;
     if (d.done) {
       signin.phase = "done";
       if (signinTab && !signinTab.closed) { try { signinTab.close(); } catch { /* cross-origin now */ } }
@@ -195,10 +205,6 @@ export function onConnectorsControl(env: Envelope): void {
       signin.error = d.error;
       if (signinTab && !signinTab.closed) { try { signinTab.close(); } catch { /* ignore */ } }
       signinTab = null;
-      return;
-    }
-    if (d.cancelled) {
-      if (signin.phase !== "idle") resetSignIn();
       return;
     }
     if (d.relayed) pushToast("ok", "Address received — finishing sign-in…");
@@ -228,6 +234,10 @@ export function onConnectorsControl(env: Envelope): void {
         signin.error = d.message;
         if (signinTab && !signinTab.closed) { try { signinTab.close(); } catch { /* ignore */ } }
         signinTab = null;
+      } else if (d.cmd.endsWith(".add") && d.code === "no_auth") {
+        // The ticket died (consumed elsewhere, expired): back to the sign-in
+        // button instead of a “Signed in” that can never connect.
+        resetSignIn();
       }
       pushToast("warn", d.message);
     } else if (d.cmd.startsWith("x-agentlinkd.auth.")) {

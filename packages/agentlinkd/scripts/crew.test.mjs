@@ -179,8 +179,8 @@ test("adapter stop/resume guard on state without spawning", async () => {
 
 test("remove/clearFinished: finished runs only, records gone, live runs and deliverables survive", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "crew-rm-"));
-  const mk = (name, status) => {
-    const dir = path.join(root, name);
+  const mk = (name, status, sub = "") => {
+    const dir = path.join(root, sub, name);
     const chain = path.join(root, "shared-chain");
     fs.mkdirSync(dir, { recursive: true });
     fs.mkdirSync(chain, { recursive: true });
@@ -191,6 +191,9 @@ test("remove/clearFinished: finished runs only, records gone, live runs and deli
   const done = mk("run-111111111111", "completed");
   const failed = mk("run-222222222222", "failed");
   const live = mk("run-333333333333", "running");
+  // Crew's default layout nests runs under `project-<hash>`: a cleanup must
+  // prune the emptied parent so nothing lingers.
+  const nested = mk("run-444444444444", "completed", "project-0123456789abcdef");
   const a = createCrewAdapter({ roots: [root], crewBin: "/nonexistent/crew" });
   try {
     assert.equal(a.remove("run-333333333333").ok, false, "a live run must be refused");
@@ -202,8 +205,10 @@ test("remove/clearFinished: finished runs only, records gone, live runs and deli
     assert.equal(a.detail("run-111111111111"), null);
     const c = a.clearFinished();
     assert.equal(c.ok, true);
-    assert.equal(c.removed, 1, "only the failed run was left to sweep");
+    assert.equal(c.removed, 2, "the sweep covered both run layouts");
     assert.equal(fs.existsSync(failed.dir), false);
+    assert.equal(fs.existsSync(nested.dir), false);
+    assert.equal(fs.existsSync(path.dirname(nested.dir)), false, "the emptied project dir is pruned");
     assert.equal(fs.existsSync(live.dir), true, "the live run survives a sweep");
     assert.notEqual(a.detail("run-333333333333"), null);
     assert.equal(fs.existsSync(path.join(live.chain, "review.md")), true, "deliverables are never touched");

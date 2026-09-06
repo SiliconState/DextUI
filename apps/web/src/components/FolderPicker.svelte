@@ -23,7 +23,7 @@
   const kindOk = $derived(isDrive ? connectors.tools.rclone : connectors.tools.git);
   const signedIn = $derived(isDrive && signin.phase === "done" && signin.kind === kind && !!signin.ticket);
   const remoteHint = $derived(
-    kind === "github" ? "owner/repo" : kind === "git" ? "https://…/repo.git" : "Folder inside the drive (blank = everything)",
+    kind === "github" ? "owner/repo" : kind === "git" ? "https://…/repo.git" : "Folder inside the drive (blank = everything — the first copy can take a while)",
   );
   const secretHint = $derived(kind === "github" ? "Personal access token (optional for public repos)" : "Token (optional)");
   const providerName = $derived(kind === "gdrive" ? "Google" : "Dropbox");
@@ -72,6 +72,21 @@
   function relayKey(e: KeyboardEvent) {
     if (e.key === "Enter") { e.preventDefault(); submitRelay(); }
   }
+  let confirmDisc = $state("");
+  let discTimer: ReturnType<typeof setTimeout> | undefined;
+  /** Two clicks: the second disconnects with full cleanup — the local copy and
+   *  the saved sign-in go; the originals stay in the cloud/repo. */
+  function disconnect(id: string) {
+    if (confirmDisc !== id) {
+      confirmDisc = id;
+      clearTimeout(discTimer);
+      discTimer = setTimeout(() => (confirmDisc = ""), 4000);
+      return;
+    }
+    confirmDisc = "";
+    removeConnector(id, true);
+  }
+
   // The host confirms an add by listing (formOpen is cleared by the store);
   // reset the text fields then so the next connect starts clean.
   $effect(() => {
@@ -227,7 +242,15 @@
                     <button class="tiny faint" title="Pull the latest from the source" onclick={() => syncConnector(c.id)}>↻</button>
                   {/if}
                   {#if c.status !== "syncing"}
-                    <button class="tiny faint" title="Disconnect (keeps the folder on disk)" aria-label={`Disconnect ${c.label}`} onclick={() => removeConnector(c.id)}>×</button>
+                    <button
+                      class="tiny faint"
+                      class:st-red={confirmDisc === c.id}
+                      title={confirmDisc === c.id ? "Disconnect and delete the local copy — the originals stay in your drive/repo" : "Disconnect (full cleanup)"}
+                      aria-label={`Disconnect ${c.label}`}
+                      data-agent-id={`folders.connect.disconnect.${c.id}`}
+                      data-state={confirmDisc === c.id ? "confirm" : "ready"}
+                      onclick={() => disconnect(c.id)}
+                    >{confirmDisc === c.id ? "sure?" : "×"}</button>
                   {/if}
                 </span>
               {/each}

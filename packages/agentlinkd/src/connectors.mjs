@@ -35,6 +35,10 @@ const HTTPS_RE = /^https:\/\/[A-Za-z0-9._-]+(?::\d+)?\/[^\s@]*$/;
 const REMOTE_PATH_RE = /^(?:[A-Za-z0-9 _.()-]+(?:\/[A-Za-z0-9 _.()-]+)*)?$/;
 const ASKPASS = fileURLToPath(new URL("../scripts/git-askpass.sh", import.meta.url));
 const OP_TIMEOUT_MS = 10 * 60_000;
+/** rclone copies may legitimately run for hours (a whole Drive on rclone's
+ *  shared client_id is slow) — they run in the background, and a retry
+ *  resumes: `rclone copy` skips files that are already present. */
+const COPY_TIMEOUT_MS = 2 * 60 * 60_000;
 
 function which(bin) {
   for (const dir of (process.env.PATH ?? "").split(path.delimiter)) {
@@ -213,6 +217,14 @@ export function createConnectors({ home, root, allowLocal = false, exec = run, b
     runtime.set(id, { status, ...(error ? { error } : {}) });
     notify();
   }
+
+  // Heal after a restart: a registered connector whose folder is gone (a
+  // killed first copy, a manual delete) re-materialises in the background.
+  for (const c of load()) {
+    const l = localFor(c.label);
+    if (l.error || fs.existsSync(l.abs)) continue;
+    kick(c.id, c.kind === "gdrive" || c.kind === "dropbox" ? pullRemote : materialise);
+  }
   function localFor(label) {
     const dir = path.join(root, CONNECTED_DIR);
     fs.mkdirSync(dir, { recursive: true });
@@ -245,16 +257,43 @@ export function createConnectors({ home, root, allowLocal = false, exec = run, b
   }
 
   async function materialise(c, local) {
-    if (c.kind === "github" || c.kind === "git") {
-      if (!tools.git) return { error: "git not found on the host" };
-      const env = await withGhToken(c, gitEnv(c));
-      const r = await exec(tools.git, ["clone", "--", c.remote, local], { env });
-      return r.ok ? {} : { error: failLine(r) };
-    }
+    if (!tools.git) return { error: "git not found on the host" };
+    const env = await withGhToken(c, gitEnv(c));
+    const r = await exec(tools.git, ["clone", "--", c.remote, local], { env });
+    return r.ok ? {} : { error: failLine(r) };
+  }
+
+  /** rclone pull: never deletes, and skips what is already there, so a retry
+   *  picks up where the last attempt stopped. An empty folder left by a failed
+   *  first copy is removed again — no half-made folder. */
+  async function pullRemote(c, local) {
     if (!tools.rclone) return { error: "rclone not found on the host — install rclone to connect Drive or Dropbox" };
     fs.mkdirSync(local, { recursive: true });
-    const r = await exec(tools.rclone, rcloneArgs(["copy", `${rcloneRemote(c)}:${c.remote}`, local]));
+    const r = await exec(tools.rclone, rcloneArgs(["copy", `${rcloneRemote(c)}:${c.remote}`, local]), { timeout: COPY_TIMEOUT_MS });
+    if (r.ok) return {};
+    try { if (fs.readdirSync(local).length === 0) fs.rmdirSync(local); } catch { /* keep */ }
+    return { error: failLine(r) };
+  }
+
+  /** rclone push: copies local → remote, never deletes remote files. */
+  async function pushRemote(c, local) {
+    if (!fs.existsSync(local)) return { error: "local folder missing — sync first" };
+    if (!tools.rclone) return { error: "rclone not found on the host — install rclone to connect Drive or Dropbox" };
+    // Never ship DextUI's own per-folder state (flows, run logs) to the user's drive.
+    const r = await exec(tools.rclone, rcloneArgs(["copy", "--exclude", ".dext/**", local, `${rcloneRemote(c)}:${c.remote}`]), { timeout: COPY_TIMEOUT_MS });
     return r.ok ? {} : { error: failLine(r) };
+  }
+
+  /** Run a connector job in the background: status streams through the listing
+   *  (syncing → idle/error) instead of blocking the caller for hours. */
+  function kick(id, fn) {
+    if (busy.has(id)) return;
+    void guard(id, fn).catch(() => { /* guard records its own errors */ });
+  }
+
+  /** Tests: resolve once no connector job is running. */
+  async function drain() {
+    while (busy.size) await new Promise((r) => setTimeout(r, 10));
   }
 
   async function guard(id, fn) {
@@ -412,6 +451,14 @@ export function createConnectors({ home, root, allowLocal = false, exec = run, b
       }
       items.push(c);
       save(items);
+      if (rclone) {
+        // The folder appears immediately and the first copy runs in the
+        // background: a whole drive can take far longer than any request
+        // should wait (rclone's shared client_id is slow). Retries resume.
+        try { fs.mkdirSync(l.abs, { recursive: true }); } catch { /* the job surfaces it */ }
+        kick(c.id, pullRemote);
+        return listing({ added: c.id });
+      }
       const out = await guard(c.id, (cc, local) => materialise(cc, local));
       if (out.error && out.error !== "busy") {
         // Materialise failed: keep the registration so the error is visible and
@@ -440,18 +487,22 @@ export function createConnectors({ home, root, allowLocal = false, exec = run, b
       return listing({ removed: id });
     },
 
-    /** Pull remote → local. git: fast-forward only (never rewrites local work). rclone: copy (never deletes). */
+    /** Pull remote → local. git: fast-forward only (never rewrites local work),
+     *  awaited. rclone: copy in the background (never deletes; resumes). */
     async sync({ id }) {
       if (typeof id !== "string" || !ID_RE.test(id)) return { error: "bad_request" };
-      const out = await guard(id, async (c, local) => {
-        if (!fs.existsSync(local)) return materialise(c, local);
-        if (c.kind === "github" || c.kind === "git") {
-          const env = await withGhToken(c, gitEnv(c));
-          const r = await exec(tools.git, ["-C", local, "pull", "--ff-only"], { env });
-          return r.ok ? {} : { error: failLine(r) };
-        }
-        if (!tools.rclone) return { error: "rclone not found on the host" };
-        const r = await exec(tools.rclone, rcloneArgs(["copy", `${rcloneRemote(c)}:${c.remote}`, local]));
+      const c = load().find((x) => x.id === id);
+      if (!c) return { error: "no_connector" };
+      if (c.kind === "gdrive" || c.kind === "dropbox") {
+        // Backgrounded: the copy can run for hours; the status chip carries
+        // progress (syncing → idle) and listing pushes land as events.
+        kick(id, pullRemote);
+        return listing();
+      }
+      const out = await guard(id, async (cc, local) => {
+        if (!fs.existsSync(local)) return materialise(cc, local);
+        const env = await withGhToken(cc, gitEnv(cc));
+        const r = await exec(tools.git, ["-C", local, "pull", "--ff-only"], { env });
         return r.ok ? {} : { error: failLine(r) };
       });
       return out.error ? out : listing({ synced: id });
@@ -461,21 +512,21 @@ export function createConnectors({ home, root, allowLocal = false, exec = run, b
     async push({ id, message }) {
       if (typeof id !== "string" || !ID_RE.test(id)) return { error: "bad_request" };
       const msg = typeof message === "string" && message.trim() ? message.trim().slice(0, 200) : `DextUI sync ${new Date().toISOString()}`;
-      const out = await guard(id, async (c, local) => {
+      const c = load().find((x) => x.id === id);
+      if (!c) return { error: "no_connector" };
+      if (c.kind === "gdrive" || c.kind === "dropbox") {
+        kick(id, pushRemote); // backgrounded like the pull — same reason
+        return listing();
+      }
+      const out = await guard(id, async (cc, local) => {
         if (!fs.existsSync(local)) return { error: "local folder missing — sync first" };
-        if (c.kind === "github" || c.kind === "git") {
-          const env = await withGhToken(c, gitEnv(c));
-          const identity = ["-c", "user.name=DextUI", "-c", "user.email=dextui@localhost"];
-          let r = await exec(tools.git, ["-C", local, "add", "-A"], { env });
-          if (!r.ok) return { error: failLine(r) };
-          r = await exec(tools.git, ["-C", local, ...identity, "commit", "-q", "-m", msg], { env });
-          if (!r.ok && !/nothing to commit/i.test(r.stdout + r.stderr)) return { error: failLine(r) };
-          r = await exec(tools.git, ["-C", local, "push"], { env });
-          return r.ok ? {} : { error: failLine(r) };
-        }
-        if (!tools.rclone) return { error: "rclone not found on the host" };
-        // Never ship DextUI's own per-folder state (flows, run logs) to the user's drive.
-        const r = await exec(tools.rclone, rcloneArgs(["copy", "--exclude", ".dext/**", local, `${rcloneRemote(c)}:${c.remote}`]));
+        const env = await withGhToken(cc, gitEnv(cc));
+        const identity = ["-c", "user.name=DextUI", "-c", "user.email=dextui@localhost"];
+        let r = await exec(tools.git, ["-C", local, "add", "-A"], { env });
+        if (!r.ok) return { error: failLine(r) };
+        r = await exec(tools.git, ["-C", local, ...identity, "commit", "-q", "-m", msg], { env });
+        if (!r.ok && !/nothing to commit/i.test(r.stdout + r.stderr)) return { error: failLine(r) };
+        r = await exec(tools.git, ["-C", local, "push"], { env });
         return r.ok ? {} : { error: failLine(r) };
       });
       return out.error ? out : listing({ pushed: id });
@@ -490,5 +541,6 @@ export function createConnectors({ home, root, allowLocal = false, exec = run, b
       const c = load().find((x) => x.label === label);
       return c ? publicView(c) : null;
     },
+    drain,
   };
 }
