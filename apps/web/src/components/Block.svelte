@@ -102,10 +102,16 @@
   );
   // Live: one flowing tail of the current thought, whitespace collapsed —
   // reads like the model's train of thought, not a stack of fragments.
+  // Live tail of the current thought. Truncation is silent and lands on a
+  // word boundary — the rotating mark already says "in progress", so there
+  // is no ellipsis beside it.
   const thinkTail = $derived.by(() => {
     if (block.kind !== "thinking") return "";
     const t = (block.text ?? "").replace(/\s+/g, " ").trim();
-    return t.length > 280 ? `… ${t.slice(-280)}` : t;
+    if (t.length <= 280) return t;
+    const cut = t.slice(-280);
+    const sp = cut.indexOf(" ");
+    return sp > 0 && sp < 40 ? cut.slice(sp + 1) : cut;
   });
   // Duration from the envelope timestamps the store stamps on the stream —
   // no host change needed. Sealed-without-complete blocks simply lack it.
@@ -142,7 +148,7 @@
   {:else}
     <details class="b-think live" open data-agent-id="block.thinking" data-state="thinking">
       <summary><span class="faint">▾ Thinking · Streaming…</span></summary>
-      <p class="think-p stream"><span class="think-star" aria-hidden="true">✦</span>{thinkTail}</p>
+      <p class="think-p stream"><span class="think-mark" aria-hidden="true">◈</span>{thinkTail}</p>
     </details>
   {/if}
 {:else if block.kind === "tool"}
@@ -303,9 +309,10 @@
   .think-p.stream {
     color: var(--dim);
   }
-  /* Streaming thought indicator: a four-pointed star in a slow, steady
-     rotation — the star's "working" motion, a glyph that is nobody's mark. */
-  .think-star {
+  /* Streaming thought indicator: a lozenge in a slow, steady rotation —
+     the "working" motion the star had, in a geometric glyph that is no
+     lab's mark (not ✻, not ✦, no ellipsis beside it either). */
+  .think-mark {
     display: inline-block;
     margin-right: 6px;
     color: var(--faint);
@@ -317,7 +324,7 @@
     }
   }
   @media (prefers-reduced-motion: reduce) {
-    .think-star {
+    .think-mark {
       animation: none;
     }
   }
