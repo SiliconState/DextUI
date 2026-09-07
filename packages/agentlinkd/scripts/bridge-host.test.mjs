@@ -137,6 +137,7 @@ test("bridge: warm child across idle interrupt, /approval recycle, queued-steer 
   a.send("prompt.submit", { session: id, text: "three" });
   assert.notEqual(await pidOf(at), pid1, "/approval change must recycle the child");
   await a.wait((e) => e.session === id && e.event === "turn_end", at);
+  assert.ok(!a.events.slice(at).some((e) => e.session === id && e.event === "error"), "the retired child's exit must not surface as a turn failure");
 
   // Queued steering (child still spawning) drains at turn_end as its own turn.
   const id2 = await open(a);

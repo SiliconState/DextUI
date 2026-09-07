@@ -1045,7 +1045,10 @@ function ensureBridge(s) {
       publish(journalData(s, "permission.resolved", { request_id: s.pendingPermission.request_id, choice: "deny", by: "exit" }));
       s.pendingPermission = null;
     }
-    if (s.working) {
+    if (s.working && bridge.turnSeq === s.turnSeq) {
+      // Only the bridge that owns the latest dispatched turn may fail it. A
+      // recycled child exiting while its replacement already carries the next
+      // prompt is expected turnover, not a failed turn.
       if (s.killed) publish(journalData(s, "interrupted"));
       else {
         const detail = errTail.trim().split("\n").slice(-3).join(" · ").slice(-400);
@@ -1186,6 +1189,9 @@ function runBridgedTurn(s, prompt) {
   const text = packRun?.sub === "run" && packByName(packRun.name) ? `/pack run ${packRun.name} ${packRun.task}` : prompt;
   ensureBridge(s).then((bridge) => {
     if (s.deleted) return;
+    // Ownership stamp: onExit only fails a turn whose bridge carried it.
+    s.turnSeq = (s.turnSeq ?? 0) + 1;
+    bridge.turnSeq = s.turnSeq;
     if (!bridge.user(text)) throw new Error("dext stdin closed");
   }).catch((err) => {
     if (s.deleted) return;
