@@ -445,3 +445,61 @@ test("live ping is sent on the interval and stops after close", (t) => {
   mock.timers.tick(25_000);
   assert.equal(ws.frames("ping").length, 1);
 });
+
+// ---------- delivery acks (nonce → cmd_ack) ----------
+
+test("prompt/steer/slash are nonce-tagged; cmd_ack resolves exactly once", (t) => {
+  const acks = [];
+  const { conn } = setup(t, { onCmdAck: (...a) => acks.push(a) });
+  const ws = goLive(conn);
+
+  const n1 = conn.prompt("s1", "hello");
+  assert.ok(n1, "prompt returns its nonce");
+  const sent = ws.frames("prompt.submit").at(-1);
+  assert.equal(sent.nonce, n1, "the nonce rides the frame");
+  assert.equal(conn.pendingCommandCount(), 1);
+
+  ws.receive({ v: 1, ts: 2, event: "cmd_ack", data: { nonce: n1, cmd: "prompt.submit", ok: true } });
+  assert.deepEqual(acks, [[n1, true, { cmd: "prompt.submit", duplicate: false, message: undefined }]]);
+  assert.equal(conn.pendingCommandCount(), 0, "ack clears the pending entry");
+
+  // A replayed/duplicate ack must not fire again.
+  ws.receive({ v: 1, ts: 3, event: "cmd_ack", data: { nonce: n1, cmd: "prompt.submit", ok: true, duplicate: true } });
+  assert.equal(acks.length, 1);
+
+  // Duplicate flag surfaces for the caller (reconnect replay dedup notice).
+  const n2 = conn.slash("s1", "/help");
+  ws.receive({ v: 1, ts: 4, event: "cmd_ack", data: { nonce: n2, cmd: "slash", ok: true, duplicate: true } });
+  assert.deepEqual(acks.at(-1), [n2, true, { cmd: "slash", duplicate: true, message: undefined }]);
+});
+
+test("an error envelope resolves the one pending command of its kind as failed", (t) => {
+  const acks = [];
+  const { conn } = setup(t, { onCmdAck: (...a) => acks.push(a) });
+  const ws = goLive(conn);
+
+  const n1 = conn.prompt("s1", "one");
+  ws.receive({ v: 1, ts: 2, event: "error", data: { code: "no_session", message: "unknown session s1", cmd: "prompt.submit" } });
+  assert.deepEqual(acks, [[n1, false, { cmd: "prompt.submit", message: "unknown session s1" }]]);
+
+  // Ambiguity is safe by design: two in-flight prompts of the same kind —
+  // the error answers neither, so no double-fire on the wrong nonce.
+  const a = conn.prompt("s1", "a");
+  const b = conn.prompt("s1", "b");
+  ws.receive({ v: 1, ts: 3, event: "error", data: { code: "no_session", message: "x", cmd: "prompt.submit" } });
+  assert.equal(acks.length, 1);
+  conn.cancelPending(a);
+  conn.cancelPending(b);
+});
+
+test("cancelPending drops a command without an ack callback", (t) => {
+  const acks = [];
+  const { conn } = setup(t, { onCmdAck: (...a) => acks.push(a) });
+  const ws = goLive(conn);
+  const n1 = conn.steer("s1", "mid-turn note");
+  assert.equal(conn.pendingCommandCount(), 1);
+  conn.cancelPending(n1);
+  assert.equal(conn.pendingCommandCount(), 0);
+  ws.receive({ v: 1, ts: 2, event: "cmd_ack", data: { nonce: n1, cmd: "steering.inject", ok: true } });
+  assert.equal(acks.length, 0, "a cancelled command never reports delivery");
+});

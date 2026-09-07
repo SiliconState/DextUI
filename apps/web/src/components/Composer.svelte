@@ -3,7 +3,7 @@
   import type { SessionStore } from "@dextui/client";
   import type { HostCommand } from "@dextui/protocol";
   import { tick, untrack } from "svelte";
-  import { app, connection, newSession, stepSession } from "../lib/state.svelte";
+  import { app, connection, newSession, stepSession, trackDelivery } from "../lib/state.svelte";
   import { useSession } from "../lib/useSession.svelte";
   import { runSlash as runExtSlash, slashCommands as extSlashCommands } from "../ext";
 
@@ -198,11 +198,13 @@
     const sid = app.activeId;
     const t = text;
     recordHistory(sid, t);
+    // Each send is nonce-tagged: a reconnect replay can't double-run it, and a
+    // lost/rejected send restores its text (trackDelivery + cmd_ack).
     if (t.trim().startsWith("/")) {
       // An extension may claim the command locally; otherwise the host handles it.
-      if (!runExtSlash(t, sid)) c.slash(sid, t.trim());
-    } else if (view.working && canSteer) c.steer(sid, t);
-    else c.prompt(sid, t);
+      if (!runExtSlash(t, sid)) trackDelivery(c.slash(sid, t.trim()), { sessionId: sid, text: t, kind: "slash" });
+    } else if (view.working && canSteer) trackDelivery(c.steer(sid, t), { sessionId: sid, text: t, kind: "steer" });
+    else trackDelivery(c.prompt(sid, t), { sessionId: sid, text: t, kind: "prompt" });
     localStorage.removeItem(`dextui.draft.${sid}`);
     text = "";
     menuHidden = false;

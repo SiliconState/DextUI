@@ -9,6 +9,7 @@ import { acceptSelf, onSelfControl, onSelfReconnected } from "./selfedit.svelte"
 import { onDirsControl } from "./folders.svelte";
 import { onConnectorsControl } from "./connectors.svelte";
 import { onFlowsControl } from "./flows.svelte";
+import { onTasksControl } from "./tasks.svelte";
 import { packTitle } from "./display";
 
 export type Theme = "dark" | "light" | "system";
@@ -181,6 +182,65 @@ function rebuildQueue(): void {
       autoSubscribed.delete(id);
     }
   }
+}
+
+// ---------- delivery tracking (prompts / steering / slash) ----------
+//
+// Composer.send() records each send here (nonce -> text + session); the
+// Connection reports the host's cmd_ack (or an error correlation). On failure
+// the text is restored to the composer and a retry toast offers a fresh send —
+// never an automatic resend, which could double-run a turn that landed.
+
+interface Outgoing {
+  sessionId: string;
+  text: string;
+  kind: "prompt" | "steer" | "slash";
+  at: number;
+}
+const outgoing = new Map<string, Outgoing>();
+const OUTGOING_TTL_MS = 20_000;
+
+/** Register a just-sent command so its outcome can restore the text. */
+export function trackDelivery(nonce: string, entry: Omit<Outgoing, "at">): void {
+  if (!nonce) return;
+  outgoing.set(nonce, { ...entry, at: Date.now() });
+  setTimeout(() => expireDelivery(nonce), OUTGOING_TTL_MS);
+}
+
+function expireDelivery(nonce: string): void {
+  const e = outgoing.get(nonce);
+  if (!e) return; // already acknowledged
+  outgoing.delete(nonce);
+  failDelivery(nonce, e, "no acknowledgment from the host — check the transcript before resending");
+}
+
+function failDelivery(nonce: string, e: Outgoing, why: string): void {
+  app.conn?.cancelPending(nonce);
+  const draftKey = `dextui.draft.${e.sessionId}`;
+  const stillThere = app.sessions.some((s) => s.id === e.sessionId);
+  // Restore only into an empty draft: never clobber text typed since.
+  const restore = stillThere && !localStorage.getItem(draftKey);
+  if (restore) {
+    localStorage.setItem(draftKey, e.text);
+    app.draftRevisions[e.sessionId] = (app.draftRevisions[e.sessionId] ?? 0) + 1;
+  }
+  pushToast("err", `Not sent — ${why}${restore ? " (text restored to the composer)" : ""}`, {
+    label: "Retry",
+    run: () => resend(e),
+  });
+}
+
+function resend(e: Outgoing): void {
+  const c = app.conn;
+  if (!c || app.phase !== "live") {
+    pushToast("warn", "Not connected — try again once live");
+    return;
+  }
+  const nonce =
+    e.kind === "prompt" ? c.prompt(e.sessionId, e.text)
+      : e.kind === "steer" ? c.steer(e.sessionId, e.text)
+        : c.slash(e.sessionId, e.text);
+  trackDelivery(nonce, { sessionId: e.sessionId, text: e.text, kind: e.kind });
 }
 
 let started = false;
@@ -396,6 +456,14 @@ export function start(token: string): void {
         // the same host instance, fresh snapshot after a host restart).
       }
     },
+    onCmdAck: (nonce, ok, info) => {
+      if (app.conn !== c) return;
+      const e = outgoing.get(nonce);
+      if (!e) return; // unknown nonce: already resolved (e.g. error correlation won)
+      outgoing.delete(nonce);
+      if (!ok) failDelivery(nonce, e, info.message || "the host rejected it");
+      else if (info.duplicate) pushToast("info", "Already delivered — reconnect replay skipped");
+    },
     onHostRestart: () => {
       if (app.conn !== c) return;
       // Stores were dropped; force every `c.session(id)` lookup to re-resolve.
@@ -587,6 +655,7 @@ export function start(token: string): void {
     onDirsControl(env);
     onConnectorsControl(env);
     onFlowsControl(env);
+    onTasksControl(env);
     if (env.event === "sessions.deleted") {
       const d = env.data as { ids: string[] };
       finishSessionAction();

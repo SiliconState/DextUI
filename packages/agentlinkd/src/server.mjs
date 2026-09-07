@@ -38,6 +38,7 @@ import { createDir, listDirs } from "./dirs.mjs";
 import { createConnectors } from "./connectors.mjs";
 import { compileFlow, deleteFlow, listFlows, readFlow, writeFlow } from "./flows.mjs";
 import { createScheduler } from "./triggers.mjs";
+import { TASK_STATUSES, createTasksAdapter } from "./tasks.mjs";
 
 const here = path.dirname(url.fileURLToPath(import.meta.url));
 const repoRoot = path.join(here, "..", "..", "..");
@@ -342,6 +343,10 @@ function resolveCrew() {
 const CREW_BIN = resolveCrew();
 // hello_ok.crews + x-agentlinkd.crew.{open,close,tail,file,stop,resume}.
 if (CREW_BIN) CAPABILITIES.push("crew");
+// x-agentlinkd.tasks.* + /task: the shared task workspace (goal, acceptance,
+// constraints, links, blockers, verified checks) — one record both the user
+// and the agent read/write at <cwd>/.dext/tasks/<name>.task.json.
+CAPABILITIES.push("tasks");
 
 function refreshPacks() {
   if (packRefresh) {
@@ -436,6 +441,7 @@ const CREW = CREW_BIN
 function crewRootFor(cwd) {
   if (CREW && typeof cwd === "string" && cwd) CREW.addRoot(path.join(cwd, ".crew", "runs"));
   if (TRIGGERS && typeof cwd === "string" && cwd) TRIGGERS.addWorkspace(cwd);
+  if (TASKS && typeof cwd === "string" && cwd) TASKS.ensureWatch(cwd);
 }
 
 // ---------- triggers (what starts a flow besides a click) ----------
@@ -451,6 +457,18 @@ TRIGGERS = createScheduler({
   log: (m) => console.error(`agentlinkd: ${m}`),
   broadcast: (event, data) => broadcastControl(event, data),
 });
+
+// ---------- shared tasks ----------
+
+// Declared with `let` for the same reason as TRIGGERS (broadcastControl runs
+// before this point during adapter construction is fine — it only sends to
+// live clients, of which there are none at boot).
+let TASKS = null;
+TASKS = createTasksAdapter({
+  broadcast: (event, data) => broadcastControl(event, data),
+  log: (m) => console.error(`agentlinkd: tasks: ${m}`),
+});
+COMMANDS.push({ cmd: "/task", desc: "Shared tasks: list | show <name> | new <name> <goal> | set <name> field=value | check <name> ok|fail <what>" });
 
 // ---------- self-edit ----------
 
@@ -1266,6 +1284,9 @@ const HOST_HELP = [
   "  /approval <profile>   set this session's dext approval profile",
   `                        (${[...APPROVALS].join(" | ")}) — applies from the next turn`,
   "  /pack …               list | run <name> <task> | inspect <name> | create <shelf>/<name> [--from <pack>]",
+  "  /task …               shared tasks: list | show <name> | new <name> <goal>",
+  "                        set <name> status|goal|summary|blocked_on|answer=…",
+  "                        check <name> ok|fail <what> ('done' needs a passing check)",
   "  /ui status            self-edit: served build, last build, pending restart",
   "  /ui build [--tests] [--no-check]   staged rebuild of the web app; swaps in only if it passes",
   "  /ui rollback          serve the previous (last-known-good) build again",
@@ -1370,6 +1391,8 @@ function handleSlash(client, s, raw) {
   }
   const ui = /^\/ui\b\s*(.*)$/s.exec(trimmed);
   if (ui) return handleUiSlash(client, s, ui[1].trim());
+  const task = /^\/task\b\s*([\s\S]*)$/.exec(trimmed);
+  if (task) return handleTaskSlash(client, s, task[1].trim());
   const m = /^\/approval\s+(\S+)$/.exec(trimmed);
   if (m) {
     const profile = m[1];
@@ -1383,7 +1406,7 @@ function handleSlash(client, s, raw) {
     publish(journalData(s, "slash", `approval profile → ${profile} (next turn)`));
     return;
   }
-  sendError(client, "unsupported", `host handles /help, /login, /approval, /pack and /ui; '${trimmed.split(/\s/)[0]}' needs interactive dext`);
+  sendError(client, "unsupported", `host handles /help, /login, /approval, /pack, /task and /ui; '${trimmed.split(/\s/)[0]}' needs interactive dext`);
 }
 
 // ---------- packs: slash + prompt routing ----------
@@ -1507,6 +1530,37 @@ function submitPrompt(s, incoming) {
   runTurn(s, text);
 }
 
+// ---------- delivery dedup (nonce) ----------
+
+// Clients tag prompt.submit / steering.inject / slash with a nonce; the host
+// remembers it for an hour, so a reconnect replay can never double-run work.
+// Rejections flow back through the normal cmd-tagged `error` envelope (the
+// client correlates those), so acks here are positive-only: `ok` means
+// durably accepted (journaled or queued), `duplicate` means already run.
+const NONCE_RE = /^[A-Za-z0-9_-]{6,64}$/;
+const ACKABLE_CMDS = new Set(["prompt.submit", "steering.inject", "slash"]);
+const seenNonces = new Map(); // nonce -> first-seen ts
+const NONCE_TTL_MS = 60 * 60 * 1000;
+const NONCE_CAP = 4096;
+function nonceClaim(frame) {
+  const n = frame?.nonce;
+  if (typeof n !== "string" || !NONCE_RE.test(n) || !ACKABLE_CMDS.has(frame.cmd)) return null;
+  if (seenNonces.has(n)) return { nonce: n, duplicate: true };
+  const now = Date.now();
+  if (seenNonces.size >= NONCE_CAP) {
+    for (const [k, t] of seenNonces) if (now - t > NONCE_TTL_MS) seenNonces.delete(k);
+    if (seenNonces.size >= NONCE_CAP) seenNonces.delete(seenNonces.keys().next().value);
+  }
+  seenNonces.set(n, now);
+  return { nonce: n, duplicate: false };
+}
+function ackOk(client, frame, duplicate = false) {
+  const n = frame?.nonce;
+  if (typeof n === "string" && ACKABLE_CMDS.has(frame.cmd)) {
+    sendControl(client, "cmd_ack", { nonce: n, cmd: frame.cmd, ok: true, ...(duplicate ? { duplicate: true } : {}) });
+  }
+}
+
 async function handleCommand(client, frame) {
   if (!frame || typeof frame !== "object") return;
   if (frame.v !== 1) {
@@ -1552,7 +1606,14 @@ async function handleCommand(client, frame) {
   const target = sessions.get(frame.id ?? frame.session);
   if (target && (target.managing || target.cleanup) &&
       !["session.delete", "session.clear", "session.unsubscribe"].includes(frame.cmd)) {
-    sendError(client, "busy", "session cleanup pending; retry delete/clear before using it");
+    sendError(client, "busy", "session cleanup pending; retry delete/clear before using it", frame.cmd);
+    return;
+  }
+
+  // Delivery dedup: a replayed nonce is acked as duplicate and never re-run.
+  const claim = nonceClaim(frame);
+  if (claim?.duplicate) {
+    ackOk(client, frame, true);
     return;
   }
 
@@ -1744,6 +1805,7 @@ async function handleCommand(client, frame) {
       const packCmd = parsePackSlash(frame.text);
       if (packCmd && packCmd.sub !== "run") {
         await handlePackSlash(client, s, packCmd);
+        ackOk(client, frame);
         return;
       }
       if (packCmd && guardPackRun(client, s, packCmd)) return;
@@ -1751,10 +1813,13 @@ async function handleCommand(client, frame) {
         // A prompt sent mid-turn is steering: queue it for the turn boundary.
         if (!queueSteering(s, frame.text)) {
           sendError(client, "busy", "steering queue is full (10 messages / 100k chars); interrupt or wait");
+          return;
         }
+        ackOk(client, frame);
         return;
       }
       submitPrompt(s, frame.text);
+      ackOk(client, frame);
       return;
     }
 
@@ -1778,7 +1843,9 @@ async function handleCommand(client, frame) {
       }
       if (!queueSteering(s, frame.text.trim())) {
         sendError(client, "busy", "steering queue is full (10 messages / 100k chars); interrupt or wait");
+        return;
       }
+      ackOk(client, frame);
       return;
     }
 
@@ -1804,6 +1871,7 @@ async function handleCommand(client, frame) {
         return;
       }
       await handleSlash(client, s, frame.raw);
+      ackOk(client, frame);
       return;
     }
 
@@ -1845,6 +1913,10 @@ async function handleCommand(client, frame) {
       }
       if (typeof frame.cmd === "string" && frame.cmd.startsWith("x-agentlinkd.auth.")) {
         await handleAuthCommand(client, frame);
+        return;
+      }
+      if (typeof frame.cmd === "string" && frame.cmd.startsWith("x-agentlinkd.tasks.")) {
+        handleTasksCommand(client, frame);
         return;
       }
       sendError(client, "unknown_command", `unsupported cmd ${String(frame.cmd)}`);
@@ -2000,10 +2072,41 @@ function compileOrError(client, frame, flow) {
   }
 }
 
+/** Launch registry: one record per (cwd, flow) — the LAST launch of that
+ *  flow, tracked from spawn to process exit. Spawn-accepted is not
+ *  run-succeeded: crew's exit status and output tail are recorded, persisted
+ *  under --state-dir, and broadcast, so a run that dies at startup is a
+ *  visible failure instead of a silent "started". */
+const LAUNCHES_FILE = path.join(STATE_DIR, "flow-launches.json");
+let LAUNCHES = {}; // `${cwd}\u0000${name}` -> last launch record
+try {
+  LAUNCHES = JSON.parse(fs.readFileSync(LAUNCHES_FILE, "utf8")) || {};
+} catch {
+  LAUNCHES = {};
+}
+function persistLaunches() {
+  const keys = Object.keys(LAUNCHES);
+  if (keys.length > 64) for (const k of keys.slice(0, keys.length - 64)) delete LAUNCHES[k];
+  try {
+    fs.writeFileSync(LAUNCHES_FILE, JSON.stringify(LAUNCHES));
+  } catch (err) {
+    console.error(`agentlinkd: cannot persist flow launches: ${err.message}`);
+  }
+}
+function launchSummaries(cwd) {
+  const out = [];
+  for (const l of Object.values(LAUNCHES)) {
+    if (cwd && l.cwd !== cwd) continue;
+    out.push({ cwd: l.cwd, name: l.name, state: l.state, at: l.at, exit_code: l.exit_code, error: String(l.error ?? "").slice(0, 300) });
+  }
+  return out.sort((a, b) => b.at - a.at).slice(0, 16);
+}
+
 /** Start a flow run: compile to a crew spec, write it once under
- *  <cwd>/.crew/specs, spawn `crew run --spec` detached. Shared by the
- *  x-agentlinkd.flows.run command and every trigger. Returns `{ ok, spec_path }`
- *  or `{ error, code }`; never throws. */
+ *  <cwd>/.crew/specs, spawn `crew run --spec` detached — and TRACK the
+ *  launch to exit (see LAUNCHES above). Shared by the x-agentlinkd.flows.run
+ *  command and every trigger. Returns `{ ok, spec_path, launch }` or
+ *  `{ error, code }`; never throws. */
 function startFlowRun(cwd, name, { by = "host", reason = "" } = {}) {
   if (!CREW_BIN) return { error: "flows run on crew; no crew binary on this host", code: "unsupported" };
   const r = readFlow(cwd, name);
@@ -2027,14 +2130,56 @@ function startFlowRun(cwd, name, { by = "host", reason = "" } = {}) {
     return { error: `cannot write ${specPath}`, code: "write_failed" };
   }
   if (CREW) CREW.addRoot(path.join(cwd, ".crew", "runs"));
+
+  const launch = {
+    cwd,
+    name: r.flow.name,
+    spec_path: specPath,
+    by,
+    reason: String(reason ?? "").slice(0, 200),
+    at: Date.now(),
+    state: "starting",
+    exit_code: null,
+    error: "",
+  };
+  LAUNCHES[`${cwd}\u0000${launch.name}`] = launch;
+  persistLaunches();
+
+  let child;
   try {
-    const child = spawn(CREW_BIN, ["run", "--spec", specPath, "--cwd", cwd], { cwd, env: { ...process.env, DEXT_NO_TUI: "1" }, detached: process.platform !== "win32", stdio: "ignore" });
-    child.on("error", (err) => broadcastControl("x-agentlinkd.flows.run", { cwd, name: r.flow.name, by, reason, error: `crew failed to start: ${err.message}` }));
-    child.unref();
+    child = spawn(CREW_BIN, ["run", "--spec", specPath, "--cwd", cwd], {
+      cwd,
+      env: { ...process.env, DEXT_NO_TUI: "1" },
+      detached: process.platform !== "win32",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
   } catch (err) {
-    return { error: String(err?.message ?? err), code: "spawn_failed" };
+    launch.state = "failed";
+    launch.error = `crew failed to start: ${err.message}`;
+    persistLaunches();
+    broadcastControl("x-agentlinkd.flows.run", { cwd, name: launch.name, failed: true, launch });
+    return { error: launch.error, code: "spawn_failed" };
   }
-  return { ok: true, spec_path: specPath, name: r.flow.name };
+  // Consume crew's output continuously (a full pipe would block the child);
+  // keep only the tail so a startup crash explains itself.
+  let tail = "";
+  const feed = (b) => {
+    tail = (tail + b.toString()).slice(-8192);
+  };
+  child.stdout?.on("data", feed);
+  child.stderr?.on("data", feed);
+  const finish = (failed, code, error) => {
+    launch.state = failed ? "failed" : "started";
+    launch.exit_code = code ?? null;
+    if (failed) launch.error = String(error || `crew exited with code ${code}`).slice(0, 2000);
+    persistLaunches();
+    broadcastControl("x-agentlinkd.flows.run", { cwd, name: launch.name, failed, launch });
+    SELF?.tick();
+  };
+  child.on("error", (err) => finish(true, null, `crew failed to start: ${err.message}`));
+  child.on("exit", (code, signal) => finish(code !== 0, code, signal ? `crew terminated by ${signal}${tail ? ` — ${tail}` : ""}` : tail));
+  child.unref();
+  return { ok: true, spec_path: specPath, name: launch.name, launch };
 }
 
 function handleFlowsCommand(client, frame) {
@@ -2046,7 +2191,7 @@ function handleFlowsCommand(client, frame) {
   TRIGGERS.addWorkspace(cwd);
   switch (frame.cmd) {
     case "x-agentlinkd.flows.list":
-      sendControl(client, "x-agentlinkd.flows.list", { cwd, flows: listFlows(cwd), triggers: TRIGGERS.status(cwd) });
+      sendControl(client, "x-agentlinkd.flows.list", { cwd, flows: listFlows(cwd), triggers: TRIGGERS.status(cwd), launches: launchSummaries(cwd) });
       return;
     case "x-agentlinkd.flows.get": {
       const r = readFlow(cwd, frame.name);
@@ -2083,7 +2228,139 @@ function handleFlowsCommand(client, frame) {
     case "x-agentlinkd.flows.run": {
       const r = startFlowRun(cwd, frame.name, { by: `client:${client.id}` });
       if (r.error) sendError(client, r.code, r.error, frame.cmd);
-      else sendControl(client, "x-agentlinkd.flows.run", { cwd, name: r.name, spec_path: r.spec_path, started: true });
+      else sendControl(client, "x-agentlinkd.flows.run", { cwd, name: r.name, spec_path: r.spec_path, started: true, launch: r.launch });
+      return;
+    }
+    default:
+      sendError(client, "unknown_command", `unsupported cmd ${String(frame.cmd)}`, frame.cmd);
+  }
+}
+
+// ---------- shared tasks: slash surface (conversational control) ----------
+
+const TASK_GLYPH = { planned: "○", active: "▶", blocked: "■", done: "●", failed: "✗", dropped: "·" };
+
+/** `/task …` — the same surface a UI user gets, inside the conversation:
+ *  list | show <name> | new <name> <goal> | set <name> field=value |
+ *  check <name> ok|fail <what>. Records are also plain files the agent can
+ *  edit directly with its file tools; the host watches and re-validates. */
+function handleTaskSlash(client, s, rest) {
+  const cwd = s.cwd;
+  TASKS.ensureWatch(cwd);
+  const say = (lines) => publish(journalData(s, "slash", Array.isArray(lines) ? lines.filter(Boolean).join("\n") : lines));
+  const fail = (code, msg) => sendError(client, code, msg, "slash");
+
+  if (!rest || rest === "list") {
+    const { tasks, dir } = TASKS.list(cwd);
+    if (tasks.length === 0) {
+      return say(["no tasks in this workspace yet.", "", "/task new <name> <goal>  — create one", `records are plain files in ${dir}/ — the agent can edit them too`]);
+    }
+    return say([
+      "tasks in this workspace:",
+      ...tasks.map((t) => `  ${TASK_GLYPH[t.status] ?? "·"} ${t.name} [${t.status}] rev ${t.rev}${t.blocked_on ? " — BLOCKED" : ""}${t.checks_ok ? ` · ${t.checks_ok} ok check(s)` : ""} — ${t.title}`),
+      "",
+      "/task show <name> for the full record",
+    ]);
+  }
+
+  let m = /^show\s+(\S+)$/.exec(rest);
+  if (m) {
+    const r = TASKS.get(cwd, m[1]);
+    if (r.error) return fail(r.code ?? "bad_request", `task '${m[1]}': ${r.error}`);
+    const t = r.task;
+    return say([
+      `${t.title} (${t.name}) — ${t.status} · rev ${t.rev} · updated ${new Date(t.updated_at).toLocaleString()} by ${t.updated_by}`,
+      `goal: ${t.goal}`,
+      t.acceptance.length ? `acceptance:\n${t.acceptance.map((a) => `  - ${a}`).join("\n")}` : "acceptance: (none written yet)",
+      t.constraints.budget_usd !== null ? `budget: $${t.constraints.budget_usd}` : "",
+      t.constraints.folders.length ? `folders: ${t.constraints.folders.join(", ")}` : "",
+      t.constraints.notes ? `notes: ${t.constraints.notes}` : "",
+      t.links.session || t.links.crew_run || t.links.flows.length ? `links: ${[t.links.session && `session ${t.links.session}`, t.links.crew_run && `run ${t.links.crew_run}`, ...t.links.flows.map((f) => `flow ${f}`)].filter(Boolean).join(" · ")}` : "",
+      t.artifacts.length ? `artifacts: ${t.artifacts.join(", ")}` : "",
+      t.blocked_on ? `BLOCKED: ${t.blocked_on}${t.answer ? `\nanswer: ${t.answer}` : "\n(answer via /task set <name> answer=…)"}` : "",
+      t.checks.length ? `checks:\n${t.checks.map((c) => `  ${c.ok ? "✓" : "✗"} ${c.name}${c.detail ? ` — ${c.detail}` : ""}`).join("\n")}` : "checks: (none — status 'done' requires at least one passing)",
+      t.summary ? `summary: ${t.summary}` : "",
+    ]);
+  }
+
+  m = /^new\s+(\S+)\s+([\s\S]+)$/.exec(rest);
+  if (m) {
+    const r = TASKS.put(cwd, { version: 1, name: m[1], goal: m[2], status: "planned" }, { actor: "agent" });
+    if (r.error) return fail(r.code ?? "bad_request", `task not created: ${r.error}`);
+    return say([`task '${r.task.name}' created (rev 1).`, `file: ${TASKS.dir(cwd)}/${r.task.name}.task.json`, "remember: 'done' needs a passing check — /task check <name> ok <what>"]);
+  }
+
+  m = /^set\s+(\S+)\s+(\S+)=([\s\S]*)$/.exec(rest);
+  if (m) {
+    const g = TASKS.get(cwd, m[1]);
+    if (g.error) return fail(g.code ?? "bad_request", `task '${m[1]}': ${g.error}`);
+    const [, name, field, rawValue] = m;
+    const t = g.task;
+    const value = rawValue.trim();
+    if (field === "status") {
+      if (!TASK_STATUSES.has(value)) return fail("bad_request", `status must be one of ${[...TASK_STATUSES].join(" | ")}`);
+      if (value === "blocked" && !t.blocked_on) return fail("bad_request", "set blocked_on first: /task set <name> blocked_on=<question for the human>");
+      t.status = value;
+    } else if (["goal", "summary", "title", "blocked_on", "answer"].includes(field)) {
+      if (!value) return fail("bad_request", `${field} must not be empty`);
+      t[field] = value;
+    } else {
+      return fail("bad_request", "set supports status | goal | summary | title | blocked_on | answer");
+    }
+    const r = TASKS.put(cwd, t, { actor: "agent" });
+    if (r.error) return fail(r.code ?? "bad_request", `task not saved: ${r.error}`);
+    return say(`task '${name}': ${field} set (rev ${r.task.rev}${r.task.status !== t.status ? " — the answer cleared the block" : ""})`);
+  }
+
+  m = /^check\s+(\S+)\s+(ok|fail)\s+([\s\S]+)$/.exec(rest);
+  if (m) {
+    const g = TASKS.get(cwd, m[1]);
+    if (g.error) return fail(g.code ?? "bad_request", `task '${m[1]}': ${g.error}`);
+    const t = g.task;
+    t.checks.push({ name: m[3].trim().slice(0, 120), ok: m[2] === "ok", detail: "", at: Date.now(), by: "agent" });
+    const r = TASKS.put(cwd, t, { actor: "agent" });
+    if (r.error) return fail(r.code ?? "bad_request", `check not saved: ${r.error}`);
+    return say([`check recorded on '${t.name}' (rev ${r.task.rev}).`, r.task.checks.some((c) => c.ok) ? "a passing check exists — status 'done' is now allowed" : "still no passing check — 'done' stays refused"]);
+  }
+
+  return fail("bad_request", "/task: list | show <name> | new <name> <goal> | set <name> field=value | check <name> ok|fail <what>");
+}
+
+// ---------- shared tasks: WS surface (x-agentlinkd.tasks.*) ----------
+
+function handleTasksCommand(client, frame) {
+  const { cwd, error } = flowCwd(frame);
+  if (error) {
+    sendError(client, "bad_request", `tasks need an existing folder: ${error}`, frame.cmd);
+    return;
+  }
+  TASKS.ensureWatch(cwd);
+  switch (frame.cmd) {
+    case "x-agentlinkd.tasks.list":
+      sendControl(client, "x-agentlinkd.tasks.list", { cwd, ...TASKS.list(cwd) });
+      return;
+    case "x-agentlinkd.tasks.get": {
+      const r = TASKS.get(cwd, frame.name);
+      if (r.error) sendError(client, r.code ?? "bad_request", `task '${String(frame.name)}': ${r.error}`, frame.cmd);
+      else sendControl(client, "x-agentlinkd.tasks.get", { cwd, task: r.task });
+      return;
+    }
+    case "x-agentlinkd.tasks.put": {
+      const r = TASKS.put(cwd, frame.task, {
+        actor: frame.actor === "agent" ? "agent" : "user",
+        expectedRev: typeof frame.expected_rev === "number" ? frame.expected_rev : undefined,
+      });
+      if (r.error) {
+        const hint = r.code === "stale_rev" ? ` (disk is at rev ${r.current}; reload and re-apply)` : "";
+        sendError(client, r.code ?? "bad_request", `task not saved: ${r.error}${hint}`, frame.cmd);
+      } else {
+        sendControl(client, "x-agentlinkd.tasks.put", { cwd, task: r.task });
+      }
+      return;
+    }
+    case "x-agentlinkd.tasks.delete": {
+      const r = TASKS.delete(cwd, frame.name);
+      if (r.error) sendError(client, r.code ?? "bad_request", `task '${String(frame.name)}': ${r.error}`, frame.cmd);
       return;
     }
     default:

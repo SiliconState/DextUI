@@ -544,6 +544,14 @@ function sendError(client, code, message) {
   sendControl(client, "error", { code, message });
 }
 
+// Delivery receipts (parity with agentlinkd): nonce-tagged prompt/steer/slash
+// frames are acked so the client does not report them unsent after its TTL;
+// rejections still arrive as ordinary error frames.
+function sendAck(client, frame) {
+  if (typeof frame.nonce !== "string" || !frame.nonce) return;
+  sendControl(client, "cmd_ack", { nonce: frame.nonce, ok: true, cmd: String(frame.cmd ?? "") });
+}
+
 function manageSession(s, remove, by) {
   clearTimeout(s.timer);
   s.pending.clear();
@@ -764,6 +772,7 @@ function handleCommand(client, frame) {
         sendError(client, "not_live", "session is not live; open it first");
         return;
       }
+      sendAck(client, frame);
       publish(journalData(s, "user_message", { text: frame.text }));
       if (!s.title || s.title.startsWith("New session") || s.title.startsWith("Fixture:")) {
         s.title = frame.text.slice(0, 60);
@@ -787,6 +796,7 @@ function handleCommand(client, frame) {
         sendError(client, "not_running", "no turn in flight to steer");
         return;
       }
+      sendAck(client, frame);
       publish(journalData(s, "steering_received", { messages: [String(frame.text ?? "")], preview: String(frame.text ?? "").slice(0, 80) }));
       return;
     }
@@ -828,6 +838,7 @@ function handleCommand(client, frame) {
         sendError(client, "no_session", `unknown session ${frame.session}`);
         return;
       }
+      sendAck(client, frame);
       const raw = String(frame.raw ?? "").trim();
       // `/pack run <name> <task>` and the `/pack <name> <task>` shorthand, as agentlinkd.
       const run = /^\/packs?\s+(?:(?:run|use|start)\s+)?([A-Za-z0-9][A-Za-z0-9_-]*)\s*(.*)$/s.exec(raw);

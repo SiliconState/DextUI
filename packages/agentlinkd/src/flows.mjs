@@ -176,6 +176,20 @@ export function validateFlow(raw) {
     }
   }
 
+  // Executor contract: compileFlow() emits ONE sequential chain whose only data
+  // wire is crew's {previous}. A node with two consumers would silently drop
+  // one input at run time, and a node with two producers would receive an
+  // arbitrary one — so branch and join are REFUSED here, at save time, instead
+  // of being mis-executed later. Put parallel work in separate flows.
+  const inDeg = new Map([...ids].map((id) => [id, 0]));
+  for (const targets of adj.values()) for (const b of targets) inDeg.set(b, inDeg.get(b) + 1);
+  for (const n of clean) {
+    const out = adj.get(n.id).length;
+    const inc = inDeg.get(n.id);
+    if (out > 1) return { error: `node '${n.id}' feeds ${out} steps — a flow is one chain; put branches in separate flows` };
+    if (inc > 1) return { error: `node '${n.id}' is fed by ${inc} steps — a flow is one chain; merge them into one step first` };
+  }
+
   const flow = {
     version: 1,
     name: raw.name,

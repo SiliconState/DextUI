@@ -114,6 +114,9 @@ test("scheduler: arms triggers from flow files, reloads, fires with cooldown, wa
   assert.equal(s.webhook("x".repeat(32)).error, "no_hook");
 
   // A restart keeps the last-fire: a fresh scheduler does not refire immediately.
+  // Let the first launch COMPLETE first — last-fire and the schedule slot are
+  // persisted on success (a failed attempt is not a fire), in a microtask.
+  await sleep(100);
   s.stop();
   s = mk();
   s.addWorkspace(cwd);

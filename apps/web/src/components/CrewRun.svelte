@@ -4,7 +4,11 @@
   // tail pane; actions conditional on run state (stop while live, answer
   // while paused, deliverables + tails always). Keys are scoped to the dialog.
   import type { CrewGroup, CrewWorker } from "@dextui/protocol";
+  import Meter from "./Meter.svelte";
   import { crew, crewDur, crewAge, closeRun, requestTail, refreshTail, openFile, stopRun, answerRun, removeRun, crewFinished, shortRun, GLYPH } from "../lib/crew.svelte";
+
+  /** Sentence-case a host label (first letter only): "final-report" → "Final-report". */
+  const sc = (s: string): string => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
   import Tail from "./Tail.svelte";
 
   let { onClose }: { onClose?: () => void } = $props();
@@ -93,10 +97,9 @@
     return { rows, hiddenDone, hiddenMore };
   }
 
-  function bar(g: CrewGroup): string {
+  function frac(g: CrewGroup): number {
     const n = g.counts.total || 1;
-    const done = Math.round(((g.counts.done + g.counts.fail) / n) * 10);
-    return "█".repeat(done) + "░".repeat(10 - done);
+    return ((g.counts.done + g.counts.fail) / n) * 100;
   }
 
   function dur(w: CrewWorker): string {
@@ -209,19 +212,19 @@
   class="sheet"
   role="dialog"
   aria-modal="true"
-  aria-label={run ? `crew run ${run.id}` : "crew run"}
+  aria-label={run ? `Crew run ${run.id}` : "Crew run"}
   tabindex="-1"
   data-agent-id={`crew.run.${crew.openId}`}
   data-state={run ? run.state : "loading"}
   onkeydown={onKey}
 >
   {#if !run}
-    <div class="head"><span class="dim">crew run {shortRun(crew.openId)} · loading…</span>
+    <div class="head"><span class="dim">Crew run {shortRun(crew.openId)} · loading…</span>
       <button class="act close" data-agent-id={`crew.run.${crew.openId}.close`} onclick={close}>esc</button></div>
   {:else}
     <div class={`head st-${run.state}`}>
       <span class={`glyph ${run.state === "running" ? "pulse" : ""}`}>{GLYPH[run.state]}</span>
-      <span class="title"><b>crew run {shortRun(run.id)}</b>
+      <span class="title"><b>Crew run {shortRun(run.id)}</b>
         <span class="dim"> · {run.mode} · {stopped ? run.paused_reason || "stopped by user" : run.status} · {headClock()}</span></span>
       <span class="counts" aria-live="polite">
         {#if run.counts.run}<span class="st-cyan">●{run.counts.run}</span>{/if}
@@ -257,7 +260,7 @@
             data-agent-id={`crew.run.${run.id}.answer`}
           ></textarea>
           <div class="acts">
-            <button class="act ok" data-agent-id={`crew.run.${run.id}.answer.submit`} disabled={crew.answering || !answer.trim()} onclick={submit}>[⏎] {crew.answering ? "answering…" : "submit answer"}</button>
+            <button class="act ok" data-agent-id={`crew.run.${run.id}.answer.submit`} disabled={crew.answering || !answer.trim()} onclick={submit}>[⏎] {crew.answering ? "Answering…" : "Submit answer"}</button>
             <span class="faint">first answer wins across clients · no deadline</span>
           </div>
         </section>
@@ -269,23 +272,23 @@
         <div class="group" role="rowgroup" data-agent-id={`crew.run.${run.id}.g.${g.index}`} data-state={g.status}>
           <button class="sect" onclick={() => (expanded[g.index] = !open)} aria-expanded={open}>
             <span class="faint">{open ? "▾" : "▸"}</span>
-            step {g.index}{g.kind === "sequential" ? ` · ${g.label}` : ` · ${g.kind === "parallel" ? "parallel" : "fanout"} (${g.counts.total})`}
+            Step {g.index}{g.kind === "sequential" ? ` · ${sc(g.label)}` : ` · ${g.kind === "parallel" ? "Parallel" : "Fanout"} (${g.counts.total})`}
             {#if g.kind !== "sequential" && g.counts.total > 1}
-              <span class="bar st-green">{bar(g)}</span>
+              <Meter pct={frac(g)} tone="green" />
               {#if g.counts.done}<span class="st-green">✓</span>{g.counts.done}{/if}
               {#if g.counts.run}<span class="st-cyan">●</span>{g.counts.run}{/if}
               {#if g.counts.fail}<span class="st-red">✗</span>{g.counts.fail}{/if}
               {#if g.counts.paused}<span class="st-yellow">⚠</span>{g.counts.paused}{/if}
               {#if g.counts.pending}<span class="faint">○{g.counts.pending}</span>{/if}
             {:else if g.status === "paused"}
-              <span class="st-yellow">⚠ escalation</span>
+              <span class="st-yellow">⚠ Escalation</span>
             {/if}
           </button>
           {#if open}
             {#each r.rows as w (w.key)}
               <div class={`row st-${w.status}`} class:focus={focus === w.key} data-agent-id={`crew.run.${run.id}.w.${w.key}`} data-state={w.status}>
                 <span class={`glyph ${w.status === "running" ? "pulse" : ""}`}>{GLYPH[w.status]}</span>
-                <button class="lbl truncate" title={w.label} onclick={() => { focus = w.key; requestTail(w.key); }}>{w.label}</button>
+                <button class="lbl truncate" title={w.label} onclick={() => { focus = w.key; requestTail(w.key); }}>{sc(w.label)}</button>
                 <span class="agent faint truncate">{w.agent}{w.model ? ` · ${w.model}` : ""}</span>
                 <span class="dur dim">{dur(w)}</span>
                 <span class="extra truncate">
@@ -347,9 +350,8 @@
   .body { flex: 1; min-height: 0; overflow-y: auto; padding: 6px 14px 10px; }
   .foot { display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; padding: 8px 14px; border-top: 1px solid var(--line); }
   .hint { margin-left: auto; font-size: 11px; }
-  .sect { display: flex; gap: 6px; align-items: baseline; width: 100%; text-align: left; color: var(--dim); text-transform: lowercase; letter-spacing: .06em; font-size: 12px; margin: 8px 0 2px; }
+  .sect { display: flex; align-items: center; gap: 6px; width: 100%; text-align: left; color: var(--dim); letter-spacing: .06em; font-size: 12px; margin: 8px 0 2px; padding: 2px 0; }
   .sect:hover { background: var(--bg2); }
-  .bar { letter-spacing: -1px; }
   .row { display: flex; gap: 10px; align-items: baseline; padding: 2px 0 2px 16px; white-space: nowrap; min-width: 0; }
   .row:hover, .row.focus { background: var(--bg2); }
   .row.focus { box-shadow: inset 2px 0 0 var(--cyan); }

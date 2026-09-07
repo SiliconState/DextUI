@@ -1,6 +1,8 @@
 <script lang="ts">
   // Status line, verbatim dext TUI idiom:
-  //   ● ~/cwd | session │ model │ approval:ask │ Ctx [██████░░░░] 42% │ ↑12k ↓3k $0.04
+  //   ● ~/cwd | session │ model │ approval:ask │ Ctx ▮▮▮▮▯▯ 42% │ ↑12k ↓3k $0.04
+// The context meter is a themed segmented component (Meter.svelte), not font glyphs.
+import Meter from "./Meter.svelte";
   import type { SessionStore } from "@dextui/client";
   import type { ThinkingEffort } from "@dextui/protocol";
   import { app, toggleTheme, rePair, toggleSidebar, queueTotal, jumpToOldestPending, toggleNotify } from "../lib/state.svelte";
@@ -43,7 +45,6 @@
   const ctxPct = $derived(
     view.contextChars ? Math.min(100, Math.round((view.contextChars / ctxWindow) * 100)) : 0,
   );
-  const ctxBar = $derived("█".repeat(Math.round(ctxPct / 10)) + "░".repeat(10 - Math.round(ctxPct / 10)));
   const ctxClass = $derived(ctxPct >= 90 ? "st-red" : ctxPct >= 70 ? "st-yellow" : "st-cyan");
 
   const dotClass = $derived(
@@ -198,7 +199,7 @@
     <span class="sep">│</span>
     <span data-agent-id="status.ctx">
       <span class="faint">Ctx</span>
-      <span class={ctxClass} data-agent-id="status.ctxbar">[{ctxBar}]</span>
+      <span class={ctxClass} data-agent-id="status.ctxbar"><Meter pct={ctxPct} /></span>
       <span class={ctxClass}>{ctxPct}%</span>
     </span>
   {/if}

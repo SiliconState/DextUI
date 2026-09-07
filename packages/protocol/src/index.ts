@@ -325,6 +325,8 @@ export interface FlowsListReply {
   cwd: string;
   flows: FlowSummary[];
   triggers?: TriggerStatus[];
+  /** Last launch per flow, newest first (Fix 2: spawn accepted ≠ run succeeded). */
+  launches?: FlowLaunch[];
 }
 
 export interface FlowRunReply {
@@ -333,6 +335,120 @@ export interface FlowRunReply {
   spec_path?: string;
   started?: boolean;
   error?: string;
+  /** Launch tracking record (spawn accepted ≠ run succeeded — watch `state`). */
+  launch?: FlowLaunch;
+}
+
+/** One `crew run --spec` launch, tracked from spawn to process exit so a run
+ * that dies at startup is reported instead of silently "started". */
+export interface FlowLaunch {
+  cwd: string;
+  name: string;
+  spec_path: string;
+  by: string;
+  reason: string;
+  at: number;
+  /** `starting` → `started` (exit 0) | `failed` (spawn error or nonzero exit). */
+  state: "starting" | "started" | "failed";
+  exit_code: number | null;
+  /** Bounded crew stdout/stderr tail when the launch failed. */
+  error: string;
+}
+
+/** Broadcast alongside `x-agentlinkd.flows.run` on every state change, and on
+ * `x-agentlinkd.flows.trigger` when a scheduled fire fails or backs off. */
+export interface FlowTriggerEvent {
+  cwd: string;
+  name: string;
+  kind: string;
+  reason: string;
+  at: number;
+  /** `start` accepted by the executor, `failed` = launch error, `pending` = coalesced. */
+  phase?: "start" | "failed" | "pending";
+  error?: string;
+  /** On `failed`: unix ms when the scheduler will retry. */
+  retry_at?: number;
+}
+
+// ---------- shared tasks (host extension `x-agentlinkd.tasks.*`) ----------
+
+/** Extension prefix. Tasks are the shared workspace around one piece of
+ * delegated work: the goal, what "done" means, constraints, linked runs,
+ * blockers, machine-checked evidence, and a handoff summary. Both sides hold
+ * the same record — the host reads/writes `<cwd>/.dext/tasks/<name>.task.json`
+ * under validation, and the agent (dext, with its own file tools in cwd)
+ * reads/writes the very same file. Versioning (`rev`) keeps concurrent edits
+ * from silently clobbering each other. */
+export const TASKS_EXT = "x-agentlinkd.tasks";
+
+export type TaskStatus = "planned" | "active" | "blocked" | "done" | "failed" | "dropped";
+
+/** Machine-checkable evidence. `status: "done"` requires at least one check
+ * with `ok: true` — a model-written summary never counts as verification. */
+export interface TaskCheck {
+  name: string;
+  ok: boolean;
+  detail: string;
+  at: number;
+  by: "agent" | "user" | "host";
+}
+
+export interface TaskConstraints {
+  /** Folders the work may touch, relative to the workspace. */
+  folders: string[];
+  /** Spend ceiling for the whole task, USD. */
+  budget_usd: number | null;
+  /** Free-form guardrails ("no external sends", "ask before deleting"). */
+  notes: string;
+}
+
+/** `x-agentlinkd.tasks.get` / `.put` — the full record as stored on disk. */
+export interface TaskRecord {
+  version: 1;
+  /** Host-assigned on every write; optimistic-concurrency token. */
+  rev: number;
+  name: string;
+  title: string;
+  goal: string;
+  acceptance: string[];
+  status: TaskStatus;
+  /** Required when `status == "blocked"`. */
+  blocked_on: string;
+  /** The human's answer to `blocked_on`; clears the blocker when set. */
+  answer: string;
+  constraints: TaskConstraints;
+  links: { session: string; crew_run: string; flows: string[] };
+  artifacts: string[];
+  checks: TaskCheck[];
+  summary: string;
+  created_at: number;
+  updated_at: number;
+  updated_by: "agent" | "user" | "host";
+}
+
+/** `x-agentlinkd.tasks.list` entry. */
+export interface TaskSummary {
+  name: string;
+  title: string;
+  status: TaskStatus;
+  rev: number;
+  updated_at: number;
+  updated_by: TaskRecord["updated_by"];
+  /** Count of checks with `ok: true`. */
+  checks_ok: number;
+  blocked_on: string;
+}
+
+export interface TasksListReply {
+  cwd: string;
+  tasks: TaskSummary[];
+  /** Directory the records live in (also the agent's write surface). */
+  dir: string;
+}
+
+export interface TaskPutReply {
+  cwd: string;
+  task: TaskRecord;
 }
 
 // ---------- folder picker (host extension `x-agentlinkd.dirs.*`) ----------
@@ -855,6 +971,17 @@ export interface ControlEventMap {
   "x-agentlinkd.crew.file": CrewFileReply;
   /** Outcome of `.stop` / `.resume`, broadcast to every live client. */
   "x-agentlinkd.crew.control": CrewControlEvent;
+  /** Delivery acknowledgement for a client command sent with a `nonce`. */
+  cmd_ack: { nonce: string; cmd: string; ok: boolean; duplicate?: boolean; message?: string };
+  /** Task list replacement (`x-agentlinkd.tasks.list` reply and `.changed` broadcast). */
+  "x-agentlinkd.tasks.list": TasksListReply;
+  "x-agentlinkd.tasks.changed": TasksListReply;
+  "x-agentlinkd.tasks.get": { cwd: string; task: TaskRecord };
+  "x-agentlinkd.tasks.put": TaskPutReply;
+  /** Launch lifecycle for `flows.run` (also rides the `.run` reply). */
+  "x-agentlinkd.flows.run": { cwd: string; name: string; failed?: boolean; launch?: FlowLaunch } & Partial<FlowTriggerEvent>;
+  /** Trigger fire lifecycle: `start` / `failed` (with `retry_at`) / `pending`. */
+  "x-agentlinkd.flows.trigger": FlowTriggerEvent;
   pong: Record<string, never>;
   /** `pack_requires_profile` carries `data.required` (the profile to switch to). */
   error: { code: string; message: string; data?: Record<string, unknown> };

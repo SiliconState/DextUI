@@ -18,7 +18,7 @@ const MONTH_END = {
     { id: "note", type: "message", label: "Tell accountant", to: "accountant", text: "Month-end summary: {previous}", x: 760, y: 120 },
     { id: "narrate", type: "prompt", label: "Narrate", prompt: "Summarise the ledger in three plain sentences", agent: "worker", x: 320, y: 260 },
   ],
-  edges: [["scan", "check"], ["check", "ask"], ["ask", "note"], ["check", "narrate"]],
+  edges: [["scan", "check"], ["check", "narrate"], ["narrate", "ask"], ["ask", "note"]],
 };
 
 test("validateFlow: accepts the month-end flow; canonicalises edges", () => {
@@ -43,13 +43,15 @@ test("validateFlow: rejects the bad shapes", () => {
   assert.match(bad((v) => v.edges.push(["scan", "scan"])), /cannot feed itself/);
   assert.match(bad((v) => v.edges.push(["scan", "ghost"])), /existing node ids/);
   assert.match(bad((v) => v.edges.push(["note", "ask"])), /cycle/, "note→ask closes a loop with ask→note");
+  assert.match(bad((v) => v.edges.push(["scan", "ask"])), /feeds 2 steps/, "branch refused at save — a flow is one chain");
+  assert.match(bad((v) => v.edges.push(["narrate", "note"])), /is fed by 2 steps/, "join refused at save — merge into one step");
   assert.match(bad((v) => { v.nodes = []; }), /at least one node/);
 });
 
 test("topoOrder: dependencies first, declaration order as tiebreak", () => {
   const { flow } = validateFlow(MONTH_END);
   const order = topoOrder(flow);
-  assert.deepEqual(order, ["scan", "check", "ask", "narrate", "note"], "note waits for ask; narrate follows check");
+  assert.deepEqual(order, ["scan", "check", "narrate", "ask", "note"], "one chain: narrate follows check, then ask, then note");
 });
 
 test("compileFlow: crew chain spec — packs infer, gates escalate, messages shell out to mesh", () => {
@@ -57,7 +59,7 @@ test("compileFlow: crew chain spec — packs infer, gates escalate, messages she
   const spec = compileFlow(flow, { meshBin: "/home/u/.dext/shelves/orchestration/packs/mesh/bin/mesh", packs: new Set(["receipts"]) });
   assert.equal(spec.task, "Month-end close");
   assert.equal(spec.steps.length, 5);
-  const [scan, check, ask, narrate, note] = spec.steps;
+  const [scan, check, narrate, ask, note] = spec.steps;
   assert.equal(scan.agent, "worker");
   assert.equal(scan.output, "scan.md");
   assert.match(scan.task, /^run receipts — scan this folder/, "dext pack inference shape");
@@ -119,7 +121,7 @@ test("flows IO: write/read/list/delete confined to <cwd>/.dext/flows", (t) => {
 
 // ---------- host surface ----------
 
-async function host(t) {
+async function host(t, extraEnv = {}) {
   const { spawn } = await import("node:child_process");
   const { once } = await import("node:events");
   const root = path.resolve("packages/agentlinkd");
@@ -128,7 +130,7 @@ async function host(t) {
   fs.mkdirSync(cwd, { recursive: true });
   const token = "flows-test-pairing";
   const child = spawn(process.execPath, [path.join(root, "src/server.mjs"), "--port=0", `--token=${token}`, `--cwd=${cwd}`, `--state-dir=${path.join(temp, "state")}`, `--dext=${path.join(root, "scripts/fake-dext.mjs")}`, "--approval=auto-read"], {
-    env: { ...process.env, DEXT_HOME: path.join(temp, "dext"), FAKE_PACKS_ROOT: path.join(temp, "shelves"), PATH: path.dirname(process.execPath) },
+    env: { ...process.env, DEXT_HOME: path.join(temp, "dext"), FAKE_PACKS_ROOT: path.join(temp, "shelves"), PATH: path.dirname(process.execPath), ...extraEnv },
     stdio: ["ignore", "pipe", "pipe"],
   });
   const exited = new Promise((resolve) => child.on("exit", resolve));
@@ -230,4 +232,56 @@ test("validateFlow: caps hold (names, counts, text lengths)", () => {
   assert.equal(r.flow.nodes[2].question.length, 500, "clipped, not rejected");
   assert.equal(FLOW_NAME_RE.test("month-end-close"), true);
   assert.equal(FLOW_NAME_RE.test("has space"), false);
+});
+
+test("host: launch tracking — spawn accepted ≠ run succeeded; exit + stderr reported; list carries launches; nonce dedup acks", { timeout: 30000 }, async (t) => {
+  // A fake crew that fails loudly: proves the launch is tracked spawn → exit.
+  const crewDir = fs.mkdtempSync(path.join(os.tmpdir(), "fake-crew-"));
+  t.after(() => fs.rmSync(crewDir, { recursive: true, force: true }));
+  const crewBin = path.join(crewDir, "fake-crew");
+  fs.writeFileSync(crewBin, "#!/bin/sh\necho 'crew: boom' >&2\nexit 3\n", { mode: 0o755 });
+
+  const c = await host(t, { CREW_BIN: crewBin });
+  assert.ok(c.hello.data.capabilities.includes("crew"), "explicit crew binary arms the capability");
+
+  // The pack-free flow compiles without a catalog (mirrors the compile test).
+  const noPacks = { ...MONTH_END, name: "no-packs", nodes: MONTH_END.nodes.filter((n) => n.type !== "pack"), edges: MONTH_END.edges.filter(([a]) => a !== "scan") };
+  let mark = c.events.length;
+  c.send("x-agentlinkd.flows.put", { flow: noPacks });
+  await c.wait((e) => e.event === "x-agentlinkd.flows.put", mark);
+
+  c.send("x-agentlinkd.flows.run", { name: "no-packs" });
+  // Spawn accepted: the reply honestly says "starting" — the exit may still fail.
+  const started = await c.wait((e) => e.event === "x-agentlinkd.flows.run" && e.data.started, mark);
+  assert.equal(started.data.launch.state, "starting");
+  // Process exit: failed state, exit code, and the stderr tail arrive as a broadcast.
+  const failed = await c.wait((e) => e.event === "x-agentlinkd.flows.run" && e.data.launch && e.data.launch.state === "failed", mark);
+  assert.equal(failed.data.failed, true);
+  assert.equal(failed.data.launch.exit_code, 3);
+  assert.match(failed.data.launch.error, /boom/);
+
+  // The list carries the last launch per flow.
+  mark = c.events.length;
+  c.send("x-agentlinkd.flows.list");
+  const list = await c.wait((e) => e.event === "x-agentlinkd.flows.list", mark);
+  assert.equal(list.data.launches.length, 1);
+  assert.equal(list.data.launches[0].name, "no-packs");
+  assert.equal(list.data.launches[0].state, "failed");
+  assert.equal(list.data.launches[0].exit_code, 3);
+
+  // Nonce dedup: a replayed frame is acked as duplicate, never re-run.
+  mark = c.events.length;
+  const known = new Set((c.hello.data.sessions ?? []).map((s) => s.id));
+  c.send("session.open");
+  const listed = await c.wait((e) => e.event === "session.list" && e.data.sessions.some((s) => !known.has(s.id)), mark);
+  const sid = listed.data.sessions.find((s) => !known.has(s.id)).id;
+  mark = c.events.length;
+  const nonce = "launch-test-nonce-1";
+  c.send("prompt.submit", { session: sid, text: "hello", nonce });
+  const ack1 = await c.wait((e) => e.event === "cmd_ack" && e.data.nonce === nonce, mark);
+  assert.equal(ack1.data.ok, true);
+  assert.notEqual(ack1.data.duplicate, true);
+  c.send("prompt.submit", { session: sid, text: "hello", nonce });
+  const ack2 = await c.wait((e) => e.event === "cmd_ack" && e.data.nonce === nonce && e.data.duplicate === true, mark);
+  assert.equal(ack2.data.ok, true);
 });

@@ -12,6 +12,7 @@ import {
   PACK_EXT,
   SELF_HOST_EXT,
   SELF_UI_EXT,
+  TASKS_EXT,
   PROTOCOL_VERSION,
   type Envelope,
   type CrewsPayload,
@@ -22,6 +23,7 @@ import {
   type SelfStatus,
   type FlowFile,
   type SessionMeta,
+  type TaskRecord,
   type ThinkingEffort,
   type ConnectorKind,
 } from "@dextui/protocol";
@@ -44,6 +46,10 @@ export interface ConnectionOpts {
   /** Self-edit status (hello_ok.self and every x-agentlinkd.ui.status reply). */
   onSelfChanged?: (self: SelfStatus) => void;
   onControlError?: (code: string, message: string, data?: Record<string, unknown>) => void;
+  /** Delivery outcome for a command sent with a nonce (prompt/steer/slash).
+   *  `ok: false` covers host rejection and outbox expiry; `duplicate: true`
+   *  means the host had already run this nonce (reconnect replay). */
+  onCmdAck?: (nonce: string, ok: boolean, info: { cmd: string; duplicate?: boolean; message?: string }) => void;
   onSeqGap?: (sessionId: string, expected: number, got: number) => void;
   /** The host process changed between connections; all session stores were reset. */
   onHostRestart?: (instance: string) => void;
@@ -54,6 +60,17 @@ export interface ConnectionOpts {
 const RECONNECT_BASE_MS = 500;
 const RECONNECT_MAX_MS = 15_000;
 const PING_INTERVAL_MS = 25_000;
+/** Queued sends and unacked nonces older than this are reported failed. */
+const OUTBOX_TTL_MS = 120_000;
+const OUTBOX_MAX = 32;
+
+let nonceCounter = 0;
+function newNonce(): string {
+  nonceCounter += 1;
+  const g = (globalThis as { crypto?: { randomUUID?: () => string } }).crypto;
+  if (g && typeof g.randomUUID === "function") return g.randomUUID();
+  return `n-${Date.now().toString(36)}-${nonceCounter.toString(36)}`;
+}
 
 export class Connection {
   phase: ConnPhase = "connecting";
@@ -84,6 +101,11 @@ export class Connection {
   private everLive = false;
   private metadata = new Map<string, SessionMeta>();
   private removed = new Set<string>();
+  /** Frames typed while the socket was down, replayed verbatim (same nonce)
+   *  after hello_ok — the host dedups by nonce, so replay never double-runs. */
+  private outbox: { frame: Record<string, unknown>; at: number }[] = [];
+  /** Nonces of prompt/steer/slash frames awaiting a host `cmd_ack`. */
+  private pendingAcks = new Map<string, { cmd: string; at: number }>();
 
   constructor(opts: ConnectionOpts) {
     this.opts = opts;
@@ -160,7 +182,56 @@ export class Connection {
   // ---------- commands ----------
 
   sendRaw(frame: Record<string, unknown>): void {
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(frame));
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify(frame));
+      return;
+    }
+    // Socket down: hold a bounded outbox so input typed during a drop is
+    // delivered once the connection returns (same nonce → host-side dedup).
+    const now = Date.now();
+    this.outbox = this.outbox.filter((f) => now - f.at < OUTBOX_TTL_MS);
+    if (this.outbox.length >= OUTBOX_MAX) {
+      const df = this.outbox.shift()?.frame;
+      // Never silently drop: a nonce-tagged frame is reported as failed
+      // delivery so its sender can restore the text and retry deliberately.
+      const dn = typeof df?.nonce === "string" ? df.nonce : "";
+      if (df && dn && this.pendingAcks.has(dn)) {
+        this.pendingAcks.delete(dn);
+        this.opts.onCmdAck?.(dn, false, { cmd: String(df.cmd ?? ""), message: "not sent — the offline queue was full" });
+      }
+    }
+    this.outbox.push({ frame, at: now });
+  }
+
+  /** Replay queued frames after hello_ok. Anything older than the TTL is
+   *  reported as failed (never silently dropped, never double-sent). */
+  private flushOutbox(): void {
+    if (this.outbox.length === 0) return;
+    const now = Date.now();
+    const frames = this.outbox;
+    this.outbox = [];
+    for (const f of frames) {
+      if (now - f.at > OUTBOX_TTL_MS) {
+        const nonce = typeof f.frame.nonce === "string" ? f.frame.nonce : "";
+        if (nonce && this.pendingAcks.has(nonce)) {
+          this.pendingAcks.delete(nonce);
+          this.opts.onCmdAck?.(nonce, false, { cmd: String(f.frame.cmd ?? ""), message: "not sent — connection was down too long" });
+        }
+        continue;
+      }
+      this.sendRaw(f.frame);
+    }
+  }
+
+  /** Drop a queued/unacked command (e.g. before a manual retry sends a new one). */
+  cancelPending(nonce: string): void {
+    this.pendingAcks.delete(nonce);
+    this.outbox = this.outbox.filter((f) => f.frame.nonce !== nonce);
+  }
+
+  /** Count of commands awaiting delivery or acknowledgement. */
+  pendingCommandCount(): number {
+    return this.pendingAcks.size + this.outbox.length;
   }
 
   openSession(opts: { id?: string; cwd?: string; seat?: string; approval?: string } = {}): void {
@@ -182,24 +253,33 @@ export class Connection {
     this.sendRaw(cmd("session.unsubscribe", { id }));
   }
 
-  prompt(sessionId: string, text: string): void {
-    this.sendRaw(cmd("prompt.submit", { session: sessionId, text }));
+  /** Send one delivery-tracked command; returns its nonce (see onCmdAck). */
+  private tracked(frame: Record<string, unknown>, cmdName: string): string {
+    const nonce = newNonce();
+    frame.nonce = nonce;
+    this.pendingAcks.set(nonce, { cmd: cmdName, at: Date.now() });
+    this.sendRaw(frame);
+    return nonce;
   }
 
-  steer(sessionId: string, text: string): void {
-    this.sendRaw(cmd("steering.inject", { session: sessionId, text }));
+  prompt(sessionId: string, text: string): string {
+    return this.tracked(cmd("prompt.submit", { session: sessionId, text }), "prompt.submit");
   }
 
-  interrupt(sessionId: string): void {
-    this.sendRaw(cmd("interrupt", { session: sessionId }));
+  steer(sessionId: string, text: string): string {
+    return this.tracked(cmd("steering.inject", { session: sessionId, text }), "steering.inject");
   }
 
   respond(sessionId: string, requestId: string, choice: "once" | "always" | "deny", note?: string): void {
     this.sendRaw(cmd("permission.respond", { session: sessionId, request_id: requestId, choice, note }));
   }
 
-  slash(sessionId: string, raw: string): void {
-    this.sendRaw(cmd("slash", { session: sessionId, raw }));
+  interrupt(sessionId: string): void {
+    this.sendRaw(cmd("interrupt", { session: sessionId }));
+  }
+
+  slash(sessionId: string, raw: string): string {
+    return this.tracked(cmd("slash", { session: sessionId, raw }), "slash");
   }
 
   configureSession(
@@ -311,6 +391,31 @@ export class Connection {
 
   flowsRun(name: string, cwd?: string): void {
     this.sendRaw(cmd(`${FLOWS_EXT}.run`, { name, ...(cwd ? { cwd } : {}) }));
+  }
+
+  // ---------- shared tasks (host-prefixed until promoted) ----------
+
+  tasksList(cwd?: string): void {
+    this.sendRaw(cmd(`${TASKS_EXT}.list`, cwd ? { cwd } : {}));
+  }
+
+  tasksGet(name: string, cwd?: string): void {
+    this.sendRaw(cmd(`${TASKS_EXT}.get`, { name, ...(cwd ? { cwd } : {}) }));
+  }
+
+  /** `expectedRev`: optimistic concurrency — a mismatched rev is refused with
+   *  `stale_rev` instead of silently clobbering a concurrent writer. */
+  tasksPut(task: TaskRecord, opts: { cwd?: string; expectedRev?: number; actor?: "agent" | "user" } = {}): void {
+    this.sendRaw(cmd(`${TASKS_EXT}.put`, {
+      task,
+      ...(opts.cwd ? { cwd: opts.cwd } : {}),
+      ...(opts.expectedRev !== undefined ? { expected_rev: opts.expectedRev } : {}),
+      ...(opts.actor ? { actor: opts.actor } : {}),
+    }));
+  }
+
+  tasksDelete(name: string, cwd?: string): void {
+    this.sendRaw(cmd(`${TASKS_EXT}.delete`, { name, ...(cwd ? { cwd } : {}) }));
   }
 
   // ---------- folder picker (host-prefixed until promoted) ----------
@@ -512,6 +617,9 @@ export class Connection {
           }
           this.subscribe(id, restarted || legacyReconnect);
         }
+        // Replay anything typed while the socket was down, verbatim — the host
+        // remembers nonces, so a reconnect replay can never double-run work.
+        this.flushOutbox();
         break;
       }
       case "hello_fail": {
@@ -561,8 +669,33 @@ export class Connection {
         }
         break;
       }
+      case "cmd_ack": {
+        const d = env.data as { nonce?: string; ok?: boolean; duplicate?: boolean; message?: string } | undefined;
+        const nonce = typeof d?.nonce === "string" ? d.nonce : "";
+        const pending = nonce ? this.pendingAcks.get(nonce) : undefined;
+        // Unknown nonce = already resolved or cancelled: report delivery once,
+        // never twice (a replayed ack must not double-fire).
+        if (!pending) break;
+        this.pendingAcks.delete(nonce);
+        this.opts.onCmdAck?.(nonce, d?.ok !== false, {
+          cmd: pending?.cmd ?? "",
+          duplicate: d?.duplicate === true,
+          message: d?.message,
+        });
+        break;
+      }
       case "error": {
-        const d = env.data as { code: string; message: string; data?: Record<string, unknown> };
+        const d = env.data as { code: string; message: string; cmd?: string; data?: Record<string, unknown> };
+        // A rejection answers exactly one in-flight command when unambiguous
+        // (one pending send of that cmd kind) — resolve it as failed delivery.
+        if (typeof d.cmd === "string" && d.cmd) {
+          const hits = [...this.pendingAcks.entries()].filter(([, p]) => p.cmd === d.cmd);
+          const hitNonce = hits.length === 1 ? hits[0]?.[0] : undefined;
+          if (hitNonce !== undefined) {
+            this.pendingAcks.delete(hitNonce);
+            this.opts.onCmdAck?.(hitNonce, false, { cmd: d.cmd, message: d.message });
+          }
+        }
         this.opts.onControlError?.(d.code, d.message, d.data);
         break;
       }
@@ -579,7 +712,18 @@ export class Connection {
 
   private startPing(): void {
     this.clearPing();
-    this.pingTimer = setInterval(() => this.sendRaw(cmd("ping")), PING_INTERVAL_MS);
+    this.pingTimer = setInterval(() => {
+      this.sendRaw(cmd("ping"));
+      // Safety net: sent-but-unacked nonces expire after the outbox TTL (the
+      // app layer reports sooner). Frames still queued are flushOutbox's job.
+      const now = Date.now();
+      for (const [nonce, p] of [...this.pendingAcks]) {
+        if (now - p.at <= OUTBOX_TTL_MS) continue;
+        if (this.outbox.some((f) => f.frame.nonce === nonce)) continue;
+        this.pendingAcks.delete(nonce);
+        this.opts.onCmdAck?.(nonce, false, { cmd: p.cmd, message: "no acknowledgment from the host" });
+      }
+    }, PING_INTERVAL_MS);
   }
 
   private clearPing(): void {

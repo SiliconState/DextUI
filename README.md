@@ -68,6 +68,7 @@ answers `markdown table demo` with a rich-markdown turn.
 - **Global action queue**: every pending approval across all sessions in one rail (oldest first) with in-place `a`/`s`/`d`, a status-line badge, finder actions, and a document-title counter for background tabs
 - **Todo panel**: reads dext's own todo files per session through the host (`todos_read`-gated) — source badge, path, `○ ◐ ●` status glyphs; refreshes on activation and `turn_end`
 - **Interactive charts, images, and HTML artifacts**: a ` ```chart ` fence carrying a JSON spec (`bar`, `hbar`, `line`, `spark`, `donut`; multi-`series`, `x`/`y` axis captions, up to 180 points for lines / 31 for categorical) renders as a live chart — hover tooltips, drag points/bars for what-ifs with recomputed stats, click-sort, wheel-zoom + pan, legend toggles, donut isolate, and charts sharing a `dataset` id cross-highlight each other; all local, zero chart dependencies, no `{@html}` on dynamic strings. `![alt](path)` images a turn wrote under the session cwd render inline through the host's authenticated `files_read` endpoint; `![title](dashboard.html)` renders the page itself in a sandboxed frame (nested relative images resolve; `file://` and WSL `\\wsl.localhost\` style hrefs are normalized automatically). Remote URLs stay links — the app never fetches model-chosen hosts
+- **Shared task workspace**: the one durable record both you and the agent hold (`<cwd>/.dext/tasks/<name>.task.json`) — goal, machine-checkable acceptance, blockers with your answer, evidence checks, artifacts. The UI ("t", `/tasks`) and the agent edit the same file; agent-side edits reach every tab live. `done` requires a passing check — a model-written summary is never verification.
 - **Steering without stopping**: input sent while a turn runs queues on the host and auto-runs as the next turn at the boundary — `steering_received` markers acknowledge immediately, `^c` keeps the queue for the next prompt
 - **Desktop notifications** (opt-in): approval requests, turn completion with usage/cost, failures — only while the tab is hidden, deduped across reconnect replays
 - **Keyboard-first approvals** (mock/upstream): `a` / `s` / `d`, note, diff preview — local dock or the global queue
@@ -186,14 +187,51 @@ edits them; the host validates on save and reports what is armed
 | webhook | nothing stored | `POST /hooks/<token>`; the token is an HMAC of the pairing token + workspace + flow name — unguessable, never written, shown in the builder after save |
 
 Every fire goes through the same `startFlowRun` as the ▶ button (compile →
-`.crew/specs` → `crew run --spec` detached) and broadcasts
-`x-agentlinkd.flows.trigger {name, kind, reason}`. A flow fired less than a
-minute ago is skipped (cooldown); wrong hook tokens count toward the auth
-lockout like wrong bearers.
+`.crew/specs` → `crew run --spec` detached). Launches are **tracked spawn →
+exit**: the reply honestly says `starting`, and the outcome (`started` exit 0 /
+`failed` with exit code + stderr tail) is broadcast and shown in the flows
+list — spawn accepted ≠ run succeeded. Firing semantics: one launch in flight
+per flow (events while busy or cooling down coalesce into one pending fire), a
+failed launch is not a fire — it backs off exponentially (30 s → 30 min) and
+retries on later ticks, and schedules are idempotent per slot so a restart
+never refires the same `every` bucket or `daily_at` calendar date. `daily_at`
+slots move by calendar arithmetic, so DST cannot shift them. Wrong hook
+tokens count toward the auth lockout like wrong bearers.
 
-Surface: capability `flows`; `x-agentlinkd.flows.{list,get,put,delete,compile,run}`,
-broadcasts `x-agentlinkd.flows.changed` and `x-agentlinkd.flows.trigger`;
+A flow is **one sequential chain** — every step has one outgoing and one
+incoming connection (the canvas enforces it at draw time, the host at save):
+the compiled crew chain's only data wire is `{previous}`. Parallel work goes in
+separate flows.
+
+Surface: capability `flows`; `x-agentlinkd.flows.{list,get,put,delete,compile,run}`
+(replies carry `triggers[]` and the last `launches[]`),
+broadcasts `x-agentlinkd.flows.changed`, `.run` (launch outcomes) and
+`.trigger` (`phase: pending|start|failed` + `retry_at`);
 `POST /hooks/<token>`. The mock host keeps flows in memory.
+
+## Shared task workspace
+
+A **task** is the one durable record around a piece of delegated work that
+BOTH sides hold: `<cwd>/.dext/tasks/<name>.task.json`. The host validates and
+confines every write (rev bump, atomic rename, symlinks refused); the agent
+writes the very same file with its own tools — the host watches the directory
+and broadcasts changes, so an agent-side edit reaches every open tab live.
+
+- **UI**: "t" or `/tasks` — list with status glyphs (`○ ▶ ⛔ ✓ ✗`), the record
+  editor (goal, acceptance one-per-line, blocked-on + answer, guardrails),
+  agent attribution (`· agent`) and rev per row.
+- **In-session slash**: `/task` lists; `/task plan <name> <goal>`,
+  `/task block <name> <question>`, `/task answer <name> <answer>`,
+  `/task check <name> <what>` (records evidence), `/task done <name>`
+  (refused without a passing check).
+- **Contract, enforced by the host on every write**: `rev` bumps per write and
+  a concurrent edit is refused `stale_rev` — the UI shows a fork notice and
+  offers reload, never a silent overwrite; `done` needs a passing check;
+  `blocked` needs the question a human must answer, and answering clears it.
+
+Surface: capability `tasks`; `x-agentlinkd.tasks.{list,get,put,delete}`;
+broadcast `x-agentlinkd.tasks.changed`. See PROTOCOL.md for the full record
+contract.
 
 ## Self-editing (workbench)
 
@@ -270,9 +308,14 @@ See [UPSTREAM.md](./UPSTREAM.md) for the planned `dext serve` native bridge
 
 ```bash
 npm test                 # node:test — fold equivalence vs mock fold(), store
-                         # contract, connection lifecycle, chart spec + math,
+                         # contract, connection lifecycle + delivery acks,
                          # session purge/clear/reconnect against both hosts,
-                         # pack catalog parse/guard/--pack routing (85 checks)
+                         # pack catalog parse/guard/--pack routing, flows
+                         # (one-chain contract, launch tracking), triggers
+                         # (serialization/slot idempotency), shared tasks
+                         # (rev/stale_rev/verified-done/symlink refusal) —
+                         # then builds the PWA and runs the browser smoke
+                         # (skips with a note where agent-browser is absent)
 npm run smoke           # mock host end-to-end (31 checks)
 npm run smoke:agentlinkd # real-host surface with a fake dext (50 checks:
                          # restart/restore, seq replay, cold wake + auto-wake,

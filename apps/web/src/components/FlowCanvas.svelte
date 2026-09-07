@@ -7,7 +7,7 @@
   import type { FlowNode, FlowNodeType } from "@dextui/protocol";
   import { flows, flowsEnabled, openFlow, newFlow, saveFlow, deleteFlow, runFlow, compileFlow_, closeFlows, addTrigger, removeTrigger, hookFor } from "../lib/flows.svelte";
   import { flowNodeTypes, flowNode } from "../ext";
-  import { app } from "../lib/state.svelte";
+  import { app, pushToast } from "../lib/state.svelte";
   import { packTitle } from "../lib/display";
   import { useDialog } from "../lib/dialog.svelte";
 
@@ -132,9 +132,18 @@
     if (drag.kind === "edge" && draft && drag.id) {
       const el = document.elementFromPoint(e.clientX, e.clientY);
       const target = el?.closest?.("[data-node]")?.getAttribute("data-node");
-      if (target && target !== drag.id && !draft.edges.some(([a, b]) => a === drag!.id && b === target)) {
-        draft.edges = [...draft.edges, [drag.id, target]];
-        markDirty();
+      if (target && target !== drag.id) {
+        // Executor contract: one sequential chain — a node has at most one
+        // outgoing and one incoming edge (branch/join is refused at save; the
+        // guard here tells you at draw time, before the work is lost).
+        const fromBusy = draft.edges.some(([a]) => a === drag!.id);
+        const toBusy = draft.edges.some(([, b]) => b === target);
+        if (fromBusy || toBusy) {
+          pushToast("warn", "Steps run one after another — each step has one outgoing and one incoming connection. Use a Condition step or a separate flow for branching.");
+        } else if (!draft.edges.some(([a, b]) => a === drag!.id && b === target)) {
+          draft.edges = [...draft.edges, [drag.id, target]];
+          markDirty();
+        }
       }
     }
     drag = null;
@@ -209,11 +218,21 @@
       {#if !draft}
         <ul class="flist" data-agent-id="flows.list">
           {#each flows.list as f (f.name)}
-            <li class="frow">
+            {@const launch = flows.launches.find((l) => l.name === f.name)}
+            <li class="frow" data-agent-id={`flows.row.${f.name}`} data-launch={launch?.state ?? ""}>
               <button class="fmain" data-agent-id={`flows.open.${f.name}`} onclick={() => openFlow(f.name)}>
                 <span class="st-cyan">{f.title}</span>
                 <span class="dim truncate">{f.desc}</span>
                 <span class="faint">{f.nodes} nodes</span>
+                {#if launch}
+                  {#if launch.state === "failed"}
+                    <span class="st-red" title={launch.error || "run failed"} data-agent-id={`flows.launch.${f.name}`}>✗ run failed</span>
+                  {:else if launch.state === "starting"}
+                    <span class="st-yellow pulse" data-agent-id={`flows.launch.${f.name}`}>● running</span>
+                  {:else}
+                    <span class="st-green" title="last run exited 0" data-agent-id={`flows.launch.${f.name}`}>✓ ran</span>
+                  {/if}
+                {/if}
               </button>
               <button class="act del" data-agent-id={`flows.delete.${f.name}`} onclick={() => deleteFlow(f.name)}>
                 {flows.confirmDelete === f.name ? "Really delete?" : "Delete"}

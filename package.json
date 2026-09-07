@@ -11,14 +11,14 @@
     "build": "npm run build -w @dextui/protocol && npm run build -w @dextui/client && npm run build -w @dextui/web",
     "typecheck": "npm run typecheck -w @dextui/protocol && npm run typecheck -w @dextui/client && npm run typecheck -w @dextui/web",
     "dev": "npm run dev -w @dextui/web",
-    "test": "npm run build -w @dextui/protocol && npm run build -w @dextui/client && node --test packages/client/test/*.test.mjs packages/agentlinkd/scripts/session-management.test.mjs packages/agentlinkd/scripts/packs.test.mjs packages/agentlinkd/scripts/crew.test.mjs packages/agentlinkd/scripts/selfedit.test.mjs packages/agentlinkd/scripts/dirs.test.mjs packages/agentlinkd/scripts/connectors.test.mjs packages/agentlinkd/scripts/flows.test.mjs packages/agentlinkd/scripts/triggers.test.mjs packs/scripts/packs-runtime.test.mjs packs/scripts/month-end.test.mjs",
+    "test": "npm run build -w @dextui/protocol && npm run build -w @dextui/client && node --test packages/client/test/*.test.mjs packages/agentlinkd/scripts/session-management.test.mjs packages/agentlinkd/scripts/packs.test.mjs packages/agentlinkd/scripts/crew.test.mjs packages/agentlinkd/scripts/selfedit.test.mjs packages/agentlinkd/scripts/dirs.test.mjs packages/agentlinkd/scripts/connectors.test.mjs packages/agentlinkd/scripts/flows.test.mjs packages/agentlinkd/scripts/triggers.test.mjs packages/agentlinkd/scripts/tasks.test.mjs packs/scripts/packs-runtime.test.mjs packs/scripts/month-end.test.mjs && npm run smoke:browser",
     "ui:build": "node packages/agentlinkd/scripts/ui-build.mjs",
     "ui:rollback": "node packages/agentlinkd/scripts/ui-build.mjs --rollback",
     "mock": "node packages/mock-server/src/server.mjs",
     "serve": "node packages/agentlinkd/src/server.mjs",
     "smoke": "node packages/mock-server/scripts/smoke.mjs",
     "smoke:agentlinkd": "node packages/agentlinkd/scripts/smoke.mjs",
-    "smoke:browser": "bash apps/web/scripts/browser-test.sh"
+    "smoke:browser": "npm run build -w @dextui/web && bash apps/web/scripts/browser-test.sh"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^6.2.1",

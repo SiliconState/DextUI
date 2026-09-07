@@ -170,10 +170,13 @@ export function closeRun(): void {
 export function requestTail(worker: string): void {
   const c = app.conn;
   if (!c || !crew.openId) return;
-  if (crew.tailWorker === worker && crew.tail && !crew.tailPending) {
-    // Toggle off on the same row; refresh happens through refreshTail().
+  if (crew.tailWorker === worker) {
+    // Toggle off whenever the pane is shown for this worker — including while
+    // loading or after an error (crew.tail may still be null there); refresh
+    // goes through refreshTail().
     crew.tailWorker = "";
     crew.tail = null;
+    crew.tailPending = false;
     return;
   }
   crew.tailWorker = worker;

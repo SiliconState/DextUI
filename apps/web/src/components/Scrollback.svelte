@@ -12,10 +12,22 @@
 
   let container: HTMLDivElement | undefined = $state();
   let pinned = $state(true);
+  // Windowing: a long session renders only the newest slice; older blocks are
+  // one click away. Keeps the DOM bounded in marathon sessions.
+  const WINDOW = 300;
+  const WINDOW_STEP = 300;
+  let windowSize = $state(WINDOW);
 
   const sess = useSession(() => store);
   // Non-null while mounted: App only renders Scrollback with a store.
   const view = $derived(sess.view ?? store.state);
+  const hidden = $derived(Math.max(0, view.blocks.length - windowSize));
+  const visible = $derived(view.blocks.slice(-windowSize));
+  // Switching sessions starts at the newest slice again.
+  $effect(() => {
+    void view.id;
+    windowSize = WINDOW;
+  });
 
   let now = $state(Date.now());
   $effect(() => {
@@ -61,7 +73,12 @@
           <p class="faint">journal events replay here on connect · / commands · ⌘k finder{app.packs.length ? " · g packs" : ""}</p>
         </div>
       {:else}
-        {#each view.blocks as block (block.id)}
+        {#if hidden > 0}
+          <button class="sb-older" data-agent-id="transcript.older" onclick={() => (windowSize += WINDOW_STEP)}>
+            ↑ show {Math.min(hidden, WINDOW_STEP)} older{hidden > WINDOW_STEP ? ` of ${hidden}` : ""}
+          </button>
+        {/if}
+        {#each visible as block (block.id)}
           <Block {block} {onInspect} sessionId={view.id} />
         {/each}
         {#if view.working}
@@ -124,6 +141,19 @@
     border: 1px solid var(--line);
     background: var(--bg1);
     color: var(--dim);
+  }
+  .sb-older {
+    align-self: center;
+    padding: 2px 12px;
+    margin-block: 2px 4px;
+    border: 1px dashed var(--line);
+    background: transparent;
+    color: var(--dim);
+    font-size: 11px;
+  }
+  .sb-older:hover {
+    color: var(--fg);
+    border-color: var(--dim);
   }
   .sb-jump:hover {
     color: var(--fg);

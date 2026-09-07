@@ -1,7 +1,7 @@
 // Flow builder state: the canvas draft, the flow list for the active
 // workspace, and the host round-trips (x-agentlinkd.flows.*). The host is the
 // source of truth — the draft here is an editor buffer until saved.
-import type { Envelope, FlowFile, FlowSummary, FlowTrigger, TriggerStatus } from "@dextui/protocol";
+import type { Envelope, FlowFile, FlowLaunch, FlowSummary, FlowTrigger, TriggerStatus } from "@dextui/protocol";
 import { app, pushToast } from "./state.svelte";
 
 export interface FlowDraft extends FlowFile {
@@ -15,6 +15,8 @@ export const flows = $state({
   list: [] as FlowSummary[],
   /** Armed triggers for the workspace (host-reported). */
   triggers: [] as TriggerStatus[],
+  /** Last launch per flow: a run that "started" may still have failed. */
+  launches: [] as FlowLaunch[],
   /** The flow being edited (null = the list view). */
   draft: null as FlowDraft | null,
   /** Name pending deletion confirmation. */
@@ -136,11 +138,12 @@ export function hookFor(name: string): string | undefined {
 /** Control-plane tap (wired from state.svelte.ts). */
 export function onFlowsControl(env: Envelope): void {
   if (env.event === "x-agentlinkd.flows.list" || env.event === "x-agentlinkd.flows.changed") {
-    const d = env.data as { cwd: string; flows: FlowSummary[]; triggers?: TriggerStatus[] };
+    const d = env.data as { cwd: string; flows: FlowSummary[]; triggers?: TriggerStatus[]; launches?: FlowLaunch[] };
     if (d?.cwd === flows.cwd || !flows.cwd) {
       flows.cwd = d.cwd;
       flows.list = [...(d.flows ?? [])];
       flows.triggers = [...(d.triggers ?? [])];
+      flows.launches = [...(d.launches ?? [])];
     }
     return;
   }
@@ -165,14 +168,28 @@ export function onFlowsControl(env: Envelope): void {
     return;
   }
   if (env.event === "x-agentlinkd.flows.run") {
-    const d = env.data as { name: string; started?: boolean; error?: string };
-    if (d?.error) {
+    const d = env.data as { name: string; started?: boolean; error?: string; failed?: boolean; launch?: FlowLaunch };
+    if (d?.error && !d.launch) {
       pushToast("err", `Flow '${d.name}': ${d.error}`);
+      return;
+    }
+    // Launch tracking: spawn accepted (starting) or the process result.
+    const launch = d?.launch;
+    if (launch?.state === "failed") {
+      const first = launch.error?.split("\n")[0] ?? "";
+      const detail = first ? `: ${first.slice(0, 160)}` : "";
+      pushToast("err", `Flow '${d.name}' run failed${detail}`);
+      app.conn?.flowsList(flows.cwd || undefined);
+      return;
+    }
+    if (launch?.state === "started" && launch.by && launch.by !== "user") {
+      pushToast("ok", `Flow '${d.name}' finished`);
+      app.conn?.flowsList(flows.cwd || undefined);
       return;
     }
     if (d?.started) {
       flows.started = d.name;
-      pushToast("ok", `Flow '${d.name}' is running — watch it in the crew rail (runs list)`);
+      pushToast("info", `Flow '${d.name}' launched — watch it in the crew rail (runs list)`);
     }
     return;
   }

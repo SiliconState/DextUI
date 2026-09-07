@@ -36,7 +36,9 @@
   import { folders, closeFolderPicker } from "./lib/folders.svelte";
   import { providers, closeProviders } from "./lib/connectors.svelte";
   import FlowCanvas from "./components/FlowCanvas.svelte";
+  import Tasks from "./components/Tasks.svelte";
   import { flows, openFlows, closeFlows } from "./lib/flows.svelte";
+  import { openTasks } from "./lib/tasks.svelte";
   import { crew, closeRun, crewLive, openRun } from "./lib/crew.svelte";
   import { packSheet, closePackSheet, closePackPanel } from "./lib/packsheet.svelte";
 
@@ -193,6 +195,12 @@
       if (e.key === "f" && app.caps.includes("flows")) {
         e.preventDefault();
         openFlows();
+        return;
+      }
+      // Shared task workspace: the durable record both sides hold.
+      if (e.key === "t" && app.caps.includes("tasks")) {
+        e.preventDefault();
+        openTasks();
         return;
       }
       // Approvals: a/s/d act on the globally oldest pending request, whether
@@ -409,6 +417,7 @@
 <FolderPicker />
 <Providers />
 <FlowCanvas />
+<Tasks />
 
 {#if app.galleryOpen}
   <div class="insp-scrim" data-agent-id="packs.overlay.scrim" onclick={() => (app.galleryOpen = false)} onkeydown={() => {}} role="presentation"></div>

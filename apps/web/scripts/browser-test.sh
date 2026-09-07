@@ -1,4 +1,11 @@
 set -uo pipefail
+# Gate entry (npm test): the browser smoke runs wherever agent-browser is
+# installed and SKIPS with a visible note elsewhere, so hosts without it stay
+# green without silently dropping the gate.
+if ! command -v agent-browser >/dev/null 2>&1; then
+  echo "SKIP: agent-browser not installed — browser smoke not run (install the agent_browser pack to enable)"
+  exit 0
+fi
 cd "$(dirname "$0")/../../.."
 PORT="${PORT:-8793}"
 node packages/mock-server/src/server.mjs --port=$PORT --token=browsertest >/tmp/dextui-bt-mock.log 2>&1 &
@@ -104,8 +111,23 @@ wait_js '!document.querySelector(`[data-agent-id="session.sess_002.open"]`)' || 
 wait_js 'localStorage.getItem("dextui.draft.sess_002") === null && localStorage.getItem("dextui.history.sess_002") === null && localStorage.getItem("dextui.generation.sess_002") === null' || { echo "FAIL: local purge"; FAIL=1; }
 
 note "packs: gallery in hero, card prefills composer, run → badged turn + runtime_view footer, g overlay"
-agent-browser click '[data-agent-id="session.new"]' >/dev/null
+# session.new can race the delete-dialog teardown (the click lands but the
+# view stays on the old session): retry until the transcript is actually empty.
+n=0
+until agent-browser eval '!!document.querySelector(`[data-agent-id="transcript.empty"]`)' 2>/dev/null | grep -q true; do
+  n=$((n+1)); [ $n -gt 10 ] && break
+  agent-browser click '[data-agent-id="session.new"]' >/dev/null 2>&1
+  sleep 0.5
+done
 agent-browser wait '[data-agent-id="composer.input"]' >/dev/null
+# First run shows the persona picker (gallery state "persona"); skip it so the
+# gallery reaches "ready". The choice persists in localStorage for this run.
+# Retry until the picker is gone (a one-shot check raced the gallery mount).
+for i in $(seq 1 20); do
+  agent-browser eval 'document.querySelector(`[data-agent-id="persona.skip"]`)?.click()' >/dev/null 2>&1
+  agent-browser eval '!document.querySelector(`[data-agent-id="persona.skip"]`)' 2>/dev/null | grep -q true && break
+  sleep 0.25
+done
 sleep 0.6
 wait_js '!!document.querySelector(`[data-agent-id="packs.gallery"][data-state="ready"]`)' || { echo "FAIL: gallery not rendered in empty session"; FAIL=1; }
 wait_js 'document.querySelector(`[data-agent-id="packs.card.report"]`)?.dataset.state === "unmet"' || { echo "FAIL: report card should be greyed (needs auto-write)"; FAIL=1; }
