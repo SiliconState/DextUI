@@ -78,29 +78,21 @@ export function sparkIndexAtX(x: number, n: number): number {
   return Math.max(0, Math.min(n - 1, Math.round(i)));
 }
 
-export function barLayout(n: number): { slot: number; bw: number } {
-  const slot = (PLOT.r - PLOT.l) / Math.max(1, n);
-  return { slot, bw: Math.min(44, slot * 0.62) };
-}
-
-/** Center x of the bar drawn at sorted position `p`. */
+/** Center x of the single-series bar at sorted position `p` (the m=1 group). */
 export function barX(p: number, n: number): number {
-  return PLOT.l + barLayout(n).slot * (p + 0.5);
+  return barGroupLayout(n, 1).x(p, 0);
 }
 
-/** Original index of the bar under x, honoring the sort permutation; -1 outside the plot. */
-export function barIndexAtX(x: number, n: number, order: number[]): number {
-  if (x < PLOT.l || x > PLOT.r) return -1;
-  const p = Math.min(n - 1, Math.floor((x - PLOT.l) / barLayout(n).slot));
-  return order[p] ?? -1;
-}
-
-/** Grouped-bar geometry for m visible series: per-label bars share the width one bar would use. */
+/** Grouped-bar geometry for m visible series: per-label bars share the width
+ *  one bar would use. `l`/`r` default to the interactive plot frame; the SVG
+ *  fallback passes its own axis extent so both renderers share one formula. */
 export function barGroupLayout(
   n: number,
   m: number,
-): { slot: number; bw: number; group: number; x: (p: number, s: number) => number } {
-  const slot = (PLOT.r - PLOT.l) / Math.max(1, n);
+  l: number = PLOT.l,
+  r: number = PLOT.r,
+): { slot: number; bw: number; group: number; gap: number; x: (p: number, s: number) => number } {
+  const slot = (r - l) / Math.max(1, n);
   const group = Math.min(44, slot * 0.62);
   const gap = m > 1 ? 2 : 0;
   const bw = m > 1 ? Math.max(3, (group - gap * (m - 1)) / m) : group;
@@ -108,21 +100,30 @@ export function barGroupLayout(
     slot,
     bw,
     group,
-    x: (p, s) => PLOT.l + slot * (p + 0.5) - group / 2 + s * (bw + gap) + bw / 2,
+    gap,
+    x: (p, s) => l + slot * (p + 0.5) - group / 2 + s * (bw + gap) + bw / 2,
   };
 }
 
-/** Series bar under x (sort permutation honored); null between groups or outside the plot. */
+/** Series bar under x (sort permutation honored). Null outside the plot or
+ *  outside a label's group; a pixel in the 2px gap resolves to the bar on its
+ *  right. */
 export function barGroupHitAtX(x: number, n: number, order: number[], m: number): { i: number; s: number } | null {
   if (x < PLOT.l || x > PLOT.r) return null;
-  const { slot, bw, group } = barGroupLayout(n, m);
+  const { slot, bw, group, gap } = barGroupLayout(n, m);
   const p = Math.min(n - 1, Math.max(0, Math.floor((x - PLOT.l) / slot)));
   const local = x - (PLOT.l + slot * (p + 0.5) - group / 2);
-  const gap = m > 1 ? 2 : 0;
   if (local < -1 || local > group + 1) return null;
   const s = Math.floor((local + 1) / (bw + gap));
   if (s < 0 || s >= m) return null;
   return { i: order[p] ?? -1, s };
+}
+
+/** Bar colour: negatives always the warning colour (palette[4]); with several
+ *  series a bar takes its series' colour, alone it takes the per-bar colour. */
+export function barFill(palette: readonly string[], v: number, i: number, s: number, m: number): string {
+  if (v < 0) return palette[4] ?? palette[0] ?? "";
+  return palette[(m > 1 ? s : i) % palette.length] ?? "";
 }
 
 /** Original index of the hbar row under y; -1 outside the rows. */

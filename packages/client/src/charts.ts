@@ -10,6 +10,8 @@
 
 export type ChartType = "bar" | "hbar" | "line" | "spark" | "donut";
 
+import { barFill, barGroupLayout } from "./chartmath.js";
+
 export interface ChartSeries {
   name: string;
   values: number[];
@@ -260,12 +262,11 @@ export function renderChartSVG(spec: ChartSpec): string {
   if (spec.type === "bar") {
     // Grouped bars: with named series each label gets one bar per series
     // (color = series); a lone series keeps the classic per-bar coloring.
+    // Geometry and fill come from chartmath so this fallback and the
+    // interactive chart cannot drift apart.
     const rowsArr = spec.series?.length ? spec.series.map((s) => s.values) : [spec.values];
     const m = rowsArr.length;
-    const slot = (axisR - axisL) / spec.values.length;
-    const group = Math.min(44, slot * 0.62);
-    const gap = m > 1 ? 2 : 0;
-    const bw = m > 1 ? Math.max(3, (group - gap * (m - 1)) / m) : group;
+    const geo = barGroupLayout(spec.values.length, m, axisL, axisR);
     for (let i = 0; i < spec.values.length; i++) {
       for (let s = 0; s < m; s++) {
         const v = rowsArr[s]?.[i] ?? 0;
@@ -273,13 +274,12 @@ export function renderChartSVG(spec: ChartSpec): string {
         const y1 = py(v);
         const by = Math.min(y0, y1);
         const bh = Math.max(2, Math.abs(y0 - y1));
-        const bx = axisL + slot * (i + 0.5) - group / 2 + s * (bw + gap);
+        const bx = geo.x(i, s) - geo.bw / 2;
         const name = spec.series?.[s]?.name || `s${s + 1}`;
         const tipTxt = m > 1 ? `${labels[i] ?? ""} · ${name}: ${fmt(v)}${unit}` : `${labels[i] ?? ""}: ${fmt(v)}${unit}`;
-        const fill = v < 0 ? CHART_COLORS[4] : m > 1 ? CHART_COLORS[s % CHART_COLORS.length] : CHART_COLORS[i % CHART_COLORS.length];
         body +=
-          `<rect x="${bx.toFixed(1)}" y="${by.toFixed(1)}" width="${bw.toFixed(1)}" height="${bh.toFixed(1)}" rx="2"` +
-          ` style="fill:${fill}"><title>${esc(tipTxt)}</title></rect>`;
+          `<rect x="${bx.toFixed(1)}" y="${by.toFixed(1)}" width="${geo.bw.toFixed(1)}" height="${bh.toFixed(1)}" rx="2"` +
+          ` style="fill:${barFill(CHART_COLORS, v, i, s, m)}"><title>${esc(tipTxt)}</title></rect>`;
       }
       if (m === 1) {
         const v = rowsArr[0]?.[i] ?? 0;
@@ -288,12 +288,16 @@ export function renderChartSVG(spec: ChartSpec): string {
       }
     }
     if (m > 1) {
-      const names = spec.series ?? [];
+      // Legend: right-aligned swatches on the row above the plot, capped to
+      // what fits so many series never run off the left edge.
+      const LEGEND_W = 78;
+      const names = (spec.series ?? []).slice(0, Math.max(1, Math.floor((axisR - axisL) / LEGEND_W)));
       names.forEach((sr, s) => {
-        const lx = axisR - names.length * 78 + s * 78;
+        const lx = axisR - names.length * LEGEND_W + s * LEGEND_W;
+        const ly = top - 8;
         body +=
-          `<rect x="${lx.toFixed(1)}" y="10" width="9" height="9" rx="2" style="fill:${CHART_COLORS[s % CHART_COLORS.length]}"/>` +
-          `<text x="${(lx + 13).toFixed(1)}" y="18" font-size="10" style="fill:var(--fg,#e6edf3)">${esc((sr.name || `s${s + 1}`).slice(0, 9))}</text>`;
+          `<rect x="${lx.toFixed(1)}" y="${(ly - 8).toFixed(1)}" width="9" height="9" rx="2" style="fill:${CHART_COLORS[s % CHART_COLORS.length]}"/>` +
+          `<text x="${(lx + 13).toFixed(1)}" y="${ly.toFixed(1)}" font-size="10" style="fill:var(--fg,#e6edf3)">${esc((sr.name || `s${s + 1}`).slice(0, 9))}</text>`;
       });
     }
   } else {

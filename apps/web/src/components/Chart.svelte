@@ -25,6 +25,7 @@
     sparkIndexAtX,
     barGroupLayout,
     barGroupHitAtX,
+    barFill,
     hbarRowAtY,
     hbarScaleMax,
     hbarWidth,
@@ -236,7 +237,7 @@
           <text x="118" y="12" text-anchor="end" font-size="11" style="fill:var(--dim,#8b949e); cursor:pointer" onclick={cycleSort}>{(labels[i] ?? "").slice(0, 14)}</text>
           <rect x={HBAR.x} y="0" width={HBAR.w} height="14" rx="3" style="fill:var(--chart-grid,#2a2f37)" opacity="0.35" />
           <!-- svelte-ignore a11y_no_static_element_interactions -->
-          <rect x={HBAR.x} y="0" width={hbarWidth(v, hiAbs)} height="14" rx="3" style="fill:{v < 0 ? CHART_COLORS[4] : CHART_COLORS[i % 5]}; cursor:ew-resize" opacity={hoverI === i ? 1 : dim(i)} onpointerdown={(e) => startDrag(e, 0, i, "x")} />
+          <rect x={HBAR.x} y="0" width={hbarWidth(v, hiAbs)} height="14" rx="3" style="fill:{barFill(CHART_COLORS, v, i, 0, 1)}; cursor:ew-resize" opacity={hoverI === i ? 1 : dim(i)} onpointerdown={(e) => startDrag(e, 0, i, "x")} />
           <text x={HBAR.x + HBAR.w + 6} y="12" font-size="11" style="fill:var(--fg,#e6edf3)">{fmt(v)}{unit}</text>
         </g>
       {/each}
@@ -263,7 +264,7 @@
             {@const bh = Math.max(2, Math.abs(y0 - y1))}
             <g transform="translate({bx},0)" style="transition: transform .18s ease">
               <!-- svelte-ignore a11y_no_static_element_interactions -->
-              <rect x={-bars.bw / 2} y={by} width={bars.bw} height={bh} rx="2" style="fill:{v < 0 ? CHART_COLORS[4] : mVis > 1 ? CHART_COLORS[s % 5] : CHART_COLORS[i % 5]}; cursor:ns-resize" opacity={hoverI === i ? 1 : dim(i)} onpointerdown={(e) => startDrag(e, s, i, "y")} />
+              <rect x={-bars.bw / 2} y={by} width={bars.bw} height={bh} rx="2" style="fill:{barFill(CHART_COLORS, v, i, s, mVis)}; cursor:ns-resize" opacity={hoverI === i ? 1 : dim(i)} onpointerdown={(e) => startDrag(e, s, i, "y")} />
             </g>
             {#if visible.length === 1}
               <text x={bx} y={by - 4} text-anchor="middle" font-size="10" style="fill:var(--fg,#e6edf3)">{fmt(v)}{unit}</text>

@@ -17,7 +17,6 @@ import {
   sparkX,
   sparkIndexAtX,
   barX,
-  barIndexAtX,
   hbarRowAtY,
   hbarValueAtX,
   sortOrder,
@@ -55,14 +54,15 @@ test("bar hit-test honors the sort permutation and slot geometry", () => {
   const values = [5, 50, 20];
   const desc = sortOrder(values, 1); // [1, 2, 0]
   assert.deepStrictEqual(desc, [1, 2, 0]);
+  const hit = (x, order) => barGroupHitAtX(x, 3, order, 1)?.i ?? -1;
   // the bar drawn in slot 0 is original index 1
-  assert.equal(barIndexAtX(barX(0, 3), 3, desc), 1);
-  assert.equal(barIndexAtX(barX(2, 3), 3, desc), 0);
+  assert.equal(hit(barX(0, 3), desc), 1);
+  assert.equal(hit(barX(2, 3), desc), 0);
   // unsorted: the slot center maps to itself, and a slot edge does not spill over
   const id = sortOrder(values, 0);
-  assert.equal(barIndexAtX(barX(1, 3), 3, id), 1);
-  assert.equal(barIndexAtX(PLOT.l - 1, 3, id), -1, "left of the plot is a miss");
-  assert.equal(barIndexAtX(PLOT.r + 1, 3, id), -1, "right of the plot is a miss");
+  assert.equal(hit(barX(1, 3), id), 1);
+  assert.equal(hit(PLOT.l - 1, id), -1, "left of the plot is a miss");
+  assert.equal(hit(PLOT.r + 1, id), -1, "right of the plot is a miss");
 });
 
 test("sort is stable and ascending/descending by magnitude", () => {
@@ -125,11 +125,17 @@ test("tooltip clamps inside the host on narrow screens", () => {
 test("barGroupLayout: m=1 matches the classic centered bar; m>1 splits the group, still centered", () => {
   const g1 = barGroupLayout(6, 1);
   assert.equal(g1.bw, g1.group);
-  assert.ok(Math.abs(g1.x(2, 0) - barX(2, 6)) < 1e-9, "m=1 centers on the classic bar center");
+  assert.equal(g1.gap, 0);
+  assert.ok(Math.abs(g1.x(2, 0) - (PLOT.l + g1.slot * 2.5)) < 1e-9, "m=1 centers on the slot center");
   const g3 = barGroupLayout(6, 3);
-  assert.ok(g3.bw * 3 + 2 * 2 <= g3.group + 1e-9, "bars plus gaps fit inside the group");
+  assert.equal(g3.gap, 2);
+  assert.ok(g3.bw * 3 + g3.gap * 2 <= g3.group + 1e-9, "bars plus gaps fit inside the group");
   assert.ok(g3.x(0, 0) < g3.x(0, 1) && g3.x(0, 1) < g3.x(0, 2), "series run left-to-right inside a group");
   assert.ok(Math.abs((g3.x(0, 0) + g3.x(0, 2)) / 2 - barX(0, 6)) < 1e-9, "the group stays centered");
+  // The SVG fallback passes its own axis extent: same shape, shifted frame.
+  const g = barGroupLayout(4, 2, 100, 300);
+  assert.ok(Math.abs(g.slot - 50) < 1e-9);
+  assert.ok(g.x(0, 0) > 100 && g.x(3, 1) < 300, "bars stay inside the given extent");
 });
 
 test("barGroupHitAtX: resolves (bar, series) under sort, nulls between groups and outside", () => {

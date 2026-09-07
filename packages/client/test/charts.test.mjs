@@ -5,7 +5,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { parseChartSpec, renderChartSVG } from "../dist/index.js";
+import { parseChartSpec, renderChartSVG, CHART_COLORS } from "../dist/index.js";
 
 const BAR = { type: "bar", title: "Latency", labels: ["a", "b", "c"], values: [10, 20, -5], unit: "ms" };
 
@@ -149,7 +149,16 @@ test("multi-series bar: one titled bar per series per label, color follows serie
     ],
   });
   assert.equal((svg.match(/<title>/g) ?? []).length, 4, "2 labels x 2 series bars, legend adds none");
-  assert.ok(svg.includes("#39c5cf"), "series 1 renders in chart color 2");
-  assert.ok(svg.includes("#f85149"), "a negative bar renders in the negative color");
+  assert.ok(svg.includes(CHART_COLORS[1]), "series 1 renders in chart color 2");
+  assert.ok(svg.includes(CHART_COLORS[4]), "a negative bar renders in the negative color");
   assert.equal((svg.match(/<rect /g) ?? []).length, 6, "4 bars + 2 legend swatches");
+});
+
+test("multi-series bar: legend is capped to the swatches that fit the axis width", () => {
+  const series = Array.from({ length: 9 }, (_, s) => ({ name: `S${s}`, values: [1, 2] }));
+  const svg = renderChartSVG({ type: "bar", labels: ["a", "b"], values: [1, 2], series });
+  const bars = 2 * series.length;
+  const swatches = (svg.match(/<rect /g) ?? []).length - bars;
+  assert.ok(swatches >= 1 && swatches < series.length, `legend capped: ${swatches} of ${series.length}`);
+  assert.ok(!svg.includes("x=\"-"), "nothing is drawn at a negative x");
 });
