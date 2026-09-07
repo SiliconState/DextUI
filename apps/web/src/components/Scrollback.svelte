@@ -23,6 +23,24 @@
   const view = $derived(sess.view ?? store.state);
   const hidden = $derived(Math.max(0, view.blocks.length - windowSize));
   const visible = $derived(view.blocks.slice(-windowSize));
+  const groups = $derived.by(() => {
+    const result: { id: number; blocks: ViewBlock[] }[] = [];
+    for (let i = 0; i < visible.length;) {
+      const first = visible[i]!;
+      let end = i + 1;
+      if (first.kind === "tool") {
+        while (end < visible.length) {
+          const next = visible[end];
+          if (next?.kind !== "tool" || next.name !== first.name) break;
+          end++;
+        }
+      }
+      if (end - i <= 3) end = i + 1;
+      result.push({ id: first.id, blocks: visible.slice(i, end) });
+      i = end;
+    }
+    return result;
+  });
   // Switching sessions starts at the newest slice again.
   $effect(() => {
     void view.id;
@@ -78,8 +96,15 @@
             ↑ show {Math.min(hidden, WINDOW_STEP)} older{hidden > WINDOW_STEP ? ` of ${hidden}` : ""}
           </button>
         {/if}
-        {#each visible as block (block.id)}
-          <Block {block} {onInspect} sessionId={view.id} />
+        {#each groups as group (group.id)}
+          {#if group.blocks.length > 3}
+            <details class="tool-batch" open={group.blocks.some((b) => b.kind === "tool" && (b.status === "running" || b.status === "failed"))}>
+              <summary>Batch · {group.blocks.length} calls <span class="faint">· {group.blocks[0]?.kind === "tool" ? group.blocks[0].name : ""}</span></summary>
+              {#each group.blocks as block (block.id)}<Block {block} {onInspect} sessionId={view.id} />{/each}
+            </details>
+          {:else}
+            <Block block={group.blocks[0]!} {onInspect} sessionId={view.id} />
+          {/if}
         {/each}
         {#if view.working}
           <p class="sb-working" data-agent-id="transcript.working" aria-live="polite">
@@ -99,6 +124,8 @@
 </div>
 
 <style>
+  .tool-batch > summary { cursor: pointer; color: var(--dim); font-size: 12px; padding: 3px 0; }
+  .tool-batch :global(.tool) { margin-top: 6px; }
   .sb-wrap {
     position: relative;
     flex: 1;

@@ -60,7 +60,9 @@ export function shortPath(p: string): string {
 }
 
 export function humanizeTool(name: string, summary: string): string {
-  const raw = (summary ?? "").trim();
+  let raw = (summary ?? "").trim();
+  // The row already names the tool; strip only redundant leading labels.
+  while (name && raw.toLowerCase().startsWith(`${name.toLowerCase()}:`)) raw = raw.slice(name.length + 1).trim();
   if (!raw) return raw;
   if (/^(bash|sh|shell)$/i.test(name)) return raw; // the command is the summary
   const alone = ALONE[name.toLowerCase()];
