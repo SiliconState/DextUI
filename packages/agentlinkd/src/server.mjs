@@ -39,6 +39,7 @@ import { createConnectors } from "./connectors.mjs";
 import { compileFlow, deleteFlow, listFlows, readFlow, writeFlow } from "./flows.mjs";
 import { createScheduler } from "./triggers.mjs";
 import { TASK_STATUSES, createTasksAdapter } from "./tasks.mjs";
+import { bridgeArgs, probeNdjsonSupport, spawnBridge, toBridgeChoice, toPermissionRequest } from "./bridge.mjs";
 
 const here = path.dirname(url.fileURLToPath(import.meta.url));
 const repoRoot = path.join(here, "..", "..", "..");
@@ -76,7 +77,9 @@ const STATE_DIR = path.resolve(
 const JOURNALS_DIR = path.join(STATE_DIR, "journals");
 const INDEX_PATH = path.join(STATE_DIR, "sessions.json");
 const JOURNAL_TRUNCATE_BYTES = 64 * 1024 * 1024;
-const APPROVALS = new Set(["auto-read", "auto-write", "never", "always"]);
+// `ask` only makes sense with the bridge (patches/dext/0003): one-shot children
+// can never answer a permission prompt, so every guarded tool would be denied.
+const APPROVALS = new Set(["ask", "auto-read", "auto-write", "never", "always"]);
 const EFFORT_OPTIONS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 const EFFORTS = new Set(EFFORT_OPTIONS);
 const MAX_PROMPT_CHARS = 1_000_000;
@@ -146,6 +149,14 @@ function dextOutput(args) {
   return result.status === 0 ? result.stdout : "";
 }
 
+// Provider ids are echoed to browsers and used as argv: keep them plain.
+// Marker words safe to send to a browser. For API-key providers dext's marker
+// can echo credential-derived material — anything unrecognised collapses to
+// "key" ("a credential is held"), never the value itself. Declared before the
+// boot-time discovery below, which parses `auth status --json` with them.
+const PROVIDER_ID_RE = /^[a-z0-9][a-z0-9_.-]{0,39}$/i;
+const AUTH_MARKERS = new Set(["auth", "key", "none", "web", "oauth", "token", "session", "failed", "expired", "missing", "absent", "unknown", "present", "ok", "disabled", "off"]);
+
 function parseModels(text) {
   const groups = [];
   let current = null;
@@ -173,11 +184,35 @@ function parseModels(text) {
   }
   return groups.filter((g) => g.models.length > 0);
 }
+
+// `dext auth models --json` / `dext auth status --json` (patches/dext/0001):
+// a versioned document, so a prose reformat upstream cannot silently empty the
+// model picker or the Providers dialog. Older binaries print prose for the
+// unknown flag (or fail); both fall through to the prose parsers.
+function parseModelsJson(text) {
+  let doc;
+  try {
+    doc = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  if (!doc || doc.version !== 1 || !Array.isArray(doc.providers)) return null;
+  return doc.providers
+    .filter((p) => p && typeof p.id === "string" && Array.isArray(p.models))
+    .map((p) => ({ provider: p.id, models: p.models.filter((m) => typeof m === "string" && m) }))
+    .filter((g) => g.models.length > 0);
+}
 function discoverModels() {
-  return parseModels(dextOutput(["auth", "models"]));
+  return parseModelsJson(dextOutput(["auth", "models", "--json"])) ?? parseModels(dextOutput(["auth", "models"]));
 }
 
 function discoverActiveModel(catalog) {
+  const json = parseProviderStatusJson(dextOutput(["auth", "status", "--json"]));
+  if (json) {
+    const hit = json.providers.find((p) => p.active) ?? json.providers.find((p) => p.id === json.active);
+    const group = catalog.find((g) => g.provider === (json.active ?? hit?.id)) ?? catalog[0];
+    return { provider: json.active ?? hit?.id ?? group?.provider, model: hit?.model ?? group?.models[0] };
+  }
   const status = dextOutput(["auth", "status"]);
   const active = /^active provider:\s*(\S+)/m.exec(status)?.[1];
   const line = status
@@ -189,6 +224,12 @@ function discoverActiveModel(catalog) {
 }
 
 const MODEL_CATALOG = discoverModels();
+
+// Persistent-child bridge (`dext --input ndjson`, patches/dext/0003). With it,
+// steering is live, `/effort` applies mid-turn, model changes survive history
+// (respawn with --resume), and permission_request events get real per-action
+// answers. Without it every turn is a one-shot `-p` child (runTurn below).
+const BRIDGE = probeNdjsonSupport(dextOutput);
 const DEFAULT_MODEL = discoverActiveModel(MODEL_CATALOG);
 if (DEFAULT_MODEL.provider && DEFAULT_MODEL.model) {
   let group = MODEL_CATALOG.find((g) => g.provider === DEFAULT_MODEL.provider);
@@ -203,12 +244,9 @@ if (DEFAULT_MODEL.provider && DEFAULT_MODEL.model) {
 // provider: `[*] id  Label…  model=… … auth=<auth|key|none|…>`). Reused by the
 // web's Providers dialog; login/logout shell out to `dext auth login|logout`
 // so dext's own auth store stays the single credential holder.
-const PROVIDER_ID_RE = /^[a-z0-9][a-z0-9_.-]{0,39}$/i;
-// Marker words safe to send to a browser. For API-key providers dext's marker
-// can echo credential-derived material — anything unrecognised collapses to
-// "key" ("a credential is held"), never the value itself.
-const AUTH_MARKERS = new Set(["auth", "key", "none", "web", "oauth", "token", "session", "failed", "expired", "missing", "absent", "unknown", "present", "ok", "disabled", "off"]);
 function parseProviderStatus(text) {
+  const json = parseProviderStatusJson(text);
+  if (json) return json;
   const active = /^active provider:\s*(\S+)/m.exec(text)?.[1] ?? null;
   const providers = [];
   for (const line of text.split("\n")) {
@@ -219,10 +257,36 @@ function parseProviderStatus(text) {
   }
   return { active, providers };
 }
+function parseProviderStatusJson(text) {
+  let doc;
+  try {
+    doc = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  if (!doc || doc.version !== 1 || !Array.isArray(doc.providers)) return null;
+  const active = typeof doc.active_provider === "string" ? doc.active_provider : null;
+  const providers = [];
+  for (const p of doc.providers) {
+    if (!p || typeof p.id !== "string" || !PROVIDER_ID_RE.test(p.id)) continue;
+    const raw = String(p.auth ?? "none").replace(/[^\w].*$/, "").toLowerCase();
+    providers.push({
+      id: p.id,
+      label: typeof p.label === "string" && p.label.trim() ? p.label.trim() : p.id,
+      model: typeof p.default_model === "string" ? p.default_model : "",
+      auth: AUTH_MARKERS.has(raw) ? raw : "key",
+      active: p.active === true || p.id === active,
+    });
+  }
+  return { active, providers };
+}
 // Request handlers use these async twins: the sync spawns above are boot-only —
 // a spawnSync inside a handler would freeze every connected client for up to
 // 15 s per dext invocation.
 async function providerStatusAsync() {
+  const j = await dextOutputAsync(["auth", "status", "--json"]);
+  const parsed = j.ok ? parseProviderStatusJson(j.out) : null;
+  if (parsed) return parsed;
   const r = await dextOutputAsync(["auth", "status"]);
   return parseProviderStatus(r.ok ? r.out : "");
 }
@@ -230,30 +294,42 @@ async function providerStatusAsync() {
 // is authenticated): refresh the catalog in place so hello_ok and the status
 // reply agree.
 async function refreshModelCatalog() {
+  const j = await dextOutputAsync(["auth", "models", "--json"]);
+  const groups = j.ok ? parseModelsJson(j.out) : null;
+  if (groups) {
+    MODEL_CATALOG.splice(0, MODEL_CATALOG.length, ...groups);
+    return MODEL_CATALOG;
+  }
   const r = await dextOutputAsync(["auth", "models"]);
   if (!r.ok) return MODEL_CATALOG;
   MODEL_CATALOG.splice(0, MODEL_CATALOG.length, ...parseModels(r.out));
   return MODEL_CATALOG;
 }
-function runDext(args, timeout = 60_000) {
+/** `stdin` (optional) is written and closed; used to hand `auth login` its
+ *  credential off argv (patches/dext/0001) so /proc/<pid>/cmdline never has it. */
+function runDext(args, timeout = 60_000, stdin = null) {
   return new Promise((resolve) => {
-    execFile(DEXT_BIN, args, { env: { ...process.env, DEXT_NO_TUI: "1" }, timeout, maxBuffer: 4 * 1024 * 1024, windowsHide: true }, (err, stdout, stderr) => {
+    const child = execFile(DEXT_BIN, args, { env: { ...process.env, DEXT_NO_TUI: "1" }, timeout, maxBuffer: 4 * 1024 * 1024, windowsHide: true }, (err, stdout, stderr) => {
       resolve({ ok: !err, stdout: String(stdout ?? ""), stderr: String(stderr ?? "") });
     });
+    child.stdin?.on("error", () => {});
+    if (stdin !== null) child.stdin?.end(`${stdin}\n`);
+    else child.stdin?.end();
   });
 }
 
-// Real capabilities only. No "steering" (one-shot children have no stdin
-// channel mid-turn) and no "approvals" (the interactive round-trip needs the
-// upstream dext PermissionRequested bridge); dext's own --approval profile
-// governs tool policy instead. `crew` is appended once the pack catalog has
-// located the binary (below).
+// Capabilities are real: `approvals`, `steering.live` and `model_switch` are
+// added only when the binary advertises the ndjson bridge (see BRIDGE).
+// Without it dext's own --approval profile governs tool policy. `crew` is
+// appended once the pack catalog has located the binary (below).
 const CAPABILITIES = [
   "multi_session",
   "interrupt",
-  // Queue-next-turn steering: input sent mid-turn is acked immediately and
-  // delivered as the next turn's prompt (one-shot dext has no live stdin).
+  // With the bridge, steering is delivered to the running turn (dext folds it
+  // into the next model request). Without it, input sent mid-turn is queued
+  // and delivered as the next turn's prompt.
   "steering",
+  ...(BRIDGE ? ["steering.live", "approvals", "model_switch"] : []),
   "usage",
   "thinking",
   "effort_select",
@@ -626,6 +702,10 @@ function makeSession({ cwd, approval }) {
     steeringQueue: [],
     turns: 0,
     child: null,
+    // Bridge mode: the persistent ndjson child and the approval it is blocked on.
+    bridge: null,
+    pendingPermission: null,
+    dextSessionId: null,
     killed: false,
     indexEntry: null,
     // Bumped by session.clear so a turn already in flight cannot journal its
@@ -911,7 +991,7 @@ function snapshotEnvelope(s) {
     data: {
       meta: metaOf(s),
       blocks: fold(s.journal),
-      pending_permissions: [],
+      pending_permissions: s.pendingPermission ? [s.pendingPermission] : [],
       last_seq: s.seq,
       working: s.working,
       turn_started_at: s.turnStartedAt ?? undefined,
@@ -934,7 +1014,183 @@ function zeroUsage() {
   return { input: 0, output: 0, cache_create: 0, cache_read: 0, cost_usd: 0 };
 }
 
+// ---------- turn engine (bridge): one persistent dext child per session ----------
+
+function bridgeEnv(s) {
+  const env = { ...process.env, DEXT_NO_TUI: "1" };
+  if (s.provider && s.model) {
+    env.DEXT_PROVIDER = s.provider;
+    env.DEXT_MODEL = s.model;
+    env.DEXT_MODEL_FORCE = "1";
+  }
+  return env;
+}
+
+/** Spawn (or reuse) this session's bridged child. Resolves once dext is ready. */
+function ensureBridge(s) {
+  if (s.bridge && !s.bridge.exited) return s.bridge.whenReady().then(() => s.bridge);
+  const epoch = s.epoch;
+  let errTail = "";
+  const args = bridgeArgs({ cwd: s.cwd, approval: s.approval, effort: s.thinkingEffort, seat: s.seat, resume: s.turns > 0 });
+  let bridge;
+  const onEvent = (v) => {
+    if (s.deleted || s.epoch !== epoch || s.bridge !== bridge) return;
+    handleBridgeEvent(s, v);
+  };
+  const onExit = (code, sig) => {
+    if (s.bridge === bridge) s.bridge = null;
+    if (s.child === bridge?.child) s.child = null;
+    if (s.deleted || s.epoch !== epoch) return;
+    if (s.pendingPermission) {
+      publish(journalData(s, "permission.resolved", { request_id: s.pendingPermission.request_id, choice: "deny", by: "exit" }));
+      s.pendingPermission = null;
+    }
+    if (s.working) {
+      if (s.killed) publish(journalData(s, "interrupted"));
+      else {
+        const detail = errTail.trim().split("\n").slice(-3).join(" · ").slice(-400);
+        publish(journalData(s, "error", `dext exited (code ${code ?? sig})${detail ? `: ${detail}` : ""}`));
+      }
+      publish(journalData(s, "turn_end", { usage: zeroUsage(), failed: !s.killed }));
+      s.working = false;
+      s.turnStartedAt = null;
+    } else if (!s.killed && !bridge?.ready) {
+      const detail = errTail.trim().split("\n").slice(-3).join(" · ").slice(-400);
+      publish(journalData(s, "error", `dext failed to start (code ${code ?? sig})${detail ? `: ${detail}` : ""}`));
+    }
+    s.killed = false;
+    persistIndex();
+    scheduleList();
+    SELF.tick();
+  };
+  try {
+    bridge = spawnBridge({
+      bin: DEXT_BIN,
+      args,
+      cwd: s.cwd,
+      env: bridgeEnv(s),
+      maxBuffer: MAX_STDOUT_BUFFER,
+      onEvent,
+      onNoise: (line) => { errTail = (errTail + `[stdout] ${line}\n`).slice(-2000); },
+      onStderr: (text) => { errTail = (errTail + text).slice(-2000); },
+      onExit,
+    });
+  } catch (err) {
+    return Promise.reject(new Error(`failed to spawn dext (${DEXT_BIN}): ${String(err)}`));
+  }
+  s.bridge = bridge;
+  s.child = bridge.child; // stopForPurge / signalChild keep working unchanged
+  return bridge.whenReady().then(() => bridge);
+}
+
+/** Core event → journal. Turn/permission bookkeeping lives here in bridge mode. */
+function handleBridgeEvent(s, v) {
+  const d = v.data;
+  switch (v.event) {
+    case "ready":
+      if (d && typeof d.session_id === "string") s.dextSessionId = d.session_id;
+      if (d && typeof d.model === "string") s.model = d.model;
+      if (d && typeof d.provider === "string") s.provider = d.provider;
+      persistIndex();
+      return;
+    case "input_ack":
+      // Withheld/invalid frames are the only acks worth showing.
+      if (d && (d.route === "withheld" || d.route === "invalid" || d.route === "unsupported_busy_slash")) {
+        publish(journalData(s, "warn", `input ${d.route}${d.detail ? `: ${d.detail}` : ""}`));
+      }
+      return;
+    case "turn_start":
+      s.working = true;
+      s.turnStartedAt = Date.now();
+      break;
+    case "turn_end":
+      s.working = false;
+      s.turnStartedAt = null;
+      s.turns += 1;
+      publish(journalData(s, "session.configured", {
+        provider: s.provider ?? undefined,
+        model: s.model ?? undefined,
+        thinking_effort: s.thinkingEffort,
+        model_locked: false,
+      }));
+      publish(journalData(s, "turn_end", d));
+      persistIndex();
+      scheduleList();
+      SELF.tick();
+      return;
+    case "turn_diagnostics":
+      if (d) {
+        if (typeof d.model === "string") s.model = d.model;
+        if (typeof d.provider === "string") s.provider = d.provider;
+      }
+      break;
+    case "thinking_effort_changed":
+      if (EFFORTS.has(d?.effort)) s.thinkingEffort = d.effort;
+      break;
+    case "steering_received":
+      // The host already journaled steering_received as the immediate ack;
+      // dext's own event marks the fold into the model request.
+      publish(journalData(s, "steering_applied", d));
+      return;
+    case "permission_request": {
+      const req = toPermissionRequest(d ?? {});
+      s.pendingPermission = req;
+      publish(journalData(s, "permission.request", req));
+      return;
+    }
+    case "permission_resolved": {
+      const id = String(d?.id ?? "");
+      const by = s.pendingPermission?.answeredBy ?? "timeout";
+      if (s.pendingPermission?.request_id === id) s.pendingPermission = null;
+      publish(journalData(s, "permission.resolved", { request_id: id, choice: d?.choice ?? "deny", by }));
+      return;
+    }
+    case "tool_call_result":
+      if (d?.name === "todo_write") {
+        publish(journalData(s, v.event, d));
+        publish(journalData(s, "todos.changed", todosFor(s)));
+        return;
+      }
+      break;
+    default:
+      break;
+  }
+  publish(journalData(s, v.event, d));
+}
+
+function runBridgedTurn(s, prompt) {
+  s.working = true; // optimistic: Send disables at once; turn_start confirms
+  s.turnStartedAt = Date.now();
+  s.killed = false;
+  const packRun = parsePackSlash(prompt);
+  const text = packRun?.sub === "run" && packByName(packRun.name) ? `/pack run ${packRun.name} ${packRun.task}` : prompt;
+  ensureBridge(s).then((bridge) => {
+    if (s.deleted) return;
+    if (!bridge.user(text)) throw new Error("dext stdin closed");
+  }).catch((err) => {
+    if (s.deleted) return;
+    publish(journalData(s, "error", String(err?.message ?? err)));
+    publish(journalData(s, "turn_end", { usage: zeroUsage(), failed: true }));
+    s.working = false;
+    s.turnStartedAt = null;
+    persistIndex();
+  });
+}
+
+/** Stop the bridged child so the next turn respawns with new env/args (model,
+ *  approval). Only between turns; the seat + session_id make it seamless. */
+function recycleBridge(s) {
+  const bridge = s.bridge;
+  if (!bridge || bridge.exited) return;
+  s.bridge = null;
+  bridge.close();
+  setTimeout(() => { if (!bridge.exited) bridge.kill("SIGKILL"); }, 5000);
+}
+
+// ---------- turn engine (fallback): one dext child per prompt ----------
+
 function runTurn(s, prompt) {
+  if (BRIDGE) return runBridgedTurn(s, prompt);
   s.working = true;
   s.turnStartedAt = Date.now();
   s.killed = false;
@@ -1054,12 +1310,12 @@ function runTurn(s, prompt) {
     // turn_start and then crashed may not have persisted a resumable seat.
     if (sawTurnEnd) {
       s.turns += 1;
-      s.modelLocked = true;
+      s.modelLocked = !BRIDGE;
       publish(journalData(s, "session.configured", {
         provider: s.provider ?? undefined,
         model: s.model ?? undefined,
         thinking_effort: s.thinkingEffort,
-        model_locked: true,
+        model_locked: !BRIDGE,
       }));
       publish(journalData(s, "turn_end", turnEndData));
     }
@@ -1129,6 +1385,21 @@ function signalChild(child, signal) {
 }
 
 function killChild(s, interrupted = true) {
+  if (s.bridge && !s.bridge.exited) {
+    const bridge = s.bridge;
+    s.killed = interrupted;
+    if (interrupted && s.working) {
+      // Real interrupt: dext stops the turn and stays alive for the next one.
+      bridge.interrupt();
+      setTimeout(() => { if (s.working && s.bridge === bridge) bridge.kill("SIGINT"); }, 3000);
+      setTimeout(() => { if (s.working && s.bridge === bridge) bridge.kill("SIGKILL"); }, 8000);
+      return;
+    }
+    s.bridge = null;
+    bridge.close();
+    setTimeout(() => { if (!bridge.exited) bridge.kill("SIGKILL"); }, 5000);
+    return;
+  }
   const child = s.child;
   if (!child) return;
   s.killed = interrupted;
@@ -1143,6 +1414,14 @@ function killChild(s, interrupted = true) {
 // next turn's prompt at the turn boundary. Journaled as steering_received so
 // every subscribed client sees the ack immediately.
 function queueSteering(s, text) {
+  if (s.bridge && !s.bridge.exited && s.bridge.ready && s.working) {
+    // Live: dext folds it into the running turn (its own steering_received
+    // marks the fold); this row is the immediate "heard you" ack.
+    if (s.bridge.steer(text)) {
+      publish(journalData(s, "steering_received", { messages: [text], preview: text.slice(0, 80), live: true }));
+      return true;
+    }
+  }
   const total = s.steeringQueue.reduce((n, t) => n + t.length, 0) + text.length;
   if (s.steeringQueue.length >= STEERING_MAX_MESSAGES || total > STEERING_MAX_CHARS) return false;
   s.steeringQueue.push(text);
@@ -1403,7 +1682,8 @@ function handleSlash(client, s, raw) {
     s.approval = profile;
     persistIndex();
     publish(journalData(s, "approval_profile_changed", { profile }));
-    publish(journalData(s, "slash", `approval profile → ${profile} (next turn)`));
+    if (BRIDGE && !s.working) recycleBridge(s);
+    publish(journalData(s, "slash", `approval profile → ${profile}${s.working ? " (next turn)" : ""}`));
     return;
   }
   sendError(client, "unsupported", `host handles /help, /login, /approval, /pack, /task and /ui; '${trimmed.split(/\s/)[0]}' needs interactive dext`);
@@ -1683,13 +1963,15 @@ async function handleCommand(client, frame) {
         sendError(client, "not_live", "session is not live");
         return;
       }
-      if (s.working) {
-        sendError(client, "busy", "settings apply between turns; stop or wait for the current turn");
+      const wantsModel = frame.provider !== undefined || frame.model !== undefined;
+      const wantsEffort = frame.thinking_effort !== undefined;
+      const liveBridge = !!(s.bridge && !s.bridge.exited && s.bridge.ready);
+      if (s.working && !(BRIDGE && liveBridge && wantsEffort && !wantsModel)) {
+        sendError(client, "busy", "model applies between turns; effort can change mid-turn");
         return;
       }
-      const wantsModel = frame.provider !== undefined || frame.model !== undefined;
       if (wantsModel) {
-        if (s.modelLocked || s.turns > 0) {
+        if (!BRIDGE && (s.modelLocked || s.turns > 0)) {
           sendError(client, "model_locked", "this session has history; start a new session to change model");
           return;
         }
@@ -1708,10 +1990,18 @@ async function handleCommand(client, frame) {
         return;
       }
       if (wantsModel) {
+        const changed = s.provider !== frame.provider || s.model !== frame.model;
         s.provider = frame.provider;
         s.model = frame.model;
+        // History lives in the seat's session file; the next turn resumes it
+        // under the new model (DEXT_MODEL_FORCE), so only the child restarts.
+        if (changed && BRIDGE) recycleBridge(s);
       }
-      if (frame.thinking_effort !== undefined) s.thinkingEffort = frame.thinking_effort;
+      if (wantsEffort) {
+        s.thinkingEffort = frame.thinking_effort;
+        // Live child: /effort is a runtime control (applies even mid-turn).
+        if (liveBridge) s.bridge.control(`/effort ${frame.thinking_effort}`);
+      }
       persistIndex();
       publish(journalData(s, "session.configured", {
         provider: s.provider ?? undefined,
@@ -1743,6 +2033,7 @@ async function handleCommand(client, frame) {
       killChild(s);
       // The dext seat is durable; closing only stops the child. The session
       // stays resumable, so it goes cold rather than exited.
+      if (s.bridge) recycleBridge(s);
       s.status = "cold";
       publish(journalData(s, "session.state", { status: "cold" }));
       persistIndex();
@@ -1860,7 +2151,30 @@ async function handleCommand(client, frame) {
     }
 
     case "permission.respond": {
-      sendError(client, "unsupported", "approvals are governed by the session's dext --approval profile (/approval <profile>)");
+      const s = sessions.get(frame.session);
+      if (!s) {
+        sendError(client, "no_session", `unknown session ${frame.session}`);
+        return;
+      }
+      if (!BRIDGE) {
+        sendError(client, "unsupported", "approvals are governed by the session's dext --approval profile (/approval <profile>)");
+        return;
+      }
+      const choice = toBridgeChoice(frame.choice);
+      const id = typeof frame.request_id === "string" ? frame.request_id : "";
+      if (!choice || !id) {
+        sendError(client, "bad_request", "permission.respond needs request_id and choice allow|allow_always|deny");
+        return;
+      }
+      if (!s.pendingPermission || s.pendingPermission.request_id !== id) {
+        sendControl(client, "permission.already_resolved", { request_id: id });
+        return;
+      }
+      if (!s.bridge || s.bridge.exited || !s.bridge.permission(id, choice)) {
+        sendError(client, "not_live", "no dext child is waiting on this approval");
+        return;
+      }
+      s.pendingPermission.answeredBy = client.id;
       return;
     }
 
@@ -2018,15 +2332,20 @@ async function handleAuthCommand(client, frame) {
       sendError(client, "bad_request", "browser and import flows are not available here — paste an API key or token", frame.cmd);
       return;
     }
-    args = ["auth", "login", provider, credential];
+    // Credential goes over stdin, never argv (visible in /proc/<pid>/cmdline
+    // to the same user). Binaries predating patches/dext/0001 see no
+    // credential and report "awaiting" instead of logging in.
+    args = ["auth", "login", provider];
   } else {
     args = ["auth", "logout", provider];
   }
-  const r = await runDext(args);
-  if (!r.ok) {
+  const r = await runDext(args, 60_000, op === "login" ? credential : null);
+  const awaiting = r.ok && op === "login" && /remains incomplete|paste/i.test(r.stdout) && !/stored|saved|logged in|active ->/i.test(r.stdout);
+  if (!r.ok || awaiting) {
     let line = `${r.stderr}\n${r.stdout}`.split("\n").map((l) => l.trim()).filter(Boolean).at(-1) ?? "dext refused";
     // Never let the pasted value ride back out, whatever dext printed.
     if (credential) line = line.split(credential).join("…");
+    if (awaiting) line = "this dext build cannot take the credential over stdin; apply patches/dext/0001 or run `dext auth login` locally";
     sendError(client, "tool_failed", `${op} failed: ${line.slice(0, 200)}`, frame.cmd);
     return;
   }

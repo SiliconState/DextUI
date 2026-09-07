@@ -102,6 +102,18 @@
     if (refresh && sid && supported) schedule(sid, 250);
   });
 
+  // Push refresh: the host journals todos.changed right after todo_write, so
+  // the panel follows the agent's list mid-turn instead of at turn_end.
+  let seenVersion = 0;
+  $effect(() => {
+    const v = view.todosVersion ?? 0;
+    const sid = view.id;
+    if (v !== seenVersion) {
+      seenVersion = v;
+      if (v > 0 && sid && supported) schedule(sid, 100);
+    }
+  });
+
   $effect(() => {
     return () => {
       if (timer) clearTimeout(timer);

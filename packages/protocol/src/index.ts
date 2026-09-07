@@ -915,6 +915,8 @@ export interface AgentEventMap {
   compact_failed: { message: string };
   interrupted: undefined;
   steering_received: SteeringReceivedEvent;
+  /** Bridge hosts: dext folded the steer into the running turn. */
+  steering_applied: SteeringReceivedEvent;
 }
 
 /** Host-synthesized data plane. Snapshots are sequenced projections but are not appended to the journal. */
@@ -929,6 +931,8 @@ export interface HostEventMap {
   "permission.resolved": PermissionResolvedEvent;
   "permission.already_resolved": { request_id: string };
   "permission.timeout": { request_id: string };
+  /** Journaled after todo_write in bridge mode; clients refetch GET /sessions/:id/todos. */
+  "todos.changed": TodosResponse;
 }
 
 /** Control plane: unsequenced, unjournaled. */
@@ -1004,6 +1008,10 @@ export interface Envelope<T = unknown> {
 export const CAPABILITIES = [
   "approvals",
   "steering",
+  /** Steering reaches the running turn (dext --input ndjson bridge); /effort applies mid-turn. */
+  "steering.live",
+  /** Model may change on a session with history (next turn resumes under the new model). */
+  "model_switch",
   "interrupt",
   "slash",
   "multi_session",

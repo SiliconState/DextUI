@@ -66,11 +66,14 @@ import Meter from "./Meter.svelte";
       view.status === "live" &&
       !view.working && !view.modelLocked && app.modelCatalog.length > 0,
   );
+  // With the bridge (steering.live), /effort is a runtime control dext applies
+  // mid-turn, so the selector stays enabled while working.
+  const liveEffort = $derived(app.caps.includes("steering.live"));
   const canSelectEffort = $derived(
     app.phase === "live" &&
       app.caps.includes("effort_select") &&
       view.status === "live" &&
-      !view.working && app.effortOptions.length > 0,
+      (liveEffort || !view.working) && app.effortOptions.length > 0,
   );
 
   function selectModel(e: Event) {
@@ -126,7 +129,7 @@ import Meter from "./Meter.svelte";
   {/if}
   {#if app.caps.includes("model_select") && app.modelCatalog.length > 0}
     <span class="sep">│</span>
-    <label class="ctl" title={view.modelLocked ? "Model is fixed once this session has history. Start a new session to change it." : "Model for this session's first turn"}>
+    <label class="ctl" title={view.modelLocked ? "Model is fixed once this session has history. Start a new session to change it." : app.caps.includes("model_switch") ? "Model for the next turn; history is kept" : "Model for this session's first turn"}>
       <span class="faint">Model:</span>
       <select
         value={modelValue}

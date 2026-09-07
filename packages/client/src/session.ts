@@ -57,6 +57,8 @@ export interface SessionState {
   thinkingEffort?: ThinkingEffort;
   reasoningMode?: string;
   modelLocked: boolean;
+  /** Bumped by `todos.changed` (host push after todo_write); panels refetch. */
+  todosVersion?: number;
   approvalProfile?: string;
   turnUsage?: UsageUpdateEvent["turn"];
   sessionUsage?: UsageUpdateEvent["session"];
@@ -123,6 +125,22 @@ export class SessionStore {
   private pushBlock(b: Block): void {
     this.state.blocks = [...this.state.blocks, this.stamp(b)];
     this.emit();
+  }
+
+  /** Mid-stream annotation (steering ack, runtime control, info/warn): sits
+   *  *before* a trailing open text/thinking block so the stream keeps
+   *  accumulating into one block instead of splitting around the marker.
+   *  Mirrors fold.mjs `annotate` (parity test). */
+  private pushAnnotation(b: Block): void {
+    const last = this.state.blocks[this.state.blocks.length - 1];
+    if (last && (last.kind === "text" || last.kind === "thinking") && !last.complete) {
+      const blocks = this.state.blocks.slice();
+      blocks.splice(blocks.length - 1, 0, this.stamp(b));
+      this.state.blocks = blocks;
+      this.emit();
+      return;
+    }
+    this.pushBlock(b);
   }
 
   /** Replace block `i` with `next` (keeping its id); new array, one new object. */
@@ -357,7 +375,7 @@ export class SessionStore {
       case "reasoning_mode_changed": {
         const mode = (d as { mode: string }).mode;
         this.bump({ reasoningMode: mode });
-        this.pushBlock({ kind: "marker", level: "note", text: `Reasoning mode → ${mode}` });
+        this.pushAnnotation({ kind: "marker", level: "note", text: `Reasoning mode → ${mode}` });
         return;
       }
       case "approval_profile_changed":
@@ -366,14 +384,14 @@ export class SessionStore {
       case "http_retry": {
         const r = d as HttpRetryEvent;
         this.bump({ retry: r });
-        this.pushBlock({ kind: "marker", level: "warn", text: `Provider retry #${r.attempt} in ${r.wait_secs}s: ${r.reason}` });
+        this.pushAnnotation({ kind: "marker", level: "warn", text: `Provider retry #${r.attempt} in ${r.wait_secs}s: ${r.reason}` });
         return;
       }
       case "external_telemetry":
         this.bump({ telemetry: (d as { telemetry: Record<string, number> }).telemetry });
         return;
       case "runtime_control":
-        this.pushBlock({ kind: "marker", level: "info", text: `Runtime control: ${String(d)}` });
+        this.pushAnnotation({ kind: "marker", level: "info", text: `Runtime control: ${String(d)}` });
         return;
       case "runtime_control_applied": {
         const a = d as RuntimeControlAppliedEvent;
@@ -382,7 +400,7 @@ export class SessionStore {
         if (a.effort_changed) parts.push("effort");
         if (a.mode_changed) parts.push("mode");
         if (a.stream_aborted) parts.push("stream aborted");
-        this.pushBlock({
+        this.pushAnnotation({
           kind: "marker",
           level: a.stream_aborted ? "warn" : "note",
           text: `Runtime control applied (${a.commands} command${a.commands === 1 ? "" : "s"})${parts.length ? `: ${parts.join(", ")}` : ""}`,
@@ -413,11 +431,13 @@ export class SessionStore {
         return;
       // --- notices ---
       case "info":
-        this.pushBlock({ kind: "marker", level: "info", text: d as string });
+        this.pushAnnotation({ kind: "marker", level: "info", text: d as string });
         return;
       case "warn":
+        this.pushAnnotation({ kind: "marker", level: "warn", text: d as string });
+        return;
       case "error":
-        this.pushBlock({ kind: "marker", level: e.event as "warn" | "error", text: d as string });
+        this.pushBlock({ kind: "marker", level: "error", text: d as string });
         return;
       case "slash":
         this.pushBlock({ kind: "slash", text: d as string, structured: false });
@@ -447,9 +467,17 @@ export class SessionStore {
       }
       case "steering_received": {
         const s = d as SteeringReceivedEvent;
-        this.pushBlock({ kind: "marker", level: "note", text: `Steering: ${s.preview}` });
+        this.pushAnnotation({ kind: "marker", level: "note", text: `Steering: ${s.preview}` });
         return;
       }
+      case "steering_applied": {
+        const s = d as SteeringReceivedEvent;
+        this.pushAnnotation({ kind: "marker", level: "note", text: `Steering applied: ${s.preview}` });
+        return;
+      }
+      case "todos.changed":
+        this.bump({ todosVersion: (this.state.todosVersion ?? 0) + 1 });
+        return;
       case "local_auth_prompt": {
         const l = d as { tool: string; message: string };
         this.pushBlock({ kind: "marker", level: "warn", text: `Credentials requested by ${l.tool}: ${l.message}` });

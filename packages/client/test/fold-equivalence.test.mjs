@@ -187,6 +187,35 @@ test("(g) steering_received marker", () => {
   assertEquivalent(journal([{ event: "steering_received", data: { preview: "focus on tests" } }]));
 });
 
+test("(g2) annotations mid-thinking do not split the block (steering, applied, info, runtime control)", () => {
+  const envelopes = journal([
+    { event: "turn_start" },
+    { event: "thinking_delta", data: "step one " },
+    { event: "steering_received", data: { messages: ["also X"], preview: "also X" } },
+    { event: "thinking_delta", data: "step two " },
+    { event: "info", data: "[phase:probe]" },
+    { event: "runtime_control", data: "thinking effort -> low" },
+    { event: "runtime_control_applied", data: { commands: 1, effort_changed: true, model_changed: false, mode_changed: false, stream_aborted: false } },
+    { event: "thinking_delta", data: "step three" },
+    { event: "thinking_block_complete", data: "step one step two step three" },
+    { event: "text_delta", data: "1\n" },
+    { event: "steering_applied", data: { messages: 1, preview: "also X" } },
+    { event: "text_delta", data: "2\n" },
+    { event: "text_block_complete", data: "1\n2\n" },
+    { event: "turn_end", data: { usage: { input: 1, output: 1, cache_create: 0, cache_read: 0, cost_usd: 0 }, failed: false } },
+  ]);
+  const store = assertEquivalent(envelopes);
+  const kinds = store.state.blocks.map((b) => b.kind);
+  // Exactly one thinking block and one text block; markers precede them.
+  assert.deepStrictEqual(kinds.filter((k) => k === "thinking"), ["thinking"]);
+  assert.deepStrictEqual(kinds.filter((k) => k === "text"), ["text"]);
+  const thinking = store.state.blocks.find((b) => b.kind === "thinking");
+  assert.equal(thinking.text, "step one step two step three");
+  assert.equal(kinds[kinds.length - 1], "text");
+  assert.equal(kinds.indexOf("thinking"), kinds.length - 3); // …, thinking, "Steering applied", text
+  assert.equal(store.state.blocks.filter((b) => b.kind === "marker").length, 5);
+});
+
 test("(h) pack_start stamps the turn's prompt block; runtime_view keeps its own pack", () => {
   const envelopes = journal([
     { event: "user_message", data: { text: "make a report" } },

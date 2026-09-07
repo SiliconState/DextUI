@@ -63,6 +63,15 @@ export function fold(journal) {
     openThinking = null;
   };
 
+  // Mid-stream annotations (steering acks, runtime controls, info/warn) sit
+  // *before* a trailing open text/thinking block, so the stream keeps
+  // accumulating into one block instead of splitting around the marker.
+  const annotate = (marker) => {
+    const last = blocks[blocks.length - 1];
+    if (last && (last.kind === "text" || last.kind === "thinking") && last.complete === false) blocks.splice(blocks.length - 1, 0, marker);
+    else blocks.push(marker);
+  };
+
   const mergeTool = (d, patch) => {
     // name/summary are sticky: an event that omits them (or sends "") never
     // clears what an earlier event set — tool_call_preview often carries the
@@ -176,10 +185,10 @@ export function fold(journal) {
         blocks.push({ kind: "marker", level: "warn", text: `Credentials requested by ${d.tool}: ${d.message}` });
         break;
       case "info":
-        blocks.push({ kind: "marker", level: "info", text: d });
+        annotate({ kind: "marker", level: "info", text: d });
         break;
       case "warn":
-        blocks.push({ kind: "marker", level: "warn", text: d });
+        annotate({ kind: "marker", level: "warn", text: d });
         break;
       case "error":
         blocks.push({ kind: "marker", level: "error", text: d });
@@ -225,18 +234,21 @@ export function fold(journal) {
         blocks.push({ kind: "marker", level: "warn", text: "Interrupted." });
         break;
       case "steering_received":
-        blocks.push({ kind: "marker", level: "note", text: `Steering: ${d.preview}` });
+        annotate({ kind: "marker", level: "note", text: `Steering: ${d.preview}` });
+        break;
+      case "steering_applied":
+        annotate({ kind: "marker", level: "note", text: `Steering applied: ${d.preview}` });
         break;
       // Events the client store also surfaces as markers (parity is asserted by
       // the fold-equivalence test); keep the wording byte-identical.
       case "http_retry":
-        blocks.push({ kind: "marker", level: "warn", text: `Provider retry #${d.attempt} in ${d.wait_secs}s: ${d.reason}` });
+        annotate({ kind: "marker", level: "warn", text: `Provider retry #${d.attempt} in ${d.wait_secs}s: ${d.reason}` });
         break;
       case "reasoning_mode_changed":
-        blocks.push({ kind: "marker", level: "note", text: `Reasoning mode → ${d.mode}` });
+        annotate({ kind: "marker", level: "note", text: `Reasoning mode → ${d.mode}` });
         break;
       case "runtime_control":
-        blocks.push({ kind: "marker", level: "info", text: `Runtime control: ${String(d)}` });
+        annotate({ kind: "marker", level: "info", text: `Runtime control: ${String(d)}` });
         break;
       case "runtime_control_applied": {
         const parts = [];
@@ -244,7 +256,7 @@ export function fold(journal) {
         if (d.effort_changed) parts.push("effort");
         if (d.mode_changed) parts.push("mode");
         if (d.stream_aborted) parts.push("stream aborted");
-        blocks.push({
+        annotate({
           kind: "marker",
           level: d.stream_aborted ? "warn" : "note",
           text: `Runtime control applied (${d.commands} command${d.commands === 1 ? "" : "s"})${parts.length ? `: ${parts.join(", ")}` : ""}`,
