@@ -500,7 +500,8 @@ export class SessionStore {
         return;
       case "local_auth_prompt": {
         const l = d as { tool: string; message: string };
-        this.pushBlock({ kind: "marker", level: "warn", text: `Credentials requested by ${l.tool}: ${l.message}` });
+        const pack = this.state.activePack ?? undefined;
+        this.pushBlock({ kind: "marker", level: "warn", text: `Credentials requested by ${l.tool}: ${l.message}`, auth: { tool: l.tool, message: l.message, ...(pack ? { pack } : {}) } });
         return;
       }
       default:

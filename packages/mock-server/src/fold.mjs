@@ -56,6 +56,8 @@ export function fold(journal) {
   const pendingRequests = new Map();
   let openText = null;
   let openThinking = null;
+  // Client parity: pack_start sets the turn's active pack; turn_end clears it.
+  let activePack = null;
 
   // End of turn (or interrupt): no streaming block may stay open. Seal every
   // incomplete text/thinking block, not just the current pointers — a stream
@@ -185,10 +187,11 @@ export function fold(journal) {
             break;
           }
         }
+        activePack = d.name;
         break;
       }
       case "local_auth_prompt":
-        blocks.push({ kind: "marker", level: "warn", text: `Credentials requested by ${d.tool}: ${d.message}` });
+        blocks.push({ kind: "marker", level: "warn", text: `Credentials requested by ${d.tool}: ${d.message}`, auth: { tool: d.tool, message: d.message, ...(activePack ? { pack: activePack } : {}) } });
         break;
       case "info":
         annotate({ kind: "marker", level: "info", text: d });
@@ -234,6 +237,7 @@ export function fold(journal) {
       }
       case "turn_end":
         sealOpen();
+        activePack = null;
         break;
       case "interrupted":
         sealOpen();

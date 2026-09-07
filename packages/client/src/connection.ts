@@ -9,6 +9,7 @@ import {
   CREW_EXT,
   DIRS_EXT,
   FLOWS_EXT,
+  PACK_CREDENTIALS_EXT,
   PACK_EXT,
   SELF_HOST_EXT,
   SELF_UI_EXT,
@@ -365,6 +366,14 @@ export class Connection {
 
   hostRestartCancel(): void {
     this.sendRaw(cmd(`${SELF_HOST_EXT}.restart_cancel`, {}));
+  }
+
+  // ---------- pack credentials ----------
+
+  /** Values are sent once and stored host-side (0600, DEXT_HOME); nothing
+   *  comes back but names. `clear` removes stored names. */
+  packCredentialsSet(name: string, values: Record<string, string>, clear: string[] = []): void {
+    this.sendRaw(cmd(`${PACK_CREDENTIALS_EXT}.set`, { name, values, ...(clear.length ? { clear } : {}) }));
   }
 
   // ---------- flows (host-prefixed until promoted) ----------

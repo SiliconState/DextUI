@@ -6,6 +6,7 @@
   import { app, copyText, packOfPrompt, prefillComposer } from "../lib/state.svelte";
   import { humanizeTool, humanizeLabel, parseRunMeta } from "../lib/display";
   import { fileUrl, htmlPathIn } from "../lib/files";
+  import { packForAuthMarker, openPackCredentials } from "../lib/packcreds.svelte";
   import { prettyPath } from "../lib/markdown";
   import Markdown from "./Markdown.svelte";
   import Diff from "./Diff.svelte";
@@ -32,6 +33,9 @@
   // text. Older journals fall back to the `/pack run <name>` prefix, which the
   // host only ever accepts for catalog names.
   const userPack = $derived(block.kind === "user" ? (block.pack ?? packOfPrompt(block.text)) : null);
+  // A local_auth_prompt marker offers the credentials dialog for the pack it
+  // belongs to (active pack when known, else name/tool/message inference).
+  const authPack = $derived(block.kind === "marker" && block.auth ? packForAuthMarker(block.auth) : null);
   const packMeta = $derived(block.kind === "view" ? app.packs.find((p) => p.name === block.pack) : undefined);
 
   function editPack(name: string) {
@@ -249,6 +253,9 @@
   {:else}
     <div class={`b-marker ${markerClass[block.level] ?? "st-faint"}`} data-agent-id="block.marker">
       {markerGlyph[block.level] ?? "·"} {block.text}
+      {#if authPack}
+        <button class="act hover-act" data-agent-id="block.marker.creds" data-pack={authPack} title="Values are stored on the host and handed to dext as environment — never shown in chat" onclick={() => openPackCredentials(authPack)}>Provide credentials…</button>
+      {/if}
     </div>
   {/if}
 {:else if block.kind === "slash"}

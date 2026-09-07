@@ -7,6 +7,7 @@ import { acceptCrews, crewEscalations, onCrewControl, openRun } from "./crew.sve
 import { onPackControl } from "./packsheet.svelte";
 import { acceptSelf, onSelfControl, onSelfReconnected } from "./selfedit.svelte";
 import { onDirsControl, onFolderEvent } from "./folders.svelte";
+import { onPackCredsControl } from "./packcreds.svelte";
 import { onConnectorsControl } from "./connectors.svelte";
 import { onFlowsControl } from "./flows.svelte";
 import { onTasksControl } from "./tasks.svelte";
@@ -654,6 +655,7 @@ export function start(token: string): void {
     onPackControl(env);
     onSelfControl(env);
     onDirsControl(env);
+    onPackCredsControl(env);
     onConnectorsControl(env);
     onFlowsControl(env);
     onTasksControl(env);

@@ -193,7 +193,22 @@ export interface PackInfo {
   ui: PackUi;
   /** Requirements the host could not satisfy right now (subset of `ui.requires`). */
   unmet: string[];
+  /** Env names the pack's PACK.md `credential-env` declares (dext scrubs all
+   *  other credential-looking variables from its tool commands). */
+  credential_env?: string[];
+  /** Names-only status of the host's stored values (cap `pack_credentials`). */
+  credentials?: PackCredentialStatus;
 }
+
+export interface PackCredentialStatus {
+  set: string[];
+  missing: string[];
+}
+
+/** `x-agentlinkd.packs.credentials.set`: values are sent once and stored
+ *  under DEXT_HOME (0600); the reply is `x-agentlinkd.packs.credentials`
+ *  (`{ name } & PackCredentialStatus`) and a `packs.changed` broadcast. */
+export const PACK_CREDENTIALS_EXT = "x-agentlinkd.packs.credentials";
 
 /** `GET /packs/:name`: metadata plus a shallow, read-only listing. */
 export interface PackDetail extends PackInfo {
@@ -799,9 +814,17 @@ export type Block =
       output_tail?: string;
     }
   | { kind: "user"; text: string; pack?: string }
-  | { kind: "marker"; level: "info" | "warn" | "error" | "note"; text: string }
+  | { kind: "marker"; level: "info" | "warn" | "error" | "note"; text: string; auth?: MarkerAuth }
   | { kind: "slash"; text: string; structured: boolean }
   | { kind: "view"; pack: string; title: string; markdown: string };
+
+/** A `local_auth_prompt` marker: which tool asked and, when known, which pack
+ *  was active — the client offers "Provide credentials…" for that pack. */
+export interface MarkerAuth {
+  tool: string;
+  message: string;
+  pack?: string;
+}
 
 export interface SnapshotEvent {
   meta: SessionMeta;

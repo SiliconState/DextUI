@@ -57,6 +57,9 @@ const CAPABILITIES = [
   "connectors",
   // x-agentlinkd.auth.* over an in-memory provider store.
   "provider_auth",
+  // x-agentlinkd.packs.credentials.set over an in-memory value store —
+  // values never echo back, only the names-only status event.
+  "pack_credentials",
 ];
 
 // In-memory connectors + provider auth so the picker's Connected section and
@@ -132,12 +135,16 @@ const PACKS = [
   { name: "hello-chart", shelf: "samples", description: "Emit one interactive chart fence. Guaranteed sub-10 s artifact.", source: "bundled", path: "/mock/samples/packs/hello-chart",
     ui: { starter_prompt: "Run hello-chart", artifact: "chart", time_to_first_artifact: 3, requires: [], gallery: true, tags: ["sample"], icon: "chart" }, unmet: [] },
   { name: "report", shelf: "research", description: "Generate self-contained interactive HTML5 reports from a small JSON spec.", source: "user:~/.dext/shelves/research", path: "/mock/research/packs/report",
-    ui: { starter_prompt: "Summarise this workspace as an HTML report", artifact: "html", time_to_first_artifact: 45, requires: ["approval:auto-write"], gallery: true, tags: ["research"], icon: "report" }, unmet: ["approval:auto-write"] },
+    ui: { starter_prompt: "Summarise this workspace as an HTML report", artifact: "html", time_to_first_artifact: 45, requires: ["approval:auto-write"], gallery: true, tags: ["research"], icon: "report" }, credential_env: ["REPORT_API_KEY"], credentials: { set: [], missing: ["REPORT_API_KEY"] }, unmet: ["approval:auto-write"] },
   { name: "agent_browser", shelf: "engineering", description: "Headless Chromium automation via the agent-browser CLI.", source: "user:~/.dext/shelves/engineering", path: "/mock/engineering/packs/agent_browser",
     ui: { starter_prompt: "Fetch the title of example.com", artifact: "markdown", time_to_first_artifact: 20, requires: ["chromium"], gallery: true, tags: ["browser"], icon: "browser" }, unmet: ["chromium"] },
   { name: "mesh", shelf: "orchestration", description: "Peer-to-peer mailbox between independent Dext sessions.", source: "user:~/.dext/shelves/orchestration", path: "/mock/orchestration/packs/mesh",
     ui: { starter_prompt: "/pack run mesh ", artifact: "markdown", time_to_first_artifact: 0, requires: [], gallery: false, tags: [], }, unmet: [] },
 ];
+
+// In-memory pack credential values (real host: 0600 files under DEXT_HOME).
+// Only names ever leave this process — same rule as the real store.
+const PACK_CRED_STORE = new Map();
 
 // Host-driven composer completion (mirrors the slash.* caps above).
 const COMMANDS = [
@@ -611,6 +618,34 @@ function handleCommand(client, frame) {
     case "ping":
       sendControl(client, "pong", {});
       return;
+
+    case "x-agentlinkd.packs.credentials.set": {
+      const pack = PACKS.find((p) => p.name === frame.name);
+      if (!pack?.credential_env?.length) {
+        sendError(client, "no_pack", `pack '${frame.name}' declares no credentials`, frame.cmd);
+        return;
+      }
+      if (frame.values !== undefined && (frame.values === null || typeof frame.values !== "object" || Array.isArray(frame.values))) {
+        sendError(client, "bad_request", "values must be an object of NAME → value", frame.cmd);
+        return;
+      }
+      const allowed = new Set(pack.credential_env);
+      const store = PACK_CRED_STORE.get(pack.name) ?? {};
+      for (const [k, v] of Object.entries(frame.values ?? {})) {
+        if (!allowed.has(k)) { sendError(client, "bad_request", `${k} is not a credential this pack declares`, frame.cmd); return; }
+        if (typeof v !== "string" || !v.trim()) { sendError(client, "bad_request", `${k}: value must be a non-empty string`, frame.cmd); return; }
+        store[k] = v.trim();
+      }
+      for (const k of frame.clear ?? []) {
+        if (!allowed.has(k)) { sendError(client, "bad_request", `${k} is not a credential this pack declares`, frame.cmd); return; }
+        delete store[k];
+      }
+      PACK_CRED_STORE.set(pack.name, store);
+      const set = pack.credential_env.filter((n) => store[n]);
+      pack.credentials = { set, missing: pack.credential_env.filter((n) => !store[n]) };
+      sendControl(client, "x-agentlinkd.packs.credentials", { name: pack.name, ...pack.credentials });
+      return;
+    }
 
     case "hello":
       sendError(client, "already_authenticated", "hello already completed");

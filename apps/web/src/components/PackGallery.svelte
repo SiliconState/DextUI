@@ -7,6 +7,12 @@
   import type { PackInfo } from "@dextui/protocol";
   import { app, packStarter, packUnmet, prefillComposer } from "../lib/state.svelte";
   import { openPackSheet, openPackPanel, packEditEnabled } from "../lib/packsheet.svelte";
+  import { openPackCredentials, packCredsEnabled } from "../lib/packcreds.svelte";
+  /** "Credentials 2/7" chip data for packs that declare credential-env. */
+  function credChip(p: { credential_env?: string[]; credentials?: { set: string[] } }): { set: number; total: number } | null {
+    if (!packCredsEnabled() || !p.credential_env?.length) return null;
+    return { set: p.credentials?.set.length ?? 0, total: p.credential_env.length };
+  }
   import { PERSONAS, persona, setPersona, personaTitle, packTitle, humanRequirement, galleryGroups } from "../lib/persona.svelte";
   import { foldersEnabled, openFolderPicker } from "../lib/folders.svelte";
 
@@ -129,8 +135,12 @@
               {/if}
             </span>
           </button>
-          {#if p.ui.panel || p.ui.actions?.length}
+          {#if p.ui.panel || p.ui.actions?.length || credChip(p)}
             <div class="chips">
+              {#if credChip(p)}
+                {@const cc = credChip(p)!}
+                <button class="chip" class:st-yellow={cc.set === 0} data-agent-id={`packs.creds.${p.name}`} data-state={cc.set === 0 ? "unset" : "set"} title="Provide the credentials this pack declares — stored on the host, never in the chat" onclick={() => openPackCredentials(p.name)}>Credentials {cc.set}/{cc.total}</button>
+              {/if}
               {#if p.ui.panel}
                 <button class="chip" data-agent-id={`packs.panelbtn.${p.name}`} onclick={() => openPackPanel(p.name)}>Panel</button>
               {/if}

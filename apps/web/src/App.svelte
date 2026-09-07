@@ -33,6 +33,8 @@
   import PackSheet from "./components/PackSheet.svelte";
   import FolderPicker from "./components/FolderPicker.svelte";
   import Providers from "./components/Providers.svelte";
+  import PackCredentials from "./components/PackCredentials.svelte";
+  import { packCreds, closePackCredentials } from "./lib/packcreds.svelte";
   import { folders, closeFolderPicker, foldersEnabled, openFolderPicker } from "./lib/folders.svelte";
   import { providers, closeProviders } from "./lib/connectors.svelte";
   import FlowCanvas from "./components/FlowCanvas.svelte";
@@ -124,6 +126,7 @@
       if (e.key === "Escape") {
         if (inspect) inspect = null;
         else if (providers.open) closeProviders();
+        else if (packCreds.open) closePackCredentials();
         else if (folders.open) closeFolderPicker();
         else if (flows.open) closeFlows();
         else if (packSheet.panelOpen) closePackPanel();
@@ -164,7 +167,7 @@
       }
       // The run sheet owns its keys (j/k/x/a…) so the global a/s/d and
       // hero-typing handlers below never see them while it is open.
-      if (app.paletteOpen || app.shortcutsOpen || inspect || app.eventsOpen || app.galleryOpen || packSheet.open || crew.openId || folders.open || flows.open) return;
+      if (app.paletteOpen || app.shortcutsOpen || inspect || app.eventsOpen || app.galleryOpen || packSheet.open || crew.openId || folders.open || flows.open || packCreds.open) return;
       const editing = e.target instanceof HTMLElement && (e.target.matches("input, textarea") || e.target.isContentEditable);
       if (!editing && app.activeId && (e.ctrlKey || e.metaKey) && e.key === "Backspace") {
         e.preventDefault();
@@ -423,6 +426,7 @@
 <PackSheet />
 <FolderPicker />
 <Providers />
+<PackCredentials />
 <FlowCanvas />
 <Tasks />
 

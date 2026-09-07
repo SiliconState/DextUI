@@ -35,6 +35,7 @@ import { GALLERY_DEFAULTS, PACK_NAME_RE, buildCatalog, listPackFiles, listPackTr
 import { RUN_ID_RE as CREW_RUN_ID_RE, TAIL_MAX_LINES, createCrewAdapter } from "./crew.mjs";
 import { createSelfEdit, resolveStaticDir } from "./selfedit.mjs";
 import { confine, createDir, listDirs } from "./dirs.mjs";
+import { applyCredentialPatch, mergedPackCredentialEnv, packCredentialStatus, readPackCredentials, writePackCredentials } from "./pack-credentials.mjs";
 import { createConnectors } from "./connectors.mjs";
 import { compileFlow, deleteFlow, listFlows, readFlow, writeFlow } from "./flows.mjs";
 import { createScheduler } from "./triggers.mjs";
@@ -76,8 +77,12 @@ const DEXT_PATH = (() => {
   return [...dirs.filter((d) => !have.includes(d)), ...have].filter(Boolean).join(path.delimiter);
 })();
 function dextEnv(extra = {}) {
-  return { ...process.env, PATH: DEXT_PATH, DEXT_NO_TUI: "1", ...extra };
+  // PACK_CRED_ENV: every stored pack credential (see pack-credentials.mjs) —
+  // the CLI's "export before dext" model; dext's scrubber exposes only the
+  // active pack's declared names to its tool commands.
+  return { ...process.env, ...PACK_CRED_ENV, PATH: DEXT_PATH, DEXT_NO_TUI: "1", ...extra };
 }
+let PACK_CRED_ENV = {};
 const DEXT_HOME = process.env.DEXT_HOME ? path.resolve(process.env.DEXT_HOME) : path.join(process.env.HOME ?? "", ".dext");
 const DEFAULT_CWD = path.resolve(argValue("cwd", process.cwd()));
 const DEFAULT_APPROVAL = argValue("approval", process.env.DEXT_APPROVAL ?? "auto-read");
@@ -375,6 +380,10 @@ const CAPABILITIES = [
   // x-agentlinkd.auth.{status,login,logout}: provider sign-in through
   // `dext auth login|logout` — dext's auth store is the only credential holder.
   "provider_auth",
+  // x-agentlinkd.packs.credentials.set: values for a pack's `credential-env`
+  // names, stored under DEXT_HOME (0600) and injected into dext children.
+  // Names-only status rides on PackInfo.credentials; values never come back.
+  "pack_credentials",
 ];
 
 // Root of the folder picker — and of every session folder a client may name.
@@ -438,6 +447,14 @@ const GALLERY = argValue("gallery", process.env.DEXTUI_GALLERY) ? loadGallery(pa
 // Refreshes are async and serialized: a sync spawn on the event loop would
 // stall every WebSocket client for up to 15 s while dext walks the shelves.
 let PACKS = buildCatalog(dextOutput(PACK_LIST_ARGS), { approval: DEFAULT_APPROVAL, gallery: GALLERY });
+function refreshPackCredentialEnv() {
+  PACK_CRED_ENV = mergedPackCredentialEnv(DEXT_HOME, PACKS);
+}
+refreshPackCredentialEnv();
+/** Catalog as clients see it: names-only credential status per pack. */
+function publicPacks() {
+  return PACKS.map((p) => (p.credential_env?.length ? { ...p, credentials: packCredentialStatus(DEXT_HOME, p.name, p.credential_env) } : p));
+}
 let packRefresh = null;
 let packRefreshDirty = false;
 let packWatchTimer = null;
@@ -480,8 +497,11 @@ function refreshPacks() {
       } else {
         const next = buildCatalog(stdout, { approval: DEFAULT_APPROVAL, gallery: GALLERY });
         const changed = JSON.stringify(next) !== JSON.stringify(PACKS);
-        PACKS = next;
-        if (changed) broadcastControl("packs.changed", { packs: PACKS, commands: hostCommands() });
+        if (changed) {
+          PACKS = next;
+          refreshPackCredentialEnv();
+        }
+        if (changed) broadcastControl("packs.changed", { packs: publicPacks(), commands: hostCommands() });
       }
       if (packRefreshDirty) {
         packRefreshDirty = false;
@@ -1237,12 +1257,29 @@ function handleBridgeEvent(s, v) {
   publish(journalData(s, v.event, d));
 }
 
+/** A pack run starting with none of its declared credentials stored: say so
+ *  up front, in the same event dext uses when a tool asks (so the client's
+ *  "Provide credentials…" action applies), instead of letting the agent burn
+ *  a turn discovering it. Partial sets are the pack's business (cookie vs
+ *  OAuth groups); only "nothing at all" is flagged. */
+function warnMissingPackCredentials(s, packRun) {
+  const pack = packRun?.sub === "run" ? packByName(packRun.name) : null;
+  if (!pack?.credential_env?.length) return;
+  const status = packCredentialStatus(DEXT_HOME, pack.name, pack.credential_env);
+  if (status.set.length > 0) return;
+  publish(journalData(s, "local_auth_prompt", {
+    tool: pack.name,
+    message: `this pack uses ${status.missing.join(", ")} and none are set — provide them once (they never enter the chat), or the run may fail at the first call.`,
+  }));
+}
+
 function runBridgedTurn(s, prompt) {
   s.working = true; // optimistic: Send disables at once; turn_start confirms
   s.turnStartedAt = Date.now();
   s.killed = false;
   const packRun = parsePackSlash(prompt);
   const text = packRun?.sub === "run" && packByName(packRun.name) ? `/pack run ${packRun.name} ${packRun.task}` : prompt;
+  warnMissingPackCredentials(s, packRun);
   ensureBridge(s).then((bridge) => {
     if (s.deleted) return;
     // Ownership stamp: onExit only fails a turn whose bridge carried it.
@@ -1307,6 +1344,7 @@ function runTurn(s, prompt) {
     args.push("--pack", packRun.name);
     stdinText = packRun.task;
   }
+  warnMissingPackCredentials(s, packRun);
   const resume = resumeTarget(s);
   if (typeof resume === "string") args.push(`--resume=${resume}`);
   else if (resume) args.push("--resume");
@@ -1961,7 +1999,7 @@ async function handleCommand(client, frame) {
       model_catalog: MODEL_CATALOG,
       effort_options: EFFORT_OPTIONS,
       commands: hostCommands(),
-      packs: PACKS,
+      packs: publicPacks(),
       home: DIRS_ROOT,
       ...(CREW ? { crews: CREW.summaries() } : {}),
       ...(SELF.enabled ? { self: SELF.status() } : {}),
@@ -2328,6 +2366,41 @@ async function handleCommand(client, frame) {
       }
       if (typeof frame.cmd === "string" && frame.cmd.startsWith("x-agentlinkd.flows.")) {
         handleFlowsCommand(client, frame);
+        return;
+      }
+      if (frame.cmd === "x-agentlinkd.packs.credentials.set") {
+        // Values arrive once, are written to DEXT_HOME (0600) and never echoed;
+        // the reply and the catalog carry names only. Children pick the new
+        // env up on their next spawn: idle bridges recycle now, busy ones at
+        // turn end — a running turn keeps the env it started with.
+        const pack = packByName(frame.name);
+        if (!pack) {
+          sendError(client, "no_pack", `unknown pack ${String(frame.name)}`, frame.cmd);
+          return;
+        }
+        if (!pack.credential_env?.length) {
+          sendError(client, "bad_request", `${pack.name} declares no credential-env`, frame.cmd);
+          return;
+        }
+        const r = applyCredentialPatch(readPackCredentials(DEXT_HOME, pack.name), pack.credential_env, frame.values, frame.clear);
+        if (r.error) {
+          sendError(client, "bad_request", r.error, frame.cmd);
+          return;
+        }
+        try {
+          writePackCredentials(DEXT_HOME, pack.name, r.values);
+        } catch (err) {
+          sendError(client, "write_failed", `could not store credentials: ${err.message}`, frame.cmd);
+          return;
+        }
+        refreshPackCredentialEnv();
+        for (const s of sessions.values()) {
+          if (!s.bridge || s.bridge.exited) continue;
+          if (s.working) s.recycleOnTurnEnd = true;
+          else recycleBridge(s);
+        }
+        sendControl(client, "x-agentlinkd.packs.credentials", { name: pack.name, ...packCredentialStatus(DEXT_HOME, pack.name, pack.credential_env) });
+        broadcastControl("packs.changed", { packs: publicPacks(), commands: hostCommands() });
         return;
       }
       if (frame.cmd === "x-agentlinkd.dirs.list") {
@@ -3149,7 +3222,7 @@ const server = http.createServer((req, res) => {
     if (!checkAuth(req, res, false)) return;
     if (pathName === "/packs") {
       res.writeHead(200, { "content-type": "application/json", "cache-control": "private, no-store" });
-      res.end(JSON.stringify({ packs: PACKS }));
+      res.end(JSON.stringify({ packs: publicPacks() }));
       return;
     }
     let name;
