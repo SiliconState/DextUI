@@ -644,6 +644,9 @@ function handleCommand(client, frame) {
       const set = pack.credential_env.filter((n) => store[n]);
       pack.credentials = { set, missing: pack.credential_env.filter((n) => !store[n]) };
       sendControl(client, "x-agentlinkd.packs.credentials", { name: pack.name, ...pack.credentials });
+      // Parity with the real host: the chip reads app.packs, which only moves
+      // on packs.changed — without this the mock's counts stale until reconnect.
+      broadcastControl("packs.changed", { packs: PACKS, commands: COMMANDS });
       return;
     }
 

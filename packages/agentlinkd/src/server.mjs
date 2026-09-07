@@ -79,8 +79,10 @@ const DEXT_PATH = (() => {
 function dextEnv(extra = {}) {
   // PACK_CRED_ENV: every stored pack credential (see pack-credentials.mjs) —
   // the CLI's "export before dext" model; dext's scrubber exposes only the
-  // active pack's declared names to its tool commands.
-  return { ...process.env, ...PACK_CRED_ENV, PATH: DEXT_PATH, DEXT_NO_TUI: "1", ...extra };
+  // active pack's declared names to its tool commands. A name the operator
+  // already exported wins over the store — same rule as patches/dext/0004.
+  const stored = Object.fromEntries(Object.entries(PACK_CRED_ENV).filter(([k]) => process.env[k] === undefined));
+  return { ...process.env, ...stored, PATH: DEXT_PATH, DEXT_NO_TUI: "1", ...extra };
 }
 let PACK_CRED_ENV = {};
 const DEXT_HOME = process.env.DEXT_HOME ? path.resolve(process.env.DEXT_HOME) : path.join(process.env.HOME ?? "", ".dext");

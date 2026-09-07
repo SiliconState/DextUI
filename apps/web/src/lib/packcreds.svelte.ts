@@ -26,8 +26,10 @@ export function packWithCredentials(name: string): (PackInfo & { credential_env:
 
 /** Which pack a "credentials requested" marker is about: the active pack if
  *  known, else a pack whose name is the tool, else the pack declaring an env
- *  name the message mentions. */
+ *  name the message mentions. Null when the host cannot take credentials —
+ *  a button that silently no-ops is worse than no button. */
 export function packForAuthMarker(auth: { tool: string; message: string; pack?: string }): string | null {
+  if (!packCredsEnabled()) return null;
   if (auth.pack && packWithCredentials(auth.pack)) return auth.pack;
   if (packWithCredentials(auth.tool)) return auth.tool;
   for (const p of app.packs) {

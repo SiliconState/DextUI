@@ -14,13 +14,17 @@
   let values = $state<Record<string, string>>({});
   let clear = $state<Record<string, boolean>>({});
   let reveal = $state(false);
+  let firstEl = $state<HTMLInputElement | null>(null);
 
   // Fresh fields every time the dialog opens; nothing lingers after submit.
+  // The rAF focus runs after useDialog's own rAF (its effect registers
+  // first), so the first input — not the esc button — ends up focused.
   $effect(() => {
     if (packCreds.open) {
       values = {};
       clear = {};
       reveal = false;
+      requestAnimationFrame(() => firstEl?.focus());
     }
   });
   const filledCount = $derived(Object.values(values).filter((v) => v.trim()).length);
@@ -32,9 +36,9 @@
     submitPackCredentials(values, Object.keys(clear).filter((k) => clear[k]));
     values = {};
   }
-  /** Focus the first field when the dialog (re)renders its list. */
-  function autofocus(el: HTMLInputElement, first: boolean) {
-    if (first) el.focus();
+  /** Remember the first field for the open-focus rAF (see $effect). */
+  function firstField(el: HTMLInputElement, first: boolean) {
+    if (first) firstEl = el;
   }
   function onKey(e: KeyboardEvent) {
     dlg.onKey(e);
@@ -66,7 +70,7 @@
             </label>
             <input
               id={`cred-${n}`}
-              use:autofocus={i === 0}
+              use:firstField={i === 0}
               bind:value={values[n]}
               type={reveal ? "text" : "password"}
               autocomplete="off"
