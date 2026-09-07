@@ -1,59 +1,65 @@
-# Crew live monitoring: DextUI review
+# Crew live monitoring
 
-## Current scope after rollback
+## Scope
 
-The transcript redesign was rejected and reverted. Keep the original typography, layout, tool command/output presentation, advisory treatment, sidebar, status bar and approval UI. Only redundant tool-name prefixes and grouping of **more than three** consecutive same-tool calls remain changed.
+Preserve the original UI styling, layout, typography, tool/output presentation, advisories, sidebar and approval UI. The only retained transcript changes are redundant tool-name cleanup and batches of more than three consecutive same-tool calls (`cfbac11`). Crew monitoring changes below are transport and lifecycle behavior, not a redesign.
 
-The previous polling, sidecar and protocol changes were also reverted to establish a clean baseline. Nothing below should be read as already implemented. The next work is crew/subagent streaming infrastructure, not a UI redesign.
+## Implemented: live log transport and worker discovery
 
-## Implementation sequence — preserve the existing UI
+- The selected worker's existing log pane subscribes over the authenticated WebSocket. No repeated browser `tail` requests. Switching workers replaces the single subscription; closing the pane/run or disconnecting releases it. Hidden tabs unsubscribe and resume when visible.
+- Host directory notifications drive reads, throttled to at most one per 100 ms, with a 250 ms reconciliation timer for missed notifications. Only new bytes are sent. A fixture measured 245 ms from file append to WebSocket receipt; this is not a live-model/browser rendering latency guarantee.
+- Chunks are bounded to 32 KiB, initial replay to the latest 64 KiB, and the client retains 64K UTF-16 code units plus its existing bounded line view. Bytes travel as base64 so a persistent UTF-8 decoder handles split characters. Sending yields while the socket has at least 256 KiB queued; there is no per-worker unbounded queue.
+- Reconnect uses `{generation, offset}` cursors. Generation includes file identity and the available `.state` process identity. Replacement, truncation below the cursor, or attempt changes reset the view and explicitly report a gap. Cursors never authorize paths. The host validates worker membership and confines regular non-symlink log access to the run.
+- Dynamic worker directories with valid `.state` files are discovered before manifest materialization (scan bounded to 2048 directory entries per dynamic group). Keys are derived from step index plus worker directory identity, so later materialization/reordering does not switch the selected worker. Existing numeric sequential/parallel keys remain unchanged.
+- Known sidecar status leads nonterminal manifest status; terminal manifest outcomes remain authoritative. Manifest watches have a non-resetting 500 ms coalescing window and unconditional two-second reconciliation (plus coalescing delay). Watchers are closed with the adapter.
+- Captured crew workers rotate `live.log` at 8 MiB, retaining one `live.log.1` segment: at most 16 MiB total. Reruns clear both. stdout/stderr share the rotation lock. This producer change is in the global crew pack's `src/child.rs`, not dext core.
 
-1. **Producer contract:** emit stable run/worker/attempt IDs and versioned, sequenced, timestamped worker events. Register dynamic children at spawn rather than after they complete. Keep crew as process owner and preserve existing result artifacts.
-2. **Durable bounded event capture:** capture narration, thinking, tool lifecycle/output and worker lifecycle separately from plain logs. Rotate storage with explicit gap/reset semantics instead of stopping at 8 MiB. Confirm what dext core can emit before choosing its launch flags or bridge mode.
-3. **Authenticated host relay:** add per-worker subscribe/unsubscribe with replay cursors, reconnect recovery, bounded queues and backpressure. Watch for new events; reconcile lifecycle snapshots periodically. Do not stream every worker's complete history to every browser.
-4. **Existing monitor integration:** feed the selected worker's existing pane from the subscription rather than manual refresh. Reuse current transcript components for structured events without changing their styling. Stop subscriptions when the pane closes; resume from the cursor after reconnect.
-5. **Measure a live test:** use a small explicitly authorized crew to verify dynamic registration, incremental narration/tools, worker switches and reconnects. Target <500 ms host-event-to-browser latency. Do not claim streaming is complete based on polling or unit tests alone.
+### Exact limits of this slice
 
-Interactive tool permissions are a separate phase after read-only observability works end to end.
+This is **live plain-log streaming**, not a structured subagent transcript. The reader does not replay the archived segment: rotation advances to the newest retained window with an explicit gap. It is not lossless archival. Existing producer captures remain bounded to 1 MiB per stream for result assembly; exceeding that can still fail the worker result. tmux `pipe-pane` capture is unchanged.
 
-## Why the current monitor lags
+Attempt identity is currently inferred from `.state` start time/PID/process-start ticks and file identity, not a producer-assigned durable attempt UUID. A legacy in-place truncate followed by regrowth beyond a cursor between observations cannot always be detected. The captured producer now rotates via replacement, but explicit attempt IDs are still required for structured replay.
 
-`apps/web/src/components/CrewRun.svelte` only ticked elapsed time. Worker `live.log` fetched on selection or manual refresh, not automatically. `packages/agentlinkd/src/crew.mjs` only enabled its 15 s reconciliation timer when initial watch installation threw. Its resetting debounce could starve under continuous writes. Worker sidecars supplied timing but not live status.
+Missing logs stay subscribed so queued workers can start later. Broad project/run scans, large fanouts, hidden-tab behavior in real browsers and sustained noisy-worker throughput still need live workload measurement. Log updates are not lifecycle heartbeats; silence does not mean failure.
 
-## Remaining work, in priority order
+## Next implementation: structured transcripts, end to end
 
-### 1. Complete crew status/log parity
+### Existing core interfaces (verified from source)
 
-The global crew pack at `~/.dext/shelves/orchestration/packs/crew` is Rust-backed. `src/render.rs::worker_rows` discovers dynamic fanout worker directories with `.state` files before they are materialized in the manifest. DextUI currently enumerates manifest workers only. Add producer-assigned stable worker/attempt IDs and incremental registration, or implement confined sidecar discovery with stable adapter keys and tail routing. Otherwise newly spawned dynamic children may appear late even with faster refresh.
+Dext already supports `--output stream-json` and `--input ndjson`. `src/main.rs::JsonSink` serializes agent events, but currently **filters out `ToolOutputDelta`**. Its permission bridge emits `permission_request` and waits for a matching reply; stale replies are ignored and timeout/disconnection denies. Crew currently launches `dext -p --no-session` with plain text output and task stdin, then closes stdin. It does not use these interfaces.
 
-`src/child.rs::capture_pipe` tees stdout/stderr to a combined `live.log`. Its sink stops writing at 8 MiB (`write_capped_log`), rather than rotating. Once capped, no browser refresh can produce newer output. Implement bounded rotation with attempt IDs and explicit truncation/reset events. Separate last-received time from last-output time in the UI.
+Do not merely add `--output stream-json` to the existing launch: crew's result assembler expects plain stdout/handoffs. JSON framing must be separated from the existing result contract, and bridge mode needs an explicit end-of-turn shutdown so a one-shot crew worker does not remain alive waiting for another prompt.
 
-Replace repeated tail requests with authenticated subscribe/unsubscribe and cursor-based chunks. Include run, worker, attempt, offset/sequence and timestamp; support reconnect replay, log rotation, bounded buffering and slow-client backpressure. Keep a low-rate snapshot reconciliation path. Target <500 ms visible update latency, measured rather than assumed.
+### Producer/event contract
 
-### 2. Structured subagent transcripts
+1. Allocate a durable attempt ID before spawn and write an atomic worker registration record containing run ID, stable worker ID, attempt ID, role and start time. Keep queued, spawned, completed and failed distinct; queued children must not be reported as running merely because they were materialized.
+2. Capture versioned records `{v, run, worker, attempt, seq, ts, event, data}`. Sequence is monotonic per attempt; preserve source event timestamps separately from capture timestamps. Include narration/thinking deltas, text completion, tool preview/start/result/output, usage, lifecycle, escalation and permission resolution.
+3. Bound record size and buffer size. Rotate by complete records, persist the retained sequence range, and emit an explicit reset/gap when replay falls behind. Never interpret a partial record after a crash. Preserve human `live.log` and trusted file-based handoffs separately; monitoring must not turn ordinary verbose event output into a result-capture failure.
+4. Reuse core's existing machine event stream, adding bounded tool-output emission rather than inventing another text parser. Audit full argument/output sensitivity and redaction before forwarding. Original arguments can be retained without restoring the rejected intent-first UI; older truncated summaries cannot be reconstructed.
+5. Relay per-attempt event subscriptions with replay sequence cursors through agentlinkd. Fold into a worker-scoped transcript using existing renderer styling. No worker events go into the parent conversation, and no workers become durable chat sessions just for monitoring.
 
-The current worker launch (`src/child.rs`) uses `dext -p --no-session`, pipes stdin for the task and captures plain stdout/stderr. It does not expose an AgentLink transcript stream to DextUI.
+### Bidirectional permissions and continuation
 
-Add versioned structured worker events alongside human-readable logs: worker started/ended, narration, thinking, tool preview/start/result, output delta, usage and escalation. Every event needs run ID, worker ID, attempt ID, monotonic sequence and timestamp. Agentlinkd should relay these over the existing authenticated connection; DextUI can reuse its transcript fold and renderer. Keep crew as process owner; observability need not turn workers into durable chat sessions.
+A crew escalation answer reruns a paused step. It is **not** permission for a suspended tool call.
 
-Structured events should retain original tool arguments and output metadata for faithful replay. The experimental description/command schema additions were reverted with the redesign. Do not reintroduce intent-first presentation as part of streaming. Legacy summary truncation is irreversible.
+- Crew must retain the child's NDJSON stdin and own the control endpoint across UI disconnects. Use a private authenticated/local endpoint with bounded messages; the browser talks only to agentlinkd, never directly to worker pipes or arbitrary files.
+- Permission requests and replies are scoped to run/worker/attempt/request ID. The crew owner accepts exactly one response, rejects stale attempts, and forwards only core-supported choices. Disconnect/timeout/exit cancels or denies outstanding requests. A received write is not a resolved permission; wait for core's `permission_resolved` receipt.
+- Keep normal headless approval policies unchanged unless the operator explicitly enables interactive worker permissions. Do not infer policy from an escalation answer or a UI button label.
+- `createCrewAdapter.resume()` currently records the answer then spawns `crew run --manifest` with ignored stdio. Its success message still does **not** prove continuation succeeded. Replace this with a tracked supervised continuation: persist pending launch before starting, use an attempt-specific `dext-` systemd unit, capture bounded stderr and exit status, reconcile after host restart, and broadcast truthful launch failure. Crew's current `launch` contract is spec-based; existing-manifest continuation needs a reviewed supervisor path rather than assuming `launch --manifest` works.
+- Respect crew's run lease and detached-owner validation. Resolve first-answer-wins at the authoritative owner, not independently in each browser. Host restart recovery must not launch the same continuation twice.
 
-### 3. Interactive worker approvals and reliable continuation
+## Acceptance gates for the structured/control phase
 
-A crew escalation is a paused step rerun with an answer, not approval of a suspended tool invocation. True live permissions require a retained bidirectional worker control channel, request IDs scoped to worker attempts, first-answer-wins semantics, timeout/exit cancellation, and explicit permission policy. Never interpret approve/skip text as a host-enforced tool permission.
+- Parallel/dynamic workers register before output; stable worker and distinct attempt identities survive retries and manifest reordering.
+- A fake NDJSON child exercises incremental text, thinking, tool events, split UTF-8, malformed/oversized records, exits and stalled pipes without provider cost.
+- A real small authorized crew measures producer-event-to-browser latency (target <500 ms) and confirms final artifacts/results remain identical.
+- Switching workers, hidden tabs, reconnecting, rerunning and rotating cannot mix attempts or duplicate already folded events.
+- Output beyond 8 MiB stays fresh; slow/disconnected clients have bounded memory and receive explicit gaps rather than false completeness.
+- Two clients answering one permission yield one accepted response; stale replies never authorize the next attempt.
+- Continuation spawn failure, worker crash, supervisor exit and host restart produce truthful persisted states.
 
-The current adapter resume path records the answer then spawns `crew run --manifest` with ignored stdio; its success reply does not prove successful continuation. Track spawn/exit, persist bounded stderr and continuation status, and use crew's supervised execution lifecycle so host restarts do not lose accountability.
+## Verification for the live-log slice
 
-## Acceptance tests for the next phase
-
-- Parallel and dynamic crews register every live child before completion.
-- Narration/tool deltas reach the browser within the measured latency target.
-- Switching workers, reconnecting, rerunning a step and rotating logs neither duplicate nor mix attempts.
-- A long-running noisy worker continues to show fresh output beyond 8 MiB.
-- Hidden tabs and disconnected/slow clients do not grow queues or repeatedly resend full logs.
-- Two tabs answering the same escalation/permission yield exactly one accepted answer.
-- Continuation spawn failure, worker crash, supervisor exit and host restart produce truthful UI states.
-
-## Verification scope
-
-No paid/live crew was launched for this review. Subagent transcript streaming, dynamic discovery and bidirectional permissions remain unimplemented. The crew pack was invoked for inspection and its sources reviewed; global pack/core files were not modified. The earlier test results applied to the now-reverted implementation; verify the rollback separately.
+- DextUI: 184 tests pass, including authenticated real-host WebSocket subscribe/reconnect/unsubscribe, cursor resets, bounded reads, symlink refusal, backpressure and dynamic discovery. Existing browser smoke passes; Svelte reports zero errors/warnings.
+- Crew: 75 tests and release build pass from an isolated archive of commit `f0dd184`; that binary is installed in the global pack. The working checkout also passed 77 tests, including two from pre-existing uncommitted `src/run.rs` progress-publication changes. Those unrelated changes were neither committed nor included in the installed binary. The touched Rust file passes formatting.
+- No paid/live model crew was launched. No dext core source or interactive permission behavior changed. Structured worker events, archived-segment replay and reliable supervised continuation remain follow-up work.

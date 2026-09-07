@@ -5,7 +5,7 @@
   // while paused, deliverables + tails always). Keys are scoped to the dialog.
   import type { CrewGroup, CrewWorker } from "@dextui/protocol";
   import Meter from "./Meter.svelte";
-  import { crew, crewDur, crewAge, closeRun, requestTail, refreshTail, openFile, stopRun, answerRun, removeRun, crewFinished, shortRun, GLYPH } from "../lib/crew.svelte";
+  import { crew, crewDur, crewAge, closeRun, syncCrewLog, requestTail, refreshTail, openFile, stopRun, answerRun, removeRun, crewFinished, shortRun, GLYPH } from "../lib/crew.svelte";
 
   /** Sentence-case a host label (first letter only): "final-report" → "Final-report". */
   const sc = (s: string): string => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
@@ -57,6 +57,11 @@
     return () => {
       clearInterval(t);
     };
+  });
+
+  $effect(() => {
+    document.addEventListener("visibilitychange", syncCrewLog);
+    return () => document.removeEventListener("visibilitychange", syncCrewLog);
   });
 
   const RANK: Record<string, number> = { failed: 0, running: 1, paused: 2, pending: 3, completed: 4 };

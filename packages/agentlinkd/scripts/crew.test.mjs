@@ -71,7 +71,8 @@ test("escalation requires status=paused AND a worker escalation; stop is dim not
   });
   const p = projectManifest(paused, { now: NOW });
   assert.equal(p.summary.escalation.question, "global or scoped?");
-  assert.equal(p.summary.escalation.worker, "0.0");
+  assert.equal(p.summary.escalation.worker, p.detail.groups[0].workers[0].key);
+  assert.match(p.summary.escalation.worker, /^0\.d-[a-f0-9]{24}$/);
   assert.equal(p.summary.escalation.label, "web-agentic");
   assert.equal(p.detail.groups[0].workers[0].agent, "worker");
 

@@ -32,6 +32,7 @@ import { acceptKey, FrameParser, encodeFrame, OP_PONG, OP_TEXT } from "../../moc
 import { fold, foldMeta } from "../../mock-server/src/fold.mjs";
 import { checkedPath, purgeSeat, seatFiles } from "./session-files.mjs";
 import { GALLERY_DEFAULTS, PACK_NAME_RE, buildCatalog, listPackFiles, listPackTree, loadGallery, packCommands, parsePackListingJson, parsePackSlash, readPackFile, renderPackList, suggestPack, unmetRequirements, writePackFile } from "./packs.mjs";
+import { subscribeLog } from "./crew-stream.mjs";
 import { RUN_ID_RE as CREW_RUN_ID_RE, TAIL_MAX_LINES, createCrewAdapter } from "./crew.mjs";
 import { createSelfEdit, resolveStaticDir } from "./selfedit.mjs";
 import { confine, createDir, listDirs } from "./dirs.mjs";
@@ -668,8 +669,26 @@ async function handleCrewCommand(client, frame) {
       return;
     }
     case "close":
+      client.crewLogClose?.();
+      client.crewLogClose = null;
       client.crewOpen.delete(run);
       return;
+    case "unsubscribe":
+      client.crewLogClose?.();
+      client.crewLogClose = null;
+      return;
+    case "subscribe": {
+      if (!client.crewOpen.has(run)) return sendError(client, "bad_request", "open the run before subscribing");
+      if (typeof frame.worker !== "string" || frame.worker.length > 100 || !CREW.detail(run)?.groups.some((g) => g.workers.some((w) => w.key === frame.worker))) return sendError(client, "no_worker", "unknown worker");
+      client.crewLogClose?.();
+      client.crewLogClose = subscribeLog({
+        source: () => CREW.logSource(run, frame.worker),
+        cursor: frame.cursor,
+        writable: () => client.phase === "live" && client.writable(),
+        send: (chunk) => { sendControl(client, "x-agentlinkd.crew.log", { run, worker: frame.worker, ...chunk }); },
+      });
+      return;
+    }
     case "tail": {
       const r = CREW.tail(run, frame.worker, Number(frame.lines) || TAIL_MAX_LINES);
       if (r.error) return sendError(client, r.error, `no log for ${run}/${String(frame.worker)}`);
@@ -3438,6 +3457,8 @@ server.on("upgrade", (req, socket, head) => {
     phase: "authing",
     subs: new Set(),
     crewOpen: new Set(),
+    crewLogClose: null,
+    writable: () => !socket.destroyed && socket.writableLength < 256 * 1024,
     send: (text) => socket.write(encodeFrame(OP_TEXT, Buffer.from(text, "utf8"))),
     close: (code) => {
       try {
@@ -3463,6 +3484,7 @@ server.on("upgrade", (req, socket, head) => {
       });
     },
     onClose: () => {
+      client.crewLogClose?.();
       clients.delete(client);
       socket.destroy();
     },
@@ -3470,8 +3492,8 @@ server.on("upgrade", (req, socket, head) => {
   });
   if (head && head.length > 0) parser.push(head);
   socket.on("data", (chunk) => parser.push(chunk));
-  socket.on("close", () => clients.delete(client));
-  socket.on("error", () => clients.delete(client));
+  socket.on("close", () => { client.crewLogClose?.(); clients.delete(client); });
+  socket.on("error", () => { client.crewLogClose?.(); clients.delete(client); });
 });
 
 let shuttingDown = false;

@@ -324,6 +324,14 @@ export class Connection {
     this.sendRaw(cmd(`${CREW_EXT}.tail`, { run, worker, lines }));
   }
 
+  crewSubscribe(run: string, worker: string, cursor?: { generation: string; offset: number }): void {
+    this.sendRaw(cmd(`${CREW_EXT}.subscribe`, { run, worker, ...(cursor ? { cursor } : {}) }));
+  }
+
+  crewUnsubscribe(run: string): void {
+    this.sendRaw(cmd(`${CREW_EXT}.unsubscribe`, { run }));
+  }
+
   crewFile(run: string, path: string): void {
     this.sendRaw(cmd(`${CREW_EXT}.file`, { run, path }));
   }

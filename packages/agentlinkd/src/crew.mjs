@@ -9,6 +9,7 @@
 // so reads are race-safe; the layout is versioned with crew 0.1.0.
 import fs from "node:fs";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import { execFile, spawn } from "node:child_process";
 import { checkedPath } from "./session-files.mjs";
 
@@ -21,7 +22,8 @@ const MANIFEST_CAP = 8 * 1024 * 1024;
 const ERROR_CHARS = 80;
 const TASK_CHARS = 120;
 const DEBOUNCE_MS = 500;
-const HEARTBEAT_MS = 15_000;
+const HEARTBEAT_MS = 2_000;
+const dynamicKey = (index, dir) => `${index}.d-${createHash("sha256").update(path.resolve(dir)).digest("hex").slice(0, 24)}`;
 
 const STATUSES = new Set(["pending", "running", "completed", "failed", "paused"]);
 
@@ -52,7 +54,9 @@ function rel(chainDir, p) {
 }
 
 function worker(key, node, chainDir, inherit = {}, stateOf = () => null) {
-  const status = normStatus(node.status);
+  const fallback = normStatus(node.status);
+  const st = typeof node.dir === "string" ? stateOf(node.dir) : null;
+  const status = !["completed", "failed", "paused"].includes(fallback) && st && (STATUSES.has(st.status) || st.status === "done") ? normStatus(st.status) : fallback;
   const result = node.result && typeof node.result === "object" ? node.result : null;
   const w = {
     key,
@@ -76,7 +80,6 @@ function worker(key, node, chainDir, inherit = {}, stateOf = () => null) {
     }
   }
   if (status === "running" && typeof node.dir === "string") {
-    const st = stateOf(node.dir);
     if (st && Number.isFinite(st.started)) w.started_at = Math.round(st.started * 1000);
   }
   return w;
@@ -100,7 +103,7 @@ export function projectManifest(m, { now = Date.now(), mtimeMs = now, stateOf = 
       workers = (Array.isArray(step.tasks) ? step.tasks : []).map((t, j) => worker(`${i}.${j}`, t, chainDir, {}, stateOf));
     } else if (kind === "dynamic") {
       const inherit = { agent: step.agent, model: step.model, label: step.label };
-      workers = (Array.isArray(step.materialized) ? step.materialized : []).map((t, j) => worker(`${i}.${j}`, t, chainDir, inherit, stateOf));
+      workers = (Array.isArray(step.materialized) ? step.materialized : []).map((t, j) => worker(typeof t.dir === "string" ? dynamicKey(i, t.dir) : `${i}.${j}`, t, chainDir, inherit, stateOf));
     } else {
       workers = [worker(`${i}`, step, chainDir, {}, stateOf)];
     }
@@ -223,6 +226,7 @@ function confined(root, p) {
   let realRoot;
   let real;
   try {
+    if (!checkedPath(p)) return null;
     realRoot = fs.realpathSync(root);
     real = fs.realpathSync(p);
   } catch {
@@ -235,11 +239,36 @@ function confined(root, p) {
  * Watch every runs root, keep one projected view per run, and push changes.
  *   onChanged(payload)          — summaries (capped) whenever any summary changed
  *   onRunChanged(id, detail)    — detail for runs someone has open
- * Idle cost: one recursive fs.watch per root (or a 15 s heartbeat without it).
+ * Idle cost: one recursive fs.watch per root plus bounded 2 s reconciliation.
  */
+function discoverWorkers(manifest, runDir) {
+  return { ...manifest, steps: (manifest.steps ?? []).map((step) => {
+    if (step.kind !== "dynamic" || typeof step.dir !== "string" || !confined(runDir, step.dir)) return step;
+    const materialized = [...(step.materialized ?? [])];
+    const known = new Set(materialized.filter((node) => typeof node.dir === "string").map((node) => path.resolve(node.dir)));
+    let directory;
+    try {
+      directory = fs.opendirSync(step.dir);
+      for (let count = 0; count < 2048; count++) {
+        const entry = directory.readSync();
+        if (!entry) break;
+        if (!entry.isDirectory()) continue;
+        const dir = path.join(step.dir, entry.name);
+        if (known.has(path.resolve(dir)) || !confined(runDir, dir)) continue;
+        const state = readState(dir);
+        if (!state || !(STATUSES.has(state.status) || state.status === "done")) continue;
+        materialized.push({ dir, itemKey: entry.name, status: "pending" });
+      }
+    } catch { /* transient directories are reconciled on the next scan */ }
+    finally { directory?.closeSync(); }
+    return { ...step, materialized };
+  }) };
+}
+
 export function createCrewAdapter({ roots = [], crewBin = "crew", dextBin, env = process.env, onChanged, onRunChanged, isOpen = () => false, log = () => {} } = {}) {
   const runs = new Map(); // id -> { dir, manifest, mtimeMs, summary, detail, chainDir }
   const watched = new Set();
+  const watchers = new Set();
   const inflight = new Set(); // run ids with a resume in progress (first answer wins)
   let timer = null;
   let heartbeat = null;
@@ -289,9 +318,10 @@ export function createCrewAdapter({ roots = [], crewBin = "crew", dextBin, env =
       try {
         const read = readJson(file, MANIFEST_CAP);
         if (!read) continue;
-        const proj = projectManifest(read.json, { now, mtimeMs: read.mtimeMs, stateOf: readState, files: chainFiles(read.json.chainDir) });
+        const manifest = discoverWorkers(read.json, dir);
+        const proj = projectManifest(manifest, { now, mtimeMs: read.mtimeMs, stateOf: (p) => confined(dir, p) ? readState(p) : null, files: chainFiles(read.json.chainDir) });
         if (!proj || proj.summary.id !== e.name) continue;
-        runs.set(e.name, { dir, manifest: read.json, mtimeMs: read.mtimeMs, detailKey: prev?.detailKey, ...proj });
+        runs.set(e.name, { dir, manifest, mtimeMs: read.mtimeMs, detailKey: prev?.detailKey, ...proj });
       } catch (err) {
         log(`crew: skipping ${file}: ${err.message}`);
       }
@@ -322,7 +352,7 @@ export function createCrewAdapter({ roots = [], crewBin = "crew", dextBin, env =
   }
 
   function schedule() {
-    clearTimeout(timer);
+    if (timer) return;
     timer = setTimeout(() => {
       timer = null;
       try { scan(); } catch (err) { log(`crew: scan failed: ${err.message}`); }
@@ -331,7 +361,9 @@ export function createCrewAdapter({ roots = [], crewBin = "crew", dextBin, env =
 
   function watchDir(target, opts, handler) {
     const w = fs.watch(target, { persistent: false, ...opts }, handler);
-    w.on("error", () => {});
+    watchers.add(w);
+    w.on("close", () => watchers.delete(w));
+    w.on("error", () => { w.close(); });
     return w;
   }
 
@@ -383,13 +415,24 @@ export function createCrewAdapter({ roots = [], crewBin = "crew", dextBin, env =
   }
 
   function findWorker(r, key) {
-    if (!/^\d+(\.\d+)?$/.test(String(key))) return null;
+    if (!/^\d+(\.(\d+|d-[a-f0-9]{24}))?$/.test(String(key))) return null;
     const [gi, wi] = String(key).split(".").map(Number);
     const step = r.manifest.steps?.[gi];
     if (!step) return null;
     const list = step.kind === "parallel" ? step.tasks : step.kind === "dynamic" ? step.materialized : [step];
-    const node = list?.[wi ?? 0];
+    const node = step.kind === "dynamic" ? list?.find((n) => typeof n.dir === "string" && dynamicKey(gi, n.dir) === key) : list?.[wi ?? 0];
     return node && typeof node.dir === "string" ? node : null;
+  }
+
+  function logSource(id, key) {
+    const r = runs.get(id);
+    if (!r) return null;
+    const node = findWorker(r, key);
+    if (!node) return null;
+    const file = confined(r.dir, path.join(node.dir, "live.log"));
+    if (!file) return null;
+    const state = confined(r.dir, node.dir) ? readState(node.dir) : null;
+    return { file, attempt: [state?.started ?? "", state?.pid ?? "", state?.pidStartTicks ?? ""].join(":") };
   }
 
   function tail(id, key, lines) {
@@ -535,9 +578,12 @@ export function createCrewAdapter({ roots = [], crewBin = "crew", dextBin, env =
   function close() {
     clearTimeout(timer);
     clearInterval(heartbeat);
+    for (const watcher of watchers) watcher.close();
   }
 
+  heartbeat = setInterval(schedule, HEARTBEAT_MS);
+  heartbeat.unref();
   for (const root of [...roots]) addRoot(root);
   try { scan(); } catch (err) { log(`crew: initial scan failed: ${err.message}`); }
-  return { addRoot, scan, schedule, summaries, detail, tail, file, stop, resume, remove, clearFinished, close, runs };
+  return { addRoot, scan, schedule, summaries, detail, tail, logSource, file, stop, resume, remove, clearFinished, close, runs };
 }

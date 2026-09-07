@@ -6,6 +6,8 @@
 
 import type {
   CrewControlEvent,
+  CrewLogChunk,
+  CrewLogCursor,
   CrewFileReply,
   CrewRunDetail,
   CrewRunSummary,
@@ -36,6 +38,23 @@ export const crew = $state({
   railOpen: localStorage.getItem("dextui.crewsOpen") !== "0",
   railAll: false,
 });
+
+let logCursor: CrewLogCursor | undefined;
+let logText = "";
+let logDecoder = new TextDecoder();
+let logGap = false;
+function resetLog(): void {
+  logCursor = undefined;
+  logText = "";
+  logDecoder = new TextDecoder();
+  logGap = false;
+}
+
+export function syncCrewLog(): void {
+  if (!crew.openId || !crew.tailWorker) return;
+  if (document.hidden) app.conn?.crewUnsubscribe(crew.openId);
+  else app.conn?.crewSubscribe(crew.openId, crew.tailWorker, logCursor);
+}
 
 export function crewEnabled(): boolean {
   return app.phase === "live" && app.caps.includes("crew");
@@ -143,6 +162,7 @@ export function openRun(id: string): void {
   if (!c || !crewEnabled()) return;
   if (crew.openId && crew.openId !== id) c.crewClose(crew.openId);
   if (crew.openId !== id) {
+    resetLog();
     crew.open = null;
     crew.tail = null;
     crew.tailWorker = "";
@@ -154,6 +174,7 @@ export function openRun(id: string): void {
 }
 
 export function closeRun(): void {
+  resetLog();
   const c = app.conn;
   if (crew.openId && c) c.crewClose(crew.openId);
   crew.openId = "";
@@ -174,21 +195,26 @@ export function requestTail(worker: string): void {
     // Toggle off whenever the pane is shown for this worker — including while
     // loading or after an error (crew.tail may still be null there); refresh
     // goes through refreshTail().
+    c.crewUnsubscribe(crew.openId);
+    resetLog();
     crew.tailWorker = "";
     crew.tail = null;
     crew.tailPending = false;
     return;
   }
+  resetLog();
+  crew.tail = null;
   crew.tailWorker = worker;
   crew.tailPending = true;
-  c.crewTail(crew.openId, worker);
+  syncCrewLog();
 }
 
 export function refreshTail(): void {
   const c = app.conn;
   if (!c || !crew.openId || !crew.tailWorker) return;
+  resetLog();
   crew.tailPending = true;
-  c.crewTail(crew.openId, crew.tailWorker);
+  syncCrewLog();
 }
 
 export function openFile(path: string): void {
@@ -238,6 +264,27 @@ export function onCrewControl(env: Envelope): void {
       }
       return;
     }
+    case `${CREW_EXT}.log`: {
+      const d = env.data as CrewLogChunk;
+      if (!d || d.run !== crew.openId || d.worker !== crew.tailWorker) return;
+      crew.tailPending = false;
+      if (d.unavailable) return;
+      if (d.reset) {
+        resetLog();
+        logGap = d.gap;
+      } else if (!logCursor || d.generation !== logCursor.generation || d.start !== logCursor.offset) {
+        syncCrewLog();
+        return;
+      }
+      const bytes = Uint8Array.from(atob(d.data), (c) => c.charCodeAt(0));
+      logText += logDecoder.decode(bytes, { stream: true });
+      if (logText.length > 65536) { logText = logText.slice(-65536); logGap = true; }
+      logCursor = { generation: d.generation, offset: d.offset };
+      const lines = logText.replace(/\r/g, "").split("\n");
+      if (lines.at(-1) === "") lines.pop();
+      crew.tail = { run: d.run, worker: d.worker, lines: [...(logGap ? ["[Earlier log output unavailable or outside the retained window]"] : []), ...lines.slice(-80).map((l) => l.slice(0, 400))], bytes: d.bytes, truncated: logGap || lines.length > 80, at: Date.now() };
+      return;
+    }
     case `${CREW_EXT}.tail`: {
       const d = env.data as CrewTailReply;
       if (d && d.run === crew.openId && d.worker === crew.tailWorker) {
@@ -269,6 +316,7 @@ export function onCrewControl(env: Envelope): void {
       // A reconnect (host restart or not) drops the host's per-client open set;
       // re-subscribe so an open sheet keeps receiving detail.
       if (crew.openId) app.conn?.crewOpen(crew.openId);
+      syncCrewLog();
       return;
     }
     case "error": {

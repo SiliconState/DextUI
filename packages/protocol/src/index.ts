@@ -705,7 +705,7 @@ export interface CrewRunSummary {
 }
 
 export interface CrewWorker {
-  /** Stable key for tail/agent ids: `<groupIndex>` or `<groupIndex>.<memberIndex>`. */
+  /** Opaque stable key; dynamic workers use a directory identity, not manifest order. */
   key: string;
   label: string;
   agent: string;
@@ -743,6 +743,23 @@ export interface CrewsPayload {
   runs: CrewRunSummary[];
   /** Runs beyond the cap (8) — oldest terminal runs drop first. */
   omitted: number;
+}
+
+export interface CrewLogCursor {
+  generation: string;
+  offset: number;
+}
+
+export interface CrewLogChunk extends CrewLogCursor {
+  run: string;
+  worker: string;
+  start: number;
+  reset: boolean;
+  gap: boolean;
+  bytes: number;
+  /** Base64 bytes; clients retain their UTF-8 decoder across chunk boundaries. */
+  data: string;
+  unavailable?: boolean;
 }
 
 export interface CrewTailReply {
@@ -997,6 +1014,7 @@ export interface ControlEventMap {
   "x-agentlinkd.crew.run": CrewRunDetail;
   /** Direct replies to `x-agentlinkd.crew.tail` / `.file`. */
   "x-agentlinkd.crew.tail": CrewTailReply;
+  "x-agentlinkd.crew.log": CrewLogChunk;
   "x-agentlinkd.crew.file": CrewFileReply;
   /** Outcome of `.stop` / `.resume`, broadcast to every live client. */
   "x-agentlinkd.crew.control": CrewControlEvent;
