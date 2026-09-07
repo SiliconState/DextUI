@@ -630,6 +630,21 @@ export function start(token: string): void {
         });
         return;
       }
+      // Host could not resolve a pack name but has near names: offer the best
+      // one as a prefilled command, so a typo costs one click, not a retype.
+      if (code === "no_pack" && typeof data?.retry === "string" && Array.isArray(data.candidates) && data.candidates.length > 0) {
+        const sid = typeof data.session === "string" ? data.session : app.activeId;
+        const retry: string = data.retry;
+        const first = String(data.candidates[0]);
+        pushToast("warn", message, {
+          label: `Use ${first}`,
+          run: () => {
+            if (app.conn !== c || (sid && sid !== app.activeId)) return;
+            prefillComposer(retry);
+          },
+        });
+        return;
+      }
       pushToast("err", `${code}: ${message}`);
     },
     onEvent: (env: Envelope, store) => {

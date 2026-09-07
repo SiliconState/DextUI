@@ -27,6 +27,11 @@
       requestAnimationFrame(() => firstEl?.focus());
     }
   });
+  // The pack left the catalog (packs.changed) while open: the {#if} below
+  // would hide the dialog but leave `open` true, swallowing Esc/shortcuts.
+  $effect(() => {
+    if (packCreds.open && !pack) closePackCredentials();
+  });
   const filledCount = $derived(Object.values(values).filter((v) => v.trim()).length);
   const clearCount = $derived(Object.values(clear).filter(Boolean).length);
 

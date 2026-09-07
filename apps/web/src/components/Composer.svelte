@@ -42,15 +42,46 @@
   // The menu stays open while the text is still a prefix of some command —
   // including multi-word ones like `/pack run re<port>` — and closes once a
   // command is complete and followed by a space (the task is free text).
+  // Matching is word-wise: every finished word must equal the command's word,
+  // the word being typed may be a prefix (rank 0), or — for pack names typed
+  // from memory: `stockdeep`, `stock-deepdive`, `deepdive` — a normalised
+  // substring (rank 1) or subsequence (rank 2). Prefix matches list first.
   const slashQuery = $derived(text.trimStart().toLowerCase());
+  function norm(s: string): string {
+    return s.toLowerCase().replace(/[^a-z0-9/]/g, "");
+  }
+  function isSubsequence(needle: string, hay: string): boolean {
+    let i = 0;
+    for (const ch of hay) if (ch === needle[i]) i++;
+    return i === needle.length;
+  }
+  function slashRank(cmd: string, typed: string): number {
+    const words = typed.trim().toLowerCase().split(/\s+/);
+    const parts = cmd.toLowerCase().split(/\s+/);
+    if (words.length > parts.length) return -1;
+    for (let i = 0; i < words.length - 1; i++) if (parts[i] !== words[i]) return -1;
+    const w = words[words.length - 1]!;
+    const p = parts[words.length - 1]!;
+    if (p.startsWith(w)) return 0;
+    const nw = norm(w);
+    if (nw.length < 3) return -1;
+    if (norm(p).includes(nw)) return 1;
+    return isSubsequence(nw, norm(p)) ? 2 : -1;
+  }
   const slashOpen = $derived(
     !menuHidden &&
       text.startsWith("/") &&
       !text.includes("\n") &&
-      (!text.includes(" ") || commands.some((c) => c.cmd.toLowerCase().startsWith(slashQuery) && c.cmd.toLowerCase() !== slashQuery.trim())),
+      (!text.includes(" ") || commands.some((c) => slashRank(c.cmd, text) >= 0 && c.cmd.toLowerCase() !== slashQuery.trim())),
   );
   const slashList = $derived(
-    slashOpen ? commands.filter((c) => c.cmd.toLowerCase().startsWith(text.trim().toLowerCase())) : [],
+    slashOpen
+      ? commands
+          .map((c, i) => ({ c, i, r: slashRank(c.cmd, text) }))
+          .filter((x) => x.r >= 0)
+          .sort((a, b) => a.r - b.r || a.i - b.i)
+          .map((x) => x.c)
+      : [],
   );
   // menuIdx can outlive a shrinking list (typing narrows matches); clamp before use.
   const menuCur = $derived(slashList.length === 0 ? 0 : Math.min(menuIdx, slashList.length - 1));

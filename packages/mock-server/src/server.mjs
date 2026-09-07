@@ -10,6 +10,7 @@ import crypto from "node:crypto";
 import { acceptKey, FrameParser, encodeFrame, OP_PONG, OP_TEXT } from "./ws.mjs";
 import { loadFixture, withApprovalPause } from "./replay.mjs";
 import { fold, foldMeta } from "./fold.mjs";
+import { suggestPack } from "../../agentlinkd/src/packs.mjs";
 
 const here = path.dirname(url.fileURLToPath(import.meta.url));
 const repoRoot = path.join(here, "..", "..", "..");
@@ -897,10 +898,23 @@ function handleCommand(client, frame) {
       // `/pack run <name> <task>` and the `/pack <name> <task>` shorthand, as agentlinkd.
       const run = /^\/packs?\s+(?:(?:run|use|start)\s+)?([A-Za-z0-9][A-Za-z0-9_-]*)\s*(.*)$/s.exec(raw);
       if (run && !/^(list|ls|inspect|info|show|create|new)$/.test(run[1])) {
-        const pack = PACKS.find((p) => p.name === run[1]);
+        let pack = PACKS.find((p) => p.name === run[1]);
         if (!pack) {
-          sendError(client, "no_pack", `unknown pack '${run[1]}'; see /pack list`);
-          return;
+          // Parity with agentlinkd: a confident near-miss runs as the real name,
+          // an ambiguous one fails with candidates + a one-click retry.
+          const fix = suggestPack(run[1], PACKS);
+          if (fix?.confident) {
+            pack = PACKS.find((p) => p.name === fix.name);
+            publish(journalData(s, "info", `pack '${run[1]}' → ${fix.name}`));
+          } else {
+            const hint = fix ? ` — did you mean ${fix.candidates.map((c) => `'${c}'`).join(", ")}?` : "";
+            sendControl(client, "error", {
+              code: "no_pack",
+              message: `unknown pack '${run[1]}'${hint}; see /pack list`,
+              ...(fix ? { data: { pack: run[1], candidates: fix.candidates, session: s.id, retry: `/pack run ${fix.candidates[0]} ${run[2].trim()}`.trim() } } : {}),
+            });
+            return;
+          }
         }
         const task = run[2].trim();
         if (!task) {

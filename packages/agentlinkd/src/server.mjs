@@ -31,7 +31,7 @@ import { spawn, spawnSync, execFile } from "node:child_process";
 import { acceptKey, FrameParser, encodeFrame, OP_PONG, OP_TEXT } from "../../mock-server/src/ws.mjs";
 import { fold, foldMeta } from "../../mock-server/src/fold.mjs";
 import { checkedPath, purgeSeat, seatFiles } from "./session-files.mjs";
-import { GALLERY_DEFAULTS, PACK_NAME_RE, buildCatalog, listPackFiles, listPackTree, loadGallery, packCommands, parsePackListingJson, parsePackSlash, readPackFile, renderPackList, unmetRequirements, writePackFile } from "./packs.mjs";
+import { GALLERY_DEFAULTS, PACK_NAME_RE, buildCatalog, listPackFiles, listPackTree, loadGallery, packCommands, parsePackListingJson, parsePackSlash, readPackFile, renderPackList, suggestPack, unmetRequirements, writePackFile } from "./packs.mjs";
 import { RUN_ID_RE as CREW_RUN_ID_RE, TAIL_MAX_LINES, createCrewAdapter } from "./crew.mjs";
 import { createSelfEdit, resolveStaticDir } from "./selfedit.mjs";
 import { confine, createDir, listDirs } from "./dirs.mjs";
@@ -1826,18 +1826,47 @@ function dextOutputAsync(args, cwd) {
   });
 }
 
+/** `unknown pack 'x'` plus a did-you-mean tail when the catalog has a near
+ *  name. Used by every pack verb that names a pack. */
+function unknownPackMessage(name) {
+  const s = suggestPack(name, PACKS);
+  const hint = s ? ` — did you mean ${s.candidates.map((c) => `'${c}'`).join(", ")}?` : "";
+  return `unknown pack '${name}'${hint}; see /pack list`;
+}
+
+/** A run whose name the guard corrected gets a visible note in the journal,
+ *  so the user learns the real name instead of wondering why it worked. */
+function notePackResolution(s, run) {
+  if (run?.resolvedFrom) publish(journalData(s, "info", `pack '${run.resolvedFrom}' → ${run.name}`));
+}
+
 /** Validate a `/pack run` request against the catalog and the session's
  *  approval profile. Returns null when it may proceed; otherwise sends the
- *  error (with `data.required` for a one-click profile switch) and returns it. */
+ *  error (with `data.required` for a one-click profile switch) and returns it.
+ *  A near-miss name (`stockdeepdive`, `stock-deepdive`, a unique prefix) is
+ *  rewritten in place to the catalog name and noted on `run.resolvedFrom`;
+ *  an ambiguous one fails with `data.candidates` + `data.retry` so the
+ *  client can offer the fix as one click. */
 function guardPackRun(client, s, run) {
   if (!run.name) {
     sendError(client, "bad_request", "/pack run needs <name> <task>; see /pack list");
     return "bad_request";
   }
-  const pack = packByName(run.name);
+  let pack = packByName(run.name);
   if (!pack) {
-    sendError(client, "no_pack", `unknown pack '${run.name}'; see /pack list`);
-    return "no_pack";
+    const fix = suggestPack(run.name, PACKS);
+    if (fix?.confident) {
+      run.resolvedFrom = run.name;
+      run.name = fix.name;
+      pack = packByName(fix.name);
+    } else {
+      sendControl(client, "error", {
+        code: "no_pack",
+        message: unknownPackMessage(run.name),
+        ...(fix ? { data: { pack: run.name, candidates: fix.candidates, session: s.id, retry: `/pack run ${fix.candidates[0]} ${run.task}`.trim() } } : {}),
+      });
+      return "no_pack";
+    }
   }
   if (!run.task) {
     sendError(client, "bad_request", `/pack run ${pack.name} needs a task`);
@@ -1872,12 +1901,14 @@ async function handlePackSlash(client, s, cmd) {
     case "run": {
       if (guardPackRun(client, s, cmd)) return;
       submitPrompt(s, `/pack run ${cmd.name} ${cmd.task}`);
+      notePackResolution(s, cmd);
       return;
     }
     case "inspect": {
-      const pack = packByName(cmd.name);
+      const fix = suggestPack(cmd.name, PACKS);
+      const pack = packByName(cmd.name) ?? (fix?.confident ? packByName(fix.name) : null);
       if (!pack) {
-        sendError(client, "no_pack", `unknown pack '${cmd.name}'; see /pack list`);
+        sendError(client, "no_pack", unknownPackMessage(cmd.name));
         return;
       }
       const r = await dextOutputAsync(["pack", "inspect", pack.name], s.cwd);
@@ -1895,7 +1926,7 @@ async function handlePackSlash(client, s, cmd) {
         // rewrites `name:`; the original is untouched. Never pass free text.
         const src = packByName(cmd.from);
         if (!src) {
-          sendError(client, "no_pack", `unknown pack '${cmd.from}' to copy from; see /pack list`);
+          sendError(client, "no_pack", `${unknownPackMessage(cmd.from)} (to copy from)`);
           return;
         }
         args.push("--from", src.name);
@@ -2253,6 +2284,9 @@ async function handleCommand(client, frame) {
         return;
       }
       if (packCmd && guardPackRun(client, s, packCmd)) return;
+      // The guard may have resolved a near-miss name: the journaled prompt and
+      // the `--pack` invocation both need the catalog name, not the typo.
+      if (packCmd?.resolvedFrom) frame.text = `/pack run ${packCmd.name} ${packCmd.task}`;
       if (s.working) {
         // A prompt sent mid-turn is steering: queue it for the turn boundary.
         if (!queueSteering(s, frame.text)) {
@@ -2260,10 +2294,12 @@ async function handleCommand(client, frame) {
           return;
         }
         ackOk(client, frame);
+        notePackResolution(s, packCmd);
         return;
       }
       submitPrompt(s, frame.text);
       ackOk(client, frame);
+      notePackResolution(s, packCmd);
       return;
     }
 

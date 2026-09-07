@@ -56,7 +56,9 @@ export function closePackCredentials(): void {
 export function submitPackCredentials(values: Record<string, string>, clear: string[]): void {
   const c = app.conn;
   if (!c || !packCreds.pack) return;
-  const filled = Object.fromEntries(Object.entries(values).filter(([, v]) => v.trim()));
+  // A name being cleared never carries a value: the checkbox disables its
+  // field, so anything typed before ticking it is stale, not intent.
+  const filled = Object.fromEntries(Object.entries(values).filter(([k, v]) => v.trim() && !clear.includes(k)));
   if (Object.keys(filled).length === 0 && clear.length === 0) {
     packCreds.error = "Enter at least one value";
     return;

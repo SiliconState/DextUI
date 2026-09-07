@@ -431,6 +431,51 @@ export function packCommands(catalog) {
   ];
 }
 
+/** Fuzzy pack-name resolution for `/pack run <name>` typos and shorthand:
+ *  `stockdeepdive`, `stock-deepdive`, `StockDeepDive`, `deepdive`, `stock_deepdiv`.
+ *  Returns null for an exact catalog name (nothing to fix) or when nothing is
+ *  close; otherwise `{ name, confident, candidates }`. `confident` means the
+ *  host may run it as-is (one unambiguous match by normalised equality,
+ *  unique prefix/substring, or edit distance ≤ 2 on a name ≥ 6 chars);
+ *  otherwise the caller asks "did you mean …?" with `candidates`. */
+export function suggestPack(name, catalog) {
+  const raw = String(name ?? "").trim();
+  if (!raw || (catalog ?? []).some((p) => p.name === raw)) return null;
+  const norm = (s) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const q = norm(raw);
+  if (!q) return null;
+  const names = (catalog ?? []).map((p) => p.name);
+  const byNorm = names.filter((n) => norm(n) === q);
+  if (byNorm.length === 1) return { name: byNorm[0], confident: true, candidates: byNorm };
+  const prefix = names.filter((n) => norm(n).startsWith(q));
+  if (prefix.length === 1 && q.length >= 3) return { name: prefix[0], confident: true, candidates: prefix };
+  const sub = names.filter((n) => norm(n).includes(q));
+  if (sub.length === 1 && q.length >= 4) return { name: sub[0], confident: true, candidates: sub };
+  const scored = names
+    .map((n) => ({ name: n, d: editDistance(q, norm(n)) }))
+    .filter((c) => c.d <= Math.max(2, Math.floor(norm(c.name).length / 4)))
+    .sort((a, b) => a.d - b.d || a.name.localeCompare(b.name));
+  const candidates = [...new Set([...prefix, ...sub, ...scored.map((c) => c.name)])].slice(0, 4);
+  if (candidates.length === 0) return null;
+  const best = scored[0];
+  const confident = !!best && best.d <= 2 && q.length >= 6 && (scored.length === 1 || scored[1].d > best.d) && prefix.length <= 1 && sub.length <= 1;
+  return { name: confident ? best.name : candidates[0], confident, candidates };
+}
+
+function editDistance(a, b) {
+  if (a === b) return 0;
+  if (!a.length || !b.length) return a.length + b.length;
+  let prev = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i++) {
+    const cur = [i];
+    for (let j = 1; j <= b.length; j++) {
+      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    }
+    prev = cur;
+  }
+  return prev[b.length];
+}
+
 /** Parse `/pack …` text. Returns null when it is not a pack command. */
 export function parsePackSlash(raw) {
   const m = /^\/packs?\b\s*(.*)$/s.exec(String(raw ?? "").trim());
