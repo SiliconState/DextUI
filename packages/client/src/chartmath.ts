@@ -95,6 +95,36 @@ export function barIndexAtX(x: number, n: number, order: number[]): number {
   return order[p] ?? -1;
 }
 
+/** Grouped-bar geometry for m visible series: per-label bars share the width one bar would use. */
+export function barGroupLayout(
+  n: number,
+  m: number,
+): { slot: number; bw: number; group: number; x: (p: number, s: number) => number } {
+  const slot = (PLOT.r - PLOT.l) / Math.max(1, n);
+  const group = Math.min(44, slot * 0.62);
+  const gap = m > 1 ? 2 : 0;
+  const bw = m > 1 ? Math.max(3, (group - gap * (m - 1)) / m) : group;
+  return {
+    slot,
+    bw,
+    group,
+    x: (p, s) => PLOT.l + slot * (p + 0.5) - group / 2 + s * (bw + gap) + bw / 2,
+  };
+}
+
+/** Series bar under x (sort permutation honored); null between groups or outside the plot. */
+export function barGroupHitAtX(x: number, n: number, order: number[], m: number): { i: number; s: number } | null {
+  if (x < PLOT.l || x > PLOT.r) return null;
+  const { slot, bw, group } = barGroupLayout(n, m);
+  const p = Math.min(n - 1, Math.max(0, Math.floor((x - PLOT.l) / slot)));
+  const local = x - (PLOT.l + slot * (p + 0.5) - group / 2);
+  const gap = m > 1 ? 2 : 0;
+  if (local < -1 || local > group + 1) return null;
+  const s = Math.floor((local + 1) / (bw + gap));
+  if (s < 0 || s >= m) return null;
+  return { i: order[p] ?? -1, s };
+}
+
 /** Original index of the hbar row under y; -1 outside the rows. */
 export function hbarRowAtY(y: number, n: number, order: number[]): number {
   const p = Math.floor((y - HBAR.y0) / HBAR.rowH);

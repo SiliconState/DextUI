@@ -23,9 +23,8 @@
     sparkX,
     sparkY,
     sparkIndexAtX,
-    barLayout,
-    barX,
-    barIndexAtX,
+    barGroupLayout,
+    barGroupHitAtX,
     hbarRowAtY,
     hbarScaleMax,
     hbarWidth,
@@ -88,7 +87,8 @@
   const hiAbs = $derived(hbarScaleMax(vals(0), spec.max));
   const stats = $derived(seriesStats(vals(primary)));
   const donut = $derived(donutRows(vals(0)));
-  const bars = $derived(barLayout(n));
+  const mVis = $derived(Math.max(1, visible.length));
+  const bars = $derived(barGroupLayout(n, mVis));
   const showBrush = $derived(type === "line" && linked);
   const viewH = $derived(
     type === "spark" ? SPARK.h : type === "donut" ? Math.max(180, 24 + n * 20) : type === "hbar" ? HBAR.y0 + n * HBAR.rowH + 8 : PLOT.bottom + 48 + (showBrush ? 16 : 0),
@@ -114,7 +114,7 @@
   const hitIndex = (p: { x: number; y: number }): number => {
     if (type === "line") return lineIndexAtX(scl, p.x, n);
     if (type === "spark") return sparkIndexAtX(p.x, n);
-    if (type === "bar") return barIndexAtX(p.x, n, order);
+    if (type === "bar") return barGroupHitAtX(p.x, n, order, mVis)?.i ?? -1;
     if (type === "hbar") return hbarRowAtY(p.y, n, order);
     return -1;
   };
@@ -253,19 +253,25 @@
 
       {#if type === "bar"}
         {#each order as i, p (i)}
-          {@const x = barX(p, n)}
-          {@const v = vals(0)[i] ?? 0}
-          {@const y0 = scaleY(scl, 0)}
-          {@const y1 = scaleY(scl, v)}
-          {@const by = Math.max(0, Math.min(y0, y1))}
-          {@const bh = Math.max(2, Math.abs(y0 - y1))}
-          <g transform="translate({x},0)" style="transition: transform .18s ease">
-            <!-- svelte-ignore a11y_no_static_element_interactions -->
-            <rect x={-bars.bw / 2} y={by} width={bars.bw} height={bh} rx="2" style="fill:{v < 0 ? CHART_COLORS[4] : CHART_COLORS[i % 5]}; cursor:ns-resize" opacity={hoverI === i ? 1 : dim(i)} onpointerdown={(e) => startDrag(e, 0, i, "y")} />
-          </g>
+          {@const gx = PLOT.l + bars.slot * (p + 0.5)}
+          {#each visible as s, vp (s)}
+            {@const v = vals(s)[i] ?? 0}
+            {@const bx = bars.x(p, vp)}
+            {@const y0 = scaleY(scl, 0)}
+            {@const y1 = scaleY(scl, v)}
+            {@const by = Math.max(0, Math.min(y0, y1))}
+            {@const bh = Math.max(2, Math.abs(y0 - y1))}
+            <g transform="translate({bx},0)" style="transition: transform .18s ease">
+              <!-- svelte-ignore a11y_no_static_element_interactions -->
+              <rect x={-bars.bw / 2} y={by} width={bars.bw} height={bh} rx="2" style="fill:{v < 0 ? CHART_COLORS[4] : mVis > 1 ? CHART_COLORS[s % 5] : CHART_COLORS[i % 5]}; cursor:ns-resize" opacity={hoverI === i ? 1 : dim(i)} onpointerdown={(e) => startDrag(e, s, i, "y")} />
+            </g>
+            {#if visible.length === 1}
+              <text x={bx} y={by - 4} text-anchor="middle" font-size="10" style="fill:var(--fg,#e6edf3)">{fmt(v)}{unit}</text>
+            {/if}
+          {/each}
           <!-- svelte-ignore a11y_click_events_have_key_events -->
           <!-- svelte-ignore a11y_no_static_element_interactions -->
-          <text x={x} y={PLOT.bottom + 16} text-anchor="middle" font-size="10" style="fill:var(--dim,#8b949e); cursor:pointer" onclick={cycleSort}>{(labels[i] ?? "").slice(0, 10)}</text>
+          <text x={gx} y={PLOT.bottom + 16} text-anchor="middle" font-size="10" style="fill:var(--dim,#8b949e); cursor:pointer" onclick={cycleSort}>{(labels[i] ?? "").slice(0, 10)}</text>
         {/each}
 
       {:else}

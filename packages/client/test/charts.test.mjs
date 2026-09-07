@@ -137,3 +137,19 @@ test("parse: dense types (line/spark) accept up to 180 points, categorical stay 
   assert.equal(parseChartSpec(JSON.stringify({ type: "bar", values: Array.from({ length: 32 }, () => 1) })), null);
   assert.ok(parseChartSpec(JSON.stringify({ type: "spark", values: Array.from({ length: 32 }, () => 1) })));
 });
+
+test("multi-series bar: one titled bar per series per label, color follows series, negatives stay red", () => {
+  const svg = renderChartSVG({
+    type: "bar",
+    labels: ["rev", "margin"],
+    values: [85, 48],
+    series: [
+      { name: "AVGO", values: [85, 48] },
+      { name: "AMD", values: [-1, 15] },
+    ],
+  });
+  assert.equal((svg.match(/<title>/g) ?? []).length, 4, "2 labels x 2 series bars, legend adds none");
+  assert.ok(svg.includes("#39c5cf"), "series 1 renders in chart color 2");
+  assert.ok(svg.includes("#f85149"), "a negative bar renders in the negative color");
+  assert.equal((svg.match(/<rect /g) ?? []).length, 6, "4 bars + 2 legend swatches");
+});

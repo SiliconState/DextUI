@@ -249,26 +249,52 @@ export function renderChartSVG(spec: ChartSpec): string {
   const axisL = 8;
   const axisR = W - 64; // room for y labels
   const H = bottom + 34;
-  const hi = Math.max(0, spec.max ?? Math.max(...spec.values));
-  const lo = Math.min(0, ...spec.values);
+  const allV = spec.series?.length ? spec.series.flatMap((s) => s.values) : spec.values;
+  const hi = Math.max(0, spec.max ?? Math.max(...allV));
+  const lo = Math.min(0, ...allV);
   const span = hi - lo || 1;
   const py = (v: number) => bottom - ((bottom - top) * (v - lo)) / span;
   const px = (i: number) => axisL + ((axisR - axisL) * (i + 0.5)) / spec.values.length;
   const grid = gridY(axisL, axisR, top, bottom, hi, lo, unit);
   let body = "";
   if (spec.type === "bar") {
+    // Grouped bars: with named series each label gets one bar per series
+    // (color = series); a lone series keeps the classic per-bar coloring.
+    const rowsArr = spec.series?.length ? spec.series.map((s) => s.values) : [spec.values];
+    const m = rowsArr.length;
     const slot = (axisR - axisL) / spec.values.length;
-    const bw = Math.min(44, slot * 0.62);
+    const group = Math.min(44, slot * 0.62);
+    const gap = m > 1 ? 2 : 0;
+    const bw = m > 1 ? Math.max(3, (group - gap * (m - 1)) / m) : group;
     for (let i = 0; i < spec.values.length; i++) {
-      const v = spec.values[i] ?? 0;
-      const y0 = py(0);
-      const y1 = py(v);
-      const by = Math.min(y0, y1);
-      const bh = Math.max(2, Math.abs(y0 - y1));
-      body +=
-        `<rect x="${(px(i) - bw / 2).toFixed(1)}" y="${by.toFixed(1)}" width="${bw.toFixed(1)}" height="${bh.toFixed(1)}" rx="2"` +
-        ` style="fill:${v < 0 ? CHART_COLORS[4] : CHART_COLORS[i % CHART_COLORS.length]}"><title>${esc(`${labels[i] ?? ""}: ${fmt(v)}${unit}`)}</title></rect>`;
-      body += `<text x="${px(i).toFixed(1)}" y="${(by - 4).toFixed(1)}" text-anchor="middle" font-size="10" style="fill:var(--fg,#e6edf3)">${esc(`${fmt(v)}${unit}`)}</text>`;
+      for (let s = 0; s < m; s++) {
+        const v = rowsArr[s]?.[i] ?? 0;
+        const y0 = py(0);
+        const y1 = py(v);
+        const by = Math.min(y0, y1);
+        const bh = Math.max(2, Math.abs(y0 - y1));
+        const bx = axisL + slot * (i + 0.5) - group / 2 + s * (bw + gap);
+        const name = spec.series?.[s]?.name || `s${s + 1}`;
+        const tipTxt = m > 1 ? `${labels[i] ?? ""} · ${name}: ${fmt(v)}${unit}` : `${labels[i] ?? ""}: ${fmt(v)}${unit}`;
+        const fill = v < 0 ? CHART_COLORS[4] : m > 1 ? CHART_COLORS[s % CHART_COLORS.length] : CHART_COLORS[i % CHART_COLORS.length];
+        body +=
+          `<rect x="${bx.toFixed(1)}" y="${by.toFixed(1)}" width="${bw.toFixed(1)}" height="${bh.toFixed(1)}" rx="2"` +
+          ` style="fill:${fill}"><title>${esc(tipTxt)}</title></rect>`;
+      }
+      if (m === 1) {
+        const v = rowsArr[0]?.[i] ?? 0;
+        const by = Math.min(py(0), py(v));
+        body += `<text x="${px(i).toFixed(1)}" y="${(by - 4).toFixed(1)}" text-anchor="middle" font-size="10" style="fill:var(--fg,#e6edf3)">${esc(`${fmt(v)}${unit}`)}</text>`;
+      }
+    }
+    if (m > 1) {
+      const names = spec.series ?? [];
+      names.forEach((sr, s) => {
+        const lx = axisR - names.length * 78 + s * 78;
+        body +=
+          `<rect x="${lx.toFixed(1)}" y="10" width="9" height="9" rx="2" style="fill:${CHART_COLORS[s % CHART_COLORS.length]}"/>` +
+          `<text x="${(lx + 13).toFixed(1)}" y="18" font-size="10" style="fill:var(--fg,#e6edf3)">${esc((sr.name || `s${s + 1}`).slice(0, 9))}</text>`;
+      });
     }
   } else {
     const pts = spec.values.map((v, i) => `${px(i).toFixed(1)},${py(v).toFixed(1)}`).join(" ");

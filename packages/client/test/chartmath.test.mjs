@@ -26,6 +26,8 @@ import {
   seriesStats,
   donutRows,
   clampTip,
+  barGroupLayout,
+  barGroupHitAtX,
 } from "../dist/index.js";
 
 test("scale: baseline never above 0, max override pins the top, degenerate data still spans", () => {
@@ -118,4 +120,22 @@ test("stats and donut arcs come from the same (edited) values", () => {
 test("tooltip clamps inside the host on narrow screens", () => {
   assert.deepStrictEqual(clampTip(300, 20, 320), { left: 180, top: 0 });
   assert.deepStrictEqual(clampTip(10, 100, 600), { left: 18, top: 44 });
+});
+
+test("barGroupLayout: m=1 matches the classic centered bar; m>1 splits the group, still centered", () => {
+  const g1 = barGroupLayout(6, 1);
+  assert.equal(g1.bw, g1.group);
+  assert.ok(Math.abs(g1.x(2, 0) - barX(2, 6)) < 1e-9, "m=1 centers on the classic bar center");
+  const g3 = barGroupLayout(6, 3);
+  assert.ok(g3.bw * 3 + 2 * 2 <= g3.group + 1e-9, "bars plus gaps fit inside the group");
+  assert.ok(g3.x(0, 0) < g3.x(0, 1) && g3.x(0, 1) < g3.x(0, 2), "series run left-to-right inside a group");
+  assert.ok(Math.abs((g3.x(0, 0) + g3.x(0, 2)) / 2 - barX(0, 6)) < 1e-9, "the group stays centered");
+});
+
+test("barGroupHitAtX: resolves (bar, series) under sort, nulls between groups and outside", () => {
+  const order = sortOrder([5, 1, 3], 1); // |5| > |3| > |1| -> [0, 2, 1]
+  const g2 = barGroupLayout(3, 2);
+  assert.deepEqual(barGroupHitAtX(g2.x(0, 1), 3, order, 2), { i: 0, s: 1 });
+  assert.equal(barGroupHitAtX(g2.x(0, 1) + 40, 3, order, 2), null, "past the group is null");
+  assert.equal(barGroupHitAtX(PLOT.l - 4, 3, order, 2), null, "outside the plot is null");
 });
