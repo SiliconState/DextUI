@@ -34,7 +34,7 @@ import { checkedPath, purgeSeat, seatFiles } from "./session-files.mjs";
 import { GALLERY_DEFAULTS, PACK_NAME_RE, buildCatalog, listPackFiles, listPackTree, loadGallery, packCommands, parsePackListingJson, parsePackSlash, readPackFile, renderPackList, unmetRequirements, writePackFile } from "./packs.mjs";
 import { RUN_ID_RE as CREW_RUN_ID_RE, TAIL_MAX_LINES, createCrewAdapter } from "./crew.mjs";
 import { createSelfEdit, resolveStaticDir } from "./selfedit.mjs";
-import { createDir, listDirs } from "./dirs.mjs";
+import { confine, createDir, listDirs } from "./dirs.mjs";
 import { createConnectors } from "./connectors.mjs";
 import { compileFlow, deleteFlow, listFlows, readFlow, writeFlow } from "./flows.mjs";
 import { createScheduler } from "./triggers.mjs";
@@ -362,9 +362,36 @@ const CAPABILITIES = [
   "provider_auth",
 ];
 
-// Root of the folder picker. Sessions may open any directory (session.open
-// checks existence only); the picker just never *shows* anything outside it.
+// Root of the folder picker — and of every session folder a client may name.
+// session.open / session.configure{cwd} accept only what the picker could have
+// shown (inside the root, no symlinks on the way, no dot-dirs) plus the host's
+// two well-known folders: its boot cwd and the workbench checkout.
 const DIRS_ROOT = path.resolve(argValue("dirs-root", process.env.DEXTUI_DIRS_ROOT ?? process.env.HOME ?? process.cwd()));
+const CWD_REFUSALS = {
+  outside_root: "folder is outside the host's root",
+  hidden: "hidden folders are not available",
+  refused: "symlinked paths are refused",
+  missing: "folder does not exist",
+  not_dir: "not a folder",
+};
+function resolveSessionCwd(requested) {
+  if (typeof requested !== "string" || !requested.trim()) return { error: "missing", message: "cwd must be a folder path" };
+  const raw = requested.trim();
+  // Relative paths are root-relative, exactly as x-agentlinkd.dirs.* takes
+  // them; only absolute paths can name a well-known folder.
+  if (path.isAbsolute(raw)) {
+    const abs = path.resolve(raw);
+    const wellKnown = [DEFAULT_CWD, SELF?.enabled ? path.resolve(SELF.status().repo) : null];
+    if (wellKnown.includes(abs)) {
+      let ok = false;
+      try { ok = fs.statSync(abs).isDirectory(); } catch { /* gone */ }
+      return ok ? { abs } : { error: "missing", message: `${CWD_REFUSALS.missing}: ${abs}` };
+    }
+  }
+  const c = confine(DIRS_ROOT, raw);
+  if (c.error) return { error: c.error, message: `${CWD_REFUSALS[c.error] ?? c.error}: ${path.resolve(DIRS_ROOT, raw)}` };
+  return { abs: c.abs };
+}
 const CONNECTORS = createConnectors({ home: DEXT_HOME, root: DIRS_ROOT, allowLocal: process.env.DEXTUI_CONNECTORS_ALLOW_LOCAL === "1" });
 
 // Host-handled slash commands, advertised in hello_ok so the composer's
@@ -1946,12 +1973,12 @@ async function handleCommand(client, frame) {
         else scheduleList();
         return;
       }
-      const requestedCwd = typeof frame.cwd === "string" ? path.resolve(frame.cwd) : DEFAULT_CWD;
-      if (!fs.existsSync(requestedCwd) || !fs.statSync(requestedCwd).isDirectory()) {
-        sendError(client, "bad_request", `cwd is not a directory: ${requestedCwd}`);
+      const r = resolveSessionCwd(frame.cwd === undefined ? DEFAULT_CWD : frame.cwd);
+      if (r.error) {
+        sendError(client, "bad_request", `cwd refused — ${r.message}`);
         return;
       }
-      const cwd = requestedCwd;
+      const cwd = r.abs;
       const approval = APPROVALS.has(frame.approval) ? frame.approval : DEFAULT_APPROVAL;
       const s = makeSession({ cwd, approval });
       publish(journalData(s, "session.state", { status: "live" }));
@@ -1994,10 +2021,22 @@ async function handleCommand(client, frame) {
       }
       const wantsModel = frame.provider !== undefined || frame.model !== undefined;
       const wantsEffort = frame.thinking_effort !== undefined;
+      const wantsCwd = frame.cwd !== undefined;
       const liveBridge = !!(s.bridge && !s.bridge.exited && s.bridge.ready);
-      if (s.working && !(BRIDGE && liveBridge && wantsEffort && !wantsModel)) {
-        sendError(client, "busy", "model applies between turns; effort can change mid-turn");
+      // The folder never moves under a running turn: the agent's tool calls
+      // are resolving paths against it right now.
+      if (s.working && (wantsCwd || !(BRIDGE && liveBridge && wantsEffort && !wantsModel))) {
+        sendError(client, "busy", wantsCwd ? "the folder changes between turns — wait for this one to finish" : "model applies between turns; effort can change mid-turn");
         return;
+      }
+      let nextCwd = null;
+      if (wantsCwd) {
+        const r = resolveSessionCwd(frame.cwd);
+        if (r.error) {
+          sendError(client, "bad_request", `cwd refused — ${r.message}`);
+          return;
+        }
+        nextCwd = r.abs;
       }
       if (wantsModel) {
         if (!BRIDGE && (s.modelLocked || s.turns > 0)) {
@@ -2031,13 +2070,24 @@ async function handleCommand(client, frame) {
         // Live child: /effort is a runtime control (applies even mid-turn).
         if (liveBridge) s.bridge.control(`/effort ${frame.thinking_effort}`);
       }
+      if (nextCwd && nextCwd !== s.cwd) {
+        const from = s.cwd;
+        s.cwd = nextCwd;
+        // History is the seat's, not the folder's: the next turn resumes it
+        // from the new cwd (fresh DEXT.md / project context), so only the
+        // child restarts. A scrollback marker keeps the switch visible.
+        if (BRIDGE) recycleBridge(s);
+        publish(journalData(s, "info", `Folder: ${from} → ${nextCwd}`));
+      }
       persistIndex();
       publish(journalData(s, "session.configured", {
         provider: s.provider ?? undefined,
         model: s.model ?? undefined,
         thinking_effort: s.thinkingEffort,
         model_locked: s.modelLocked,
+        cwd: s.cwd,
       }));
+      if (nextCwd) scheduleList();
       return;
     }
 

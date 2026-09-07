@@ -38,6 +38,7 @@ async function harness(t) {
     `--cwd=${cwd}`,
     `--state-dir=${state}`,
     `--dext=${path.join(root, "scripts/fake-dext.mjs")}`,
+    `--dirs-root=${temp}`,
   ], {
     env: { ...process.env, FAKE_DEXT_NDJSON: "1", DEXT_HOME: home, DEXT_SESSIONS_DIR: "", DEXT_LOGS_DIR: "" },
     stdio: ["ignore", "pipe", "pipe"],
@@ -138,6 +139,28 @@ test("bridge: warm child across idle interrupt, /approval recycle, queued-steer 
   assert.notEqual(await pidOf(at), pid1, "/approval change must recycle the child");
   await a.wait((e) => e.session === id && e.event === "turn_end", at);
   assert.ok(!a.events.slice(at).some((e) => e.session === id && e.event === "error"), "the retired child's exit must not surface as a turn failure");
+
+  // Folder change: refused mid-turn (tool calls resolve against the cwd);
+  // between turns it recycles the child so the next turn runs from the new
+  // folder with the seat's history intact.
+  const elsewhere = path.join(h.temp, "elsewhere");
+  fs.mkdirSync(elsewhere);
+  at = a.events.length;
+  a.send("prompt.submit", { session: id, text: "SLOW" });
+  const pid3 = await pidOf(at);
+  a.send("session.configure", { id, cwd: elsewhere });
+  const busy = await a.wait((e) => e.event === "error", at);
+  assert.equal(busy.data.code, "busy");
+  a.send("interrupt", { session: id });
+  await a.wait((e) => e.session === id && e.event === "turn_end", at);
+  at = a.events.length;
+  a.send("session.configure", { id, cwd: elsewhere });
+  assert.equal((await a.wait((e) => e.session === id && e.event === "session.configured", at)).data.cwd, elsewhere);
+  at = a.events.length;
+  a.send("prompt.submit", { session: id, text: "four" });
+  assert.notEqual(await pidOf(at), pid3, "folder change must recycle the child");
+  await a.wait((e) => e.session === id && e.event === "turn_end", at);
+  assert.ok(!a.events.slice(at).some((e) => e.session === id && e.event === "error"), "recycle for a folder change must not surface as a turn failure");
 
   // Queued steering (child still spawning) drains at turn_end as its own turn.
   const id2 = await open(a);

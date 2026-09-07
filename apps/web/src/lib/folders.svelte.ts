@@ -5,10 +5,16 @@
 import type { DirsListReply, Envelope } from "@dextui/protocol";
 import { app, pushToast } from "./state.svelte";
 
+export type FolderIntent = "open" | "move";
+
 export const folders = $state({
   open: false,
   loading: false,
   listing: null as DirsListReply | null,
+  /** What choosing a folder means: open a new session there, or move `moveId` to it. */
+  intent: "open" as FolderIntent,
+  /** Session being moved (intent "move"). */
+  moveId: "",
   /** What to do with the chosen folder (default: open a session there). */
   onPick: null as ((path: string) => void) | null,
   /** Composer text to seed once the session opens (e.g. a pack starter). */
@@ -19,20 +25,50 @@ export function foldersEnabled(): boolean {
   return app.caps.includes("dirs") && !!app.conn?.home;
 }
 
-/** Open the picker at `path` (default: the root). `seed` prefills the composer of the session that opens. */
-export function openFolderPicker(opts: { path?: string; seed?: string; onPick?: (path: string) => void } = {}): void {
+/** A session can move folders when it exists, is not exited, and is between
+ *  turns — the host refuses mid-turn (the agent's tool calls resolve paths
+ *  against the folder right now), so the UI never offers it. */
+export function movableSession(id = app.activeId): { id: string; title: string; cwd: string } | null {
+  if (!id || !foldersEnabled()) return null;
+  const s = app.sessions.find((x) => x.id === id);
+  if (!s || s.status === "exited" || s.working) return null;
+  return { id: s.id, title: s.title, cwd: s.cwd ?? "" };
+}
+
+/** Open the picker at `path` (default: the root). `seed` prefills the composer of the session that opens.
+ *  `intent: "move"` targets `session` (default: the active one) and starts inside its current folder. */
+export function openFolderPicker(opts: { path?: string; seed?: string; onPick?: (path: string) => void; intent?: FolderIntent; session?: string } = {}): void {
   const c = app.conn;
   if (!c || !foldersEnabled()) return;
+  let intent: FolderIntent = opts.intent ?? "open";
+  let moveId = "";
+  let start = opts.path;
+  if (intent === "move") {
+    const m = movableSession(opts.session);
+    if (!m) {
+      const s = app.sessions.find((x) => x.id === (opts.session ?? app.activeId));
+      pushToast("warn", s?.working ? "Wait for the current turn to finish before changing folders" : "No session to move — pick a folder to start one");
+      if (s?.working) return;
+      intent = "open";
+    } else {
+      moveId = m.id;
+      if (!start && m.cwd && (m.cwd === c.home || m.cwd.startsWith(c.home + "/"))) start = m.cwd;
+    }
+  }
   folders.open = true;
+  folders.intent = intent;
+  folders.moveId = moveId;
   folders.seed = opts.seed ?? "";
   folders.onPick = opts.onPick ?? null;
-  navigate(opts.path ?? c.home);
+  navigate(start ?? c.home);
 }
 
 export function closeFolderPicker(): void {
   folders.open = false;
   folders.onPick = null;
   folders.seed = "";
+  folders.intent = "open";
+  folders.moveId = "";
 }
 
 export function navigate(path: string): void {
@@ -63,15 +99,40 @@ export function recentFolders(limit = 4): string[] {
   return out;
 }
 
-/** Choose a folder (`path`, default the listed one): open a session there
- *  (or run the caller's hook). Recents chips pass their own path. */
-export function pickCurrent(path?: string): void {
+/** Move a session to `path`: the host confines the path, refuses mid-turn,
+ *  and (bridge) restarts the child at the next turn boundary with history
+ *  intact. Confirmation arrives as session.configured{cwd} + an info marker. */
+export function moveSession(id: string, path: string): void {
+  const c = app.conn;
+  const s = app.sessions.find((x) => x.id === id);
+  if (!c || !s) return;
+  if (s.cwd === path) {
+    pushToast("ok", `Already in ${shortFolder(path)}`);
+    return;
+  }
+  if (s.working) {
+    pushToast("warn", "Wait for the current turn to finish before changing folders");
+    return;
+  }
+  c.configureSession(id, { cwd: path });
+  if (s.status === "cold") c.openSession({ id });
+}
+
+/** Choose a folder (`path`, default the listed one) with the picker's current
+ *  intent; `intent` overrides it (⇧⏎ flips to the other action). */
+export function pickCurrent(path?: string, intent?: FolderIntent): void {
   const c = app.conn;
   const p = path ?? folders.listing?.path;
   if (!p || !c) return;
   const hook = folders.onPick;
   const seed = folders.seed;
+  const want = intent ?? folders.intent;
+  const moveId = folders.moveId || app.activeId;
   closeFolderPicker();
+  if (want === "move") {
+    if (moveId) moveSession(moveId, p);
+    return;
+  }
   if (hook) {
     hook(p);
     return;
@@ -107,6 +168,15 @@ export function onDirsControl(env: Envelope): void {
       pushToast("warn", d.message);
     }
   }
+}
+
+/** Session-plane tap (wired from state.svelte.ts): a confirmed folder change. */
+export function onFolderEvent(env: Envelope): void {
+  if (env.event !== "session.configured") return;
+  const d = env.data as { cwd?: string };
+  if (typeof d?.cwd !== "string" || !env.session) return;
+  const s = app.sessions.find((x) => x.id === env.session);
+  if (s && s.cwd && s.cwd !== d.cwd) pushToast("ok", `Moved to ${shortFolder(d.cwd)}`);
 }
 
 /** Short display of a path relative to the picker root. */

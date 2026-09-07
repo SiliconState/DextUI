@@ -15,6 +15,7 @@
     wakeSession,
   } from "../lib/state.svelte";
   import { openProviders, providersEnabled } from "../lib/connectors.svelte";
+  import { foldersEnabled, movableSession, openFolderPicker } from "../lib/folders.svelte";
   import { useSession } from "../lib/useSession.svelte";
   import { useDialog } from "../lib/dialog.svelte";
   import { crew, crewEnabled, crewEscalations, crewLive, openRun, shortRun } from "../lib/crew.svelte";
@@ -110,6 +111,11 @@
       });
     }
     out.push({ slug: "session.new", label: "New session", hint: "⌘n", group: "sess", run: newSession });
+    if (foldersEnabled()) {
+      out.push({ slug: "folder.open", label: "Open a folder — new session there", hint: "o", group: "sess", run: () => openFolderPicker() });
+      const m = movableSession();
+      if (m) out.push({ slug: "folder.move", label: `Change folder — move “${m.title}”`, hint: "between turns", group: "sess", run: () => openFolderPicker({ intent: "move", session: m.id }) });
+    }
     if (view) {
       out.push({
         slug: "session.copyid",

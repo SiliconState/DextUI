@@ -53,6 +53,30 @@ for (const file of files) {
 
 // ---------- synthetic journals ----------
 
+test("(ctx) usage_update feeds the context meter for every provider; history_context_updated still wins when sent", () => {
+  const usage = { input: 1200, output: 40, cache_create: 300, cache_read: 8500, cost_usd: 0 };
+  const store = applyAll(new SessionStore("sess_t"), journal([
+    { event: "turn_start", data: {} },
+    { event: "usage_update", data: { turn: usage, session: usage } },
+  ]));
+  assert.equal(store.state.contextTokens, 10_000, "input + cache_create + cache_read is what the model saw");
+  assert.equal(store.state.contextChars, 40_000, "chars mirror the TUI's tokens×4");
+  // Parity with the server fold (snapshot meta).
+  assert.equal(foldMeta(journal([{ event: "usage_update", data: { turn: usage, session: usage } }])).contextChars, 40_000);
+
+  const local = applyAll(new SessionStore("sess_t"), journal([
+    { event: "usage_update", data: { turn: usage, session: usage } },
+    { event: "history_context_updated", data: { chars: 2000, tokens: 700 } },
+  ]));
+  assert.equal(local.state.contextTokens, 700);
+  assert.equal(local.state.contextChars, 2000);
+
+  const zero = applyAll(new SessionStore("sess_t"), journal([
+    { event: "usage_update", data: { turn: { input: 0, output: 5, cache_create: 0, cache_read: 0, cost_usd: 0 }, session: usage } },
+  ]));
+  assert.equal(zero.state.contextTokens, undefined, "a request that reports no input leaves the meter untouched");
+});
+
 const TOOL = { call_id: "call_1", name: "bash", summary: "ls -la" };
 
 test("(a) tool lifecycle preview→start→output_delta×3→result folds into one card", () => {

@@ -9,6 +9,7 @@ import Meter from "./Meter.svelte";
   import { connectorFor, connectors, openProviders, providersEnabled, pushConnector, syncConnector } from "../lib/connectors.svelte";
   import { crew, crewLive, crewDur, crewAge, openRun, shortRun } from "../lib/crew.svelte";
   import { selfEdit, cancelRestart } from "../lib/selfedit.svelte";
+  import { foldersEnabled, movableSession, openFolderPicker } from "../lib/folders.svelte";
   import { fmtTokens, fmtElapsed, prettyPath } from "../lib/markdown";
   import { useSession } from "../lib/useSession.svelte";
 
@@ -39,14 +40,22 @@ import Meter from "./Meter.svelte";
     }
   });
 
-  const ctxWindow = $derived(
-    view.diagnostics?.context_window ? view.diagnostics.context_window * 4 : 200_000,
-  );
-  const ctxPct = $derived(
-    view.contextChars ? Math.min(100, Math.round((view.contextChars / ctxWindow) * 100)) : 0,
-  );
+  // Ctx: what the model saw on its last request (input + cache tokens from
+  // usage_update — every provider reports it) over the model's window
+  // (turn_diagnostics.context_window, else 200k). Same inputs as the TUI's
+  // meter; the old chars-only source lit up for local models alone.
+  const ctxWindow = $derived(view.diagnostics?.context_window || 200_000);
+  const ctxUsed = $derived(view.contextTokens ?? (view.contextChars ? Math.ceil(view.contextChars / 4) : 0));
+  const ctxPct = $derived(ctxUsed ? Math.min(100, Math.round((ctxUsed / ctxWindow) * 100)) : 0);
   const ctxClass = $derived(ctxPct >= 90 ? "st-red" : ctxPct >= 70 ? "st-yellow" : "st-cyan");
+  const ctxTitle = $derived(`Context: ${fmtTokens(ctxUsed)} of ${fmtTokens(ctxWindow)} tokens on the last request${view.diagnostics?.context_window ? "" : " (window assumed)"}`);
 
+  // Folder chip: click to move this session elsewhere (picker in "move"
+  // intent, opening inside the current folder). Disabled mid-turn — the host
+  // refuses then, and the agent's tool calls are resolving paths against it.
+  const isReal = $derived(app.sessions.some((s) => s.id === view.id));
+  const canMove = $derived(isReal && !!movableSession(view.id));
+  const folderTitle = $derived(!foldersEnabled() ? view.cwd : view.working ? `${view.cwd}\nChange folder — available when the turn finishes` : `${view.cwd}\nChange folder (o)`);
   const dotClass = $derived(
     app.phase === "live"
       ? view.working
@@ -115,7 +124,11 @@ import Meter from "./Meter.svelte";
     <button class="act rail-restore" data-agent-id="sidebar.restore" onclick={toggleSidebar} title="Show sessions (Ctrl/Cmd+B)">[› sessions]</button>
   {/if}
   <span class={`dot ${dotClass}`} data-agent-id="status.phase" data-state={app.phase}>●</span>
-  <span class="st-green truncate">{view.cwd ? prettyPath(view.cwd, view.cwd) : "DextUI"}</span>
+  {#if foldersEnabled() && isReal}
+    <button class="act folder truncate" class:st-green={true} data-agent-id="status.folder" data-state={canMove ? "ready" : "locked"} disabled={!canMove} title={folderTitle} aria-label="Change this session's folder" onclick={() => openFolderPicker({ intent: "move", session: view.id })}>{view.cwd ? prettyPath(view.cwd, view.cwd) : "DextUI"}</button>
+  {:else}
+    <span class="st-green truncate">{view.cwd ? prettyPath(view.cwd, view.cwd) : "DextUI"}</span>
+  {/if}
   {#if connector}
     <span class="conn" data-agent-id="status.connector" data-state={connector.status} title={`${connector.remote}\nLast sync: ${connAge(connector.last_sync)}${connector.error ? `\n${connector.error}` : ""}`}>
       <span class="faint">{connector.status === "syncing" ? "syncing…" : connector.status === "error" ? "sync failed" : `synced ${connAge(connector.last_sync)}`}</span>
@@ -198,9 +211,9 @@ import Meter from "./Meter.svelte";
     <span class="sep">│</span>
     <span class="st-yellow" data-agent-id="status.host.restart" data-state="restarting">↻ Host restarting</span>
   {/if}
-  {#if view.contextChars}
+  {#if ctxUsed > 0}
     <span class="sep">│</span>
-    <span data-agent-id="status.ctx">
+    <span data-agent-id="status.ctx" title={ctxTitle}>
       <span class="faint">Ctx</span>
       <span class={ctxClass} data-agent-id="status.ctxbar"><Meter pct={ctxPct} /></span>
       <span class={ctxClass}>{ctxPct}%</span>

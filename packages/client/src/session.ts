@@ -28,6 +28,7 @@ import type {
   ThinkingEffort,
   TurnDiagnosticsEvent,
   TurnEndEvent,
+  Usage,
   UsageUpdateEvent,
 } from "@dextui/protocol";
 
@@ -63,6 +64,9 @@ export interface SessionState {
   turnUsage?: UsageUpdateEvent["turn"];
   sessionUsage?: UsageUpdateEvent["session"];
   contextChars?: number;
+  /** Tokens the model saw on its last request (input + cache), or an estimate
+   *  from history chars — the TUI's Ctx meter input, provider-agnostic. */
+  contextTokens?: number;
   diagnostics?: TurnDiagnosticsEvent;
   telemetry?: Record<string, number>;
   /** Last provider retry seen during the current turn; cleared on turn_end. */
@@ -80,6 +84,15 @@ export type Listener = () => void;
 const RECENT_CAP = 100;
 const TAIL_CAP = 4000;
 const DELTA_EVENTS = new Set(["text_delta", "thinking_delta", "tool_output_delta"]);
+
+/** Context the model saw on a request: fresh input plus everything served
+ *  from cache (cache_create + cache_read). Same sum as the TUI's
+ *  `Usage::context_tokens()`. */
+export function turnContextTokens(u: Usage | undefined): number {
+  if (!u) return 0;
+  const n = (u.input || 0) + (u.cache_create || 0) + (u.cache_read || 0);
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
 
 export class SessionStore {
   state: SessionState;
@@ -222,6 +235,7 @@ export class SessionStore {
           turnUsage: s.turn_usage,
           sessionUsage: s.session_usage,
           contextChars: s.context_chars,
+          contextTokens: s.context_chars ? Math.max(1, Math.floor((s.context_chars + 3) / 4)) : undefined,
           diagnostics: s.diagnostics,
           retry: undefined,
         });
@@ -240,6 +254,7 @@ export class SessionStore {
         if (c.provider !== undefined) patch.provider = c.provider;
         if (c.model !== undefined) patch.model = c.model;
         if (c.thinking_effort !== undefined) patch.thinkingEffort = c.thinking_effort;
+        if (typeof c.cwd === "string" && c.cwd) patch.cwd = c.cwd;
         this.bump(patch);
         return;
       }
@@ -356,12 +371,17 @@ export class SessionStore {
       // --- meta ---
       case "usage_update": {
         const u = d as UsageUpdateEvent;
-        this.bump({ turnUsage: u.turn, sessionUsage: u.session });
+        // The turn's input + cache tokens are the context the model actually
+        // saw — every provider reports them, unlike history_context_updated
+        // (compaction/local paths only). Mirrors the TUI: ctx = turn tokens,
+        // chars = tokens × 4.
+        const ctx = turnContextTokens(u.turn);
+        this.bump(ctx > 0 ? { turnUsage: u.turn, sessionUsage: u.session, contextTokens: ctx, contextChars: ctx * 4 } : { turnUsage: u.turn, sessionUsage: u.session });
         return;
       }
       case "history_context_updated": {
         const h = d as HistoryContextUpdatedEvent;
-        this.bump({ contextChars: h.chars });
+        this.bump({ contextChars: h.chars, contextTokens: h.tokens ?? Math.max(1, Math.floor((h.chars + 3) / 4)) });
         return;
       }
       case "turn_diagnostics": {

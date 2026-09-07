@@ -154,4 +154,40 @@ test("host: dirs capability + hello_ok.home; list/create round-trip; refusals ar
   const list = await c.wait((e) => e.event === "session.list" && e.data.sessions.length === 1, mark);
   assert.equal(list.data.sessions[0].cwd, path.join(base, "Clients", "Acme Ltd"));
   assert.equal(list.data.sessions[0].approval_profile, "auto-write");
+  const sid = list.data.sessions[0].id;
+  c.send("session.subscribe", { id: sid });
+
+  // session.open is confined like the picker: nothing outside the root, no dot-dirs.
+  mark = c.events.length;
+  c.send("session.open", { cwd: "/tmp" });
+  const refusedOpen = await c.wait((e) => e.event === "error", mark);
+  assert.equal(refusedOpen.data.code, "bad_request");
+  assert.match(refusedOpen.data.message, /outside the host's root/);
+
+  // Change folder on a live session: confined the same way, confirmed by
+  // session.configured{cwd}, an info marker in the scrollback, and the list.
+  mark = c.events.length;
+  c.send("session.configure", { id: sid, cwd: "/etc" });
+  assert.match((await c.wait((e) => e.event === "error", mark)).data.message, /outside the host's root/);
+  mark = c.events.length;
+  c.send("session.configure", { id: sid, cwd: path.join(base, ".secrets") });
+  assert.match((await c.wait((e) => e.event === "error", mark)).data.message, /hidden folders/);
+  mark = c.events.length;
+  c.send("session.configure", { id: sid, cwd: path.join(base, "Books", "nope") });
+  assert.match((await c.wait((e) => e.event === "error", mark)).data.message, /does not exist/);
+
+  mark = c.events.length;
+  c.send("session.configure", { id: sid, cwd: "Books" }); // relative to the root, like the picker
+  const moved = await c.wait((e) => e.session === sid && e.event === "session.configured", mark);
+  assert.equal(moved.data.cwd, path.join(base, "Books"));
+  const marker = await c.wait((e) => e.session === sid && e.event === "info", mark);
+  assert.equal(marker.data, `Folder: ${path.join(base, "Clients", "Acme Ltd")} → ${path.join(base, "Books")}`);
+  const relisted = await c.wait((e) => e.event === "session.list" && e.data.sessions[0]?.cwd === path.join(base, "Books"), mark);
+  assert.equal(relisted.data.sessions[0].id, sid);
+
+  // Same folder again: acknowledged, no marker.
+  mark = c.events.length;
+  c.send("session.configure", { id: sid, cwd: path.join(base, "Books") });
+  await c.wait((e) => e.session === sid && e.event === "session.configured", mark);
+  assert.ok(!c.events.slice(mark).some((e) => e.session === sid && e.event === "info"), "unchanged folder must not journal a marker");
 });

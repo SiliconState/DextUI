@@ -673,8 +673,17 @@ function handleCommand(client, frame) {
         return;
       }
       if (s.working) {
-        sendError(client, "busy", "settings apply between turns");
+        sendError(client, "busy", frame.cwd !== undefined ? "the folder changes between turns — wait for this one to finish" : "settings apply between turns");
         return;
+      }
+      let nextCwd = null;
+      if (frame.cwd !== undefined) {
+        const r = mockDirsList(frame.cwd);
+        if (r.error) {
+          sendError(client, "bad_request", `cwd refused — ${r.error === "bad_path" ? "folder is outside the host's root" : "folder does not exist"}: ${String(frame.cwd)}`);
+          return;
+        }
+        nextCwd = r.path;
       }
       const wantsModel = frame.provider !== undefined || frame.model !== undefined;
       if (wantsModel) {
@@ -697,12 +706,19 @@ function handleCommand(client, frame) {
         }
         s.thinkingEffort = frame.thinking_effort;
       }
+      if (nextCwd && nextCwd !== s.cwd) {
+        const from = s.cwd;
+        s.cwd = nextCwd;
+        publish(journalData(s, "info", `Folder: ${from} → ${nextCwd}`));
+      }
       publish(journalData(s, "session.configured", {
         provider: s.provider,
         model: s.model,
         thinking_effort: s.thinkingEffort,
         model_locked: s.modelLocked,
+        cwd: s.cwd,
       }));
+      if (nextCwd) scheduleList();
       return;
     }
 

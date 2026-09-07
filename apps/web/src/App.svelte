@@ -33,7 +33,7 @@
   import PackSheet from "./components/PackSheet.svelte";
   import FolderPicker from "./components/FolderPicker.svelte";
   import Providers from "./components/Providers.svelte";
-  import { folders, closeFolderPicker } from "./lib/folders.svelte";
+  import { folders, closeFolderPicker, foldersEnabled, openFolderPicker } from "./lib/folders.svelte";
   import { providers, closeProviders } from "./lib/connectors.svelte";
   import FlowCanvas from "./components/FlowCanvas.svelte";
   import Tasks from "./components/Tasks.svelte";
@@ -189,6 +189,13 @@
       if (e.key === "g" && app.caps.includes("packs") && app.packs.length > 0) {
         e.preventDefault();
         app.galleryOpen = true;
+        return;
+      }
+      // Folder picker from anywhere: open a session in a folder, or (⇧⏎ /
+      // footer) move the current one. Same single-letter convention as g/f/t.
+      if (e.key === "o" && foldersEnabled()) {
+        e.preventDefault();
+        openFolderPicker();
         return;
       }
       // Flow builder: the workflow canvas (crew is the executor).

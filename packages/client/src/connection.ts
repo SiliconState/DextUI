@@ -284,7 +284,7 @@ export class Connection {
 
   configureSession(
     id: string,
-    patch: { provider?: string; model?: string; thinking_effort?: ThinkingEffort },
+    patch: { provider?: string; model?: string; thinking_effort?: ThinkingEffort; cwd?: string },
   ): void {
     this.sendRaw(cmd("session.configure", { id, ...patch }));
   }

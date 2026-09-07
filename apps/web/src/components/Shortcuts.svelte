@@ -16,6 +16,7 @@
         ["ctrl [ / ]", "previous / next session"],
         ["?", "this overlay"],
         ["g", "pack gallery (outside inputs; hosts with packs)"],
+        ["o", "folder picker — open a session in a folder; ⇧⏎ moves the current one"],
         ["esc", "close overlay / drawer"],
       ],
     },

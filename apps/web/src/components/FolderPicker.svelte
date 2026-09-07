@@ -3,7 +3,7 @@
   // finder semantics — click selects, double-click (or →) enters, ⏎ uses;
   // recents are the live sessions' folders. Confined to the host root
   // (hello_ok.home); the host never lists anything outside it.
-  import { folders, navigate, pickCurrent, closeFolderPicker, createFolder, recentFolders, shortFolder } from "../lib/folders.svelte";
+  import { folders, navigate, pickCurrent, closeFolderPicker, createFolder, recentFolders, shortFolder, movableSession } from "../lib/folders.svelte";
   import { app } from "../lib/state.svelte";
   import { useDialog } from "../lib/dialog.svelte";
   import { KIND_LABEL, addConnector, cancelSignIn, connectors, connectorsEnabled, relaySignIn, removeConnector, reopenSignIn, resetSignIn, signin, startSignIn, syncConnector } from "../lib/connectors.svelte";
@@ -112,6 +112,12 @@
   const selected = $derived(cursor >= 0 && cursor < visible.length ? visible[cursor] : null);
   const target = $derived(listing ? (selected ? `${listing.path}/${selected.name}` : listing.path) : "");
   const recents = $derived(listing && !listing.rel && !q ? recentFolders() : []);
+  // Intent: "move" relocates `moving` (this session); "open" starts a new
+  // session. The other action is always one keystroke away (⇧⏎) when a
+  // session is movable, so the picker never needs a mode switch.
+  const moving = $derived(folders.intent === "move" ? movableSession(folders.moveId) : null);
+  const alt = $derived(folders.intent === "move" ? null : movableSession());
+  const isHere = $derived(!!moving && moving.cwd === target);
   const crumbs = $derived.by(() => {
     const l = folders.listing;
     const home = app.conn?.home ?? "";
@@ -147,8 +153,11 @@
     if (folders.open) requestAnimationFrame(() => filterEl?.focus());
   });
 
-  function useTarget(): void {
-    if (target) pickCurrent(target);
+  function useTarget(alternate = false): void {
+    if (!target) return;
+    if (!alternate) { pickCurrent(target); return; }
+    if (folders.intent === "move") pickCurrent(target, "open");
+    else if (alt) pickCurrent(target, "move");
   }
   function enter(d: { name: string }): void {
     if (listing) navigate(`${listing.path}/${d.name}`);
@@ -169,7 +178,7 @@
     else if (e.key === "ArrowUp") { cursor = Math.max(-1, cursor - 1); e.preventDefault(); }
     else if (e.key === "ArrowRight" && selected && !q) { enter(selected); e.preventDefault(); } // (→ moves the filter caret while typing)
     else if (e.key === "ArrowLeft" && listing?.parent && !q) { navigate(listing.parent); e.preventDefault(); }
-    else if (e.key === "Enter") { useTarget(); e.preventDefault(); }
+    else if (e.key === "Enter") { useTarget(e.shiftKey); e.preventDefault(); }
     else if (e.key === "n" && !e.metaKey && !e.ctrlKey && !(e.target instanceof HTMLInputElement)) { creating = true; newName = ""; e.preventDefault(); }
   }
 
@@ -202,7 +211,11 @@
   <div class="insp gallery-overlay folders" role="dialog" aria-modal="true" aria-label="Choose a folder" tabindex="-1" use:dlg.ref data-agent-id="folders.overlay" data-state={folders.loading ? "loading" : "ready"} onkeydown={onKey}>
     <div class="insp-head">
       <span class="st-magenta">Folder</span>
-      <span class="dim">Where should this work happen?</span>
+      {#if moving}
+        <span class="dim" data-agent-id="folders.intent" data-state="move">Move <b>{moving.title}</b> · now in {shortFolder(moving.cwd) || "host folder"}</span>
+      {:else}
+        <span class="dim" data-agent-id="folders.intent" data-state="open">Where should this work happen?</span>
+      {/if}
       <span class="insp-acts">
         <button class="act" data-agent-id="folders.close" onclick={closeFolderPicker}>esc</button>
       </span>
@@ -222,7 +235,7 @@
             <div class="recents">
               <span class="faint lbl">Recent</span>
               {#each recents as r, i (r)}
-                <button class="chip" data-agent-id={`folders.recent.${i}`} title={r} onclick={() => pickCurrent(r)}>{shortFolder(r)}</button>
+                <button class="chip" class:sel={!!moving && moving.cwd === r} data-agent-id={`folders.recent.${i}`} title={moving && moving.cwd === r ? `${r}\n(current folder)` : r} onclick={() => pickCurrent(r)}>{shortFolder(r)}</button>
               {/each}
             </div>
           {/if}
@@ -337,10 +350,21 @@
               <button type="button" class="act" onclick={() => (creating = false)}>Cancel</button>
             </form>
           {:else}
-            <button class="use" data-agent-id="folders.use" onclick={useTarget}>
-              <span class="faint">[⏎]</span> Use <b>{shortFolder(target)}</b>
-              <span class="faint sub">{folders.seed ? "Opens a session and starts your pack" : "Opens a session here"}</span>
-            </button>
+            {#if moving}
+              <button class="use" data-agent-id="folders.use" data-state={isHere ? "here" : "move"} onclick={() => useTarget()} disabled={isHere}>
+                <span class="faint">[⏎]</span> {isHere ? "Already here" : "Move here"} <b>{shortFolder(target)}</b>
+                <span class="faint sub">{isHere ? "This session is in this folder" : "Keeps the conversation; the next turn works from this folder"}</span>
+              </button>
+              <button class="act" data-agent-id="folders.alt" title="Start a new session in this folder instead" onclick={() => useTarget(true)}>[⇧⏎] New session here</button>
+            {:else}
+              <button class="use" data-agent-id="folders.use" onclick={() => useTarget()}>
+                <span class="faint">[⏎]</span> Use <b>{shortFolder(target)}</b>
+                <span class="faint sub">{folders.seed ? "Opens a session and starts your pack" : "Opens a session here"}</span>
+              </button>
+              {#if alt}
+                <button class="act" data-agent-id="folders.alt" title={`Move “${alt.title}” here instead of opening a new session`} onclick={() => useTarget(true)} disabled={alt.cwd === target}>[⇧⏎] Move current session here</button>
+              {/if}
+            {/if}
             <button class="act" data-agent-id="folders.new" onclick={() => (creating = true)}>[n] New folder here</button>
           {/if}
           {#if !connectors.formOpen}<span class="faint hint">↑↓ move · → open · ← up</span>{/if}

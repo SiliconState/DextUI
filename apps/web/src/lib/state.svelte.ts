@@ -6,7 +6,7 @@ import { notifyEvent } from "./notify";
 import { acceptCrews, crewEscalations, onCrewControl, openRun } from "./crew.svelte";
 import { onPackControl } from "./packsheet.svelte";
 import { acceptSelf, onSelfControl, onSelfReconnected } from "./selfedit.svelte";
-import { onDirsControl } from "./folders.svelte";
+import { onDirsControl, onFolderEvent } from "./folders.svelte";
 import { onConnectorsControl } from "./connectors.svelte";
 import { onFlowsControl } from "./flows.svelte";
 import { onTasksControl } from "./tasks.svelte";
@@ -634,6 +634,7 @@ export function start(token: string): void {
     onEvent: (env: Envelope, store) => {
       if (app.conn !== c) return; // stale connection
       hydrating.delete(store.state.id); // the tail is real from here on
+      onFolderEvent(env);
       switch (env.event) {
         case "permission.request":
         case "permission.resolved":

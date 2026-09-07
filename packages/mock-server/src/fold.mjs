@@ -19,6 +19,12 @@ export function foldMeta(journal) {
       case "usage_update":
         turnUsage = d?.turn;
         sessionUsage = d?.session;
+        {
+          // Client parity: the turn's input + cache tokens are the context.
+          const t = d?.turn;
+          const ctx = t ? (t.input || 0) + (t.cache_create || 0) + (t.cache_read || 0) : 0;
+          if (Number.isFinite(ctx) && ctx > 0) contextChars = ctx * 4;
+        }
         break;
       case "turn_end":
         failed = !!d?.failed;

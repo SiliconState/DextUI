@@ -763,6 +763,8 @@ export interface SessionConfiguredEvent {
   model?: string;
   thinking_effort?: ThinkingEffort;
   model_locked: boolean;
+  /** Session folder after the change (session.configure{cwd}); patch, not replacement. */
+  cwd?: string;
 }
 
 export interface PermissionRequestEvent {
