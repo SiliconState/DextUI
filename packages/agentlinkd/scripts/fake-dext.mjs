@@ -65,6 +65,71 @@ if (process.argv[2] === "pack" && process.argv[3] === "create") {
   process.exit(0);
 }
 
+if (process.argv[2] === "--help") {
+  // Answers the host's bridge probe. `--input ndjson` is advertised only when
+  // the test opts in, so default harness runs stay on the one-shot path.
+  process.stdout.write(
+    `usage: dext [options]\n  -p <prompt>\n${process.env.FAKE_DEXT_NDJSON === "1" ? "  --input ndjson\n" : ""}`,
+  );
+  process.exit(0);
+}
+
+// Persistent host-protocol mode (`--input ndjson`): mirrors the frames the
+// bridge patch speaks. Turn scripts: text containing "APPROVE" pauses on a
+// permission until a permission frame answers; "SLOW" holds the turn open so
+// mid-turn steering can land; pid rides on turn_start so tests can observe
+// child recycles. Never returns: exits via close frame or stdin EOF.
+if (process.argv.includes("--input") && process.argv[process.argv.indexOf("--input") + 1] === "ndjson") {
+  const out = (event, data) => process.stdout.write(JSON.stringify({ event, ...(data === undefined ? {} : { data }) }) + "\n");
+  const usage = { input: 3, output: 2, cache_create: 0, cache_read: 0, cost_usd: 0 };
+  out("ready", { input: "ndjson", session_id: "fake-ndjson-1", model: "alpha", provider: "fake-a" });
+  let busy = false;
+  let buf = "";
+  const endTurn = (failed = false) => {
+    out("usage_update", { turn: usage, session: usage });
+    out("turn_end", { usage, failed });
+    busy = false;
+  };
+  const runTurn = (text) => {
+    busy = true;
+    out("turn_start", { pid: process.pid });
+    if (text.includes("APPROVE")) {
+      out("permission_request", { id: "perm-1", tool: "write_file", input: { path: "x" }, summary: "" });
+      return;
+    }
+    setTimeout(() => {
+      out("text_block_complete", `fake ${text.trim()}`);
+      out("thinking_effort_changed", { effort: "high" });
+      endTurn(false);
+    }, text.includes("SLOW") ? 500 : 60);
+  };
+  process.stdin.setEncoding("utf8");
+  process.stdin.on("data", (d) => {
+    buf += d;
+    let i;
+    while ((i = buf.indexOf("\n")) >= 0) {
+      let f;
+      try {
+        f = JSON.parse(buf.slice(0, i));
+      } catch {
+        buf = buf.slice(i + 1);
+        continue;
+      }
+      buf = buf.slice(i + 1);
+      if (f.type === "user") runTurn(String(f.text ?? ""));
+      else if (f.type === "steer") out("steering_received", { messages: [f.text], preview: String(f.text).slice(0, 80) });
+      else if (f.type === "permission") {
+        out("permission_resolved", { id: f.id, tool: "write_file", choice: f.choice });
+        endTurn(false);
+      } else if (f.type === "interrupt") {
+        if (busy) endTurn(true);
+      } else if (f.type === "close") process.exit(0);
+    }
+  });
+  process.stdin.on("end", () => process.exit(0));
+  await new Promise(() => {});
+}
+
 const prompt = await new Promise((resolve) => {
   let s = "";
   process.stdin.setEncoding("utf8");

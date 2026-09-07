@@ -1157,7 +1157,10 @@ function handleBridgeEvent(s, v) {
     }
     case "permission_resolved": {
       const id = String(d?.id ?? "");
-      const by = s.pendingPermission?.answeredBy ?? "timeout";
+      // dext's event carries no resolver (patch 0003: {id, tool, choice}), so
+      // an unanswered request means core resolved it itself — profile default
+      // or its own deadline — not necessarily a timeout.
+      const by = s.pendingPermission?.answeredBy ?? "core";
       if (s.pendingPermission?.request_id === id) s.pendingPermission = null;
       publish(journalData(s, "permission.resolved", { request_id: id, choice: d?.choice ?? "deny", by }));
       return;
