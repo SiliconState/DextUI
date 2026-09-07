@@ -7,7 +7,6 @@
 import type {
   CrewControlEvent,
   CrewLogChunk,
-  CrewLogCursor,
   CrewFileReply,
   CrewRunDetail,
   CrewRunSummary,
@@ -15,6 +14,7 @@ import type {
   CrewsPayload,
   Envelope,
 } from "@dextui/protocol";
+import { CrewLogBuffer } from "@dextui/client";
 import { CREW_EXT } from "@dextui/protocol";
 import { app, pushToast } from "./state.svelte";
 
@@ -39,21 +39,18 @@ export const crew = $state({
   railAll: false,
 });
 
-let logCursor: CrewLogCursor | undefined;
-let logText = "";
-let logDecoder = new TextDecoder();
-let logGap = false;
+const logBuffer = new CrewLogBuffer();
+let logSubscription = "";
 function resetLog(): void {
-  logCursor = undefined;
-  logText = "";
-  logDecoder = new TextDecoder();
-  logGap = false;
+  logBuffer.reset();
+  logSubscription = "";
 }
 
 export function syncCrewLog(): void {
   if (!crew.openId || !crew.tailWorker) return;
+  logSubscription = crypto.randomUUID();
   if (document.hidden) app.conn?.crewUnsubscribe(crew.openId);
-  else app.conn?.crewSubscribe(crew.openId, crew.tailWorker, logCursor);
+  else app.conn?.crewSubscribe(crew.openId, crew.tailWorker, logSubscription, logBuffer.cursor);
 }
 
 export function crewEnabled(): boolean {
@@ -166,6 +163,9 @@ export function openRun(id: string): void {
     crew.open = null;
     crew.tail = null;
     crew.tailWorker = "";
+    crew.tailPending = false;
+    crew.answering = false;
+    crew.stopping = false;
     crew.file = null;
   }
   crew.openId = id;
@@ -267,22 +267,12 @@ export function onCrewControl(env: Envelope): void {
     case `${CREW_EXT}.log`: {
       const d = env.data as CrewLogChunk;
       if (!d || d.run !== crew.openId || d.worker !== crew.tailWorker) return;
+      const result = logBuffer.accept(d, logSubscription);
+      if (result === "stale") return;
       crew.tailPending = false;
-      if (d.unavailable) return;
-      if (d.reset) {
-        resetLog();
-        logGap = d.gap;
-      } else if (!logCursor || d.generation !== logCursor.generation || d.start !== logCursor.offset) {
-        syncCrewLog();
-        return;
-      }
-      const bytes = Uint8Array.from(atob(d.data), (c) => c.charCodeAt(0));
-      logText += logDecoder.decode(bytes, { stream: true });
-      if (logText.length > 65536) { logText = logText.slice(-65536); logGap = true; }
-      logCursor = { generation: d.generation, offset: d.offset };
-      const lines = logText.replace(/\r/g, "").split("\n");
-      if (lines.at(-1) === "") lines.pop();
-      crew.tail = { run: d.run, worker: d.worker, lines: [...(logGap ? ["[Earlier log output unavailable or outside the retained window]"] : []), ...lines.slice(-80).map((l) => l.slice(0, 400))], bytes: d.bytes, truncated: logGap || lines.length > 80, at: Date.now() };
+      if (result === "unavailable") { crew.tail = null; return; }
+      if (result === "resync") { syncCrewLog(); return; }
+      crew.tail = { ...result, at: Date.now() };
       return;
     }
     case `${CREW_EXT}.tail`: {

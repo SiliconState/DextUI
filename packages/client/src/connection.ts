@@ -324,8 +324,8 @@ export class Connection {
     this.sendRaw(cmd(`${CREW_EXT}.tail`, { run, worker, lines }));
   }
 
-  crewSubscribe(run: string, worker: string, cursor?: { generation: string; offset: number }): void {
-    this.sendRaw(cmd(`${CREW_EXT}.subscribe`, { run, worker, ...(cursor ? { cursor } : {}) }));
+  crewSubscribe(run: string, worker: string, subscription: string, cursor?: { generation: string; offset: number }): void {
+    this.sendRaw(cmd(`${CREW_EXT}.subscribe`, { run, worker, subscription, ...(cursor ? { cursor } : {}) }));
   }
 
   crewUnsubscribe(run: string): void {

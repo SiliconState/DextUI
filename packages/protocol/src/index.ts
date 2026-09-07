@@ -750,17 +750,19 @@ export interface CrewLogCursor {
   offset: number;
 }
 
-export interface CrewLogChunk extends CrewLogCursor {
+export type CrewLogChunk = {
   run: string;
   worker: string;
+  subscription: string;
+} & ({ unavailable: true } | (CrewLogCursor & {
+  unavailable?: false;
   start: number;
   reset: boolean;
   gap: boolean;
   bytes: number;
   /** Base64 bytes; clients retain their UTF-8 decoder across chunk boundaries. */
   data: string;
-  unavailable?: boolean;
-}
+}));
 
 export interface CrewTailReply {
   run: string;

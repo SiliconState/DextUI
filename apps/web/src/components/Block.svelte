@@ -4,7 +4,7 @@
   // are CSS borders, never literal glyphs — glyph gutters shred when lines wrap.
   import type { ViewBlock as Block } from "@dextui/client";
   import { app, copyText, packOfPrompt, prefillComposer } from "../lib/state.svelte";
-  import { humanizeTool, humanizeLabel, parseRunMeta } from "../lib/display";
+  import { humanizeTool, humanizeLabel, parseRunMeta, isBashAdvisory } from "../lib/display";
   import { fileUrl, htmlPathIn } from "../lib/files";
   import { packForAuthMarker, openPackCredentials } from "../lib/packcreds.svelte";
   import { prettyPath } from "../lib/markdown";
@@ -208,7 +208,12 @@
     {/if}
   </div>
 {:else if block.kind === "marker"}
-  {#if batchLabels(block.text)}
+  {#if block.level !== "error" && !block.auth && isBashAdvisory(block.text)}
+    <details class="bash-advisory" data-agent-id="block.marker.advisory" data-state={block.level}>
+      <summary>Bash guidance <span class="faint">· details</span></summary>
+      <pre>{block.text}</pre>
+    </details>
+  {:else if batchLabels(block.text)}
     {@const labels = batchLabels(block.text)!}
     <details class="b-marker batch" data-agent-id="block.marker.batch" data-state={block.level}>
       <summary>
@@ -284,6 +289,9 @@
 {/if}
 
 <style>
+  .bash-advisory { color: var(--dim); font-size: 12px; }
+  .bash-advisory summary { cursor: pointer; width: fit-content; }
+  .bash-advisory pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; margin: 6px 0 2px; padding-left: 10px; border-left: 1px solid var(--line); }
   .pg {
     color: var(--green);
     font-weight: bold;

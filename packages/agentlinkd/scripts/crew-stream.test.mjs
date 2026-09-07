@@ -29,6 +29,11 @@ test("log cursors replay only unseen bytes; replacement, truncation and attempts
   assert.equal(second.reset, false);
   assert.equal(text(second), "second\n");
   assert.equal(text(readLogChunk(source, second)), "");
+  fs.appendFileSync(source.file, "x".repeat(100000));
+  const lagged = readLogChunk(source, second);
+  assert.equal(lagged.reset, true);
+  assert.equal(lagged.gap, true);
+  assert.equal(lagged.bytes - lagged.start, 65536);
   fs.renameSync(source.file, `${source.file}.1`);
   fs.writeFileSync(source.file, "rotated\n");
   const rotated = readLogChunk(source, second);
@@ -74,10 +79,16 @@ test("subscription recovers missing logs, yields to backpressure, resumes withou
   assert.equal(text(sent[2]), "waiting\n");
   await sleep(160);
   assert.equal(sent.length, 3);
+  available = false;
+  await sleep(160);
+  assert.equal(sent[3].unavailable, true);
+  available = true;
+  await sleep(160);
+  assert.equal(sent[4].data, "", "recovery must notify the client even without new bytes");
   stop();
   fs.appendFileSync(source.file, "closed\n");
   await sleep(160);
-  assert.equal(sent.length, 3);
+  assert.equal(sent.length, 5);
 });
 
 test("dynamic sidecars appear before materialization and retain keys after reorder; paths stay confined", (t) => {
@@ -106,6 +117,12 @@ test("dynamic sidecars appear before materialization and retain keys after reord
   assert.equal(adapter.detail(id).groups[0].workers[1].key, key);
   assert.equal(adapter.detail(id).groups[0].workers[1].status, "completed");
   assert.equal(adapter.logSource(id, "../escape"), null);
+  m.status = "completed";
+  m.steps[0].status = "completed";
+  m.steps[0].materialized = [];
+  fs.writeFileSync(file, JSON.stringify(m));
+  adapter.scan();
+  assert.equal(adapter.detail(id).groups[0].workers.length, 0, "terminal runs must not resurrect orphaned sidecars");
 });
 
 test("authenticated host streams selected logs, replays reconnect cursors, and unsubscribes", { timeout: 20000 }, async (t) => {
@@ -158,9 +175,10 @@ test("authenticated host streams selected logs, replays reconnect cursors, and u
     return { ws, events, send, wait };
   }
   const a = await connect();
-  a.send("x-agentlinkd.crew.subscribe", { run: id, worker: "0" });
+  a.send("x-agentlinkd.crew.subscribe", { run: id, worker: "0", subscription: "first" });
   const first = (await a.wait((e) => e.event === "x-agentlinkd.crew.log" && e.data.data)).data;
   assert.equal(text(first), "initial\n");
+  assert.equal(first.subscription, "first");
   const at = a.events.length;
   const start = Date.now();
   fs.appendFileSync(file, "live\n");
@@ -170,10 +188,16 @@ test("authenticated host streams selected logs, replays reconnect cursors, and u
   a.ws.close();
   fs.appendFileSync(file, "offline\n");
   const b = await connect();
-  b.send("x-agentlinkd.crew.subscribe", { run: id, worker: "0", cursor: { generation: next.generation, offset: next.offset } });
+  b.send("x-agentlinkd.crew.subscribe", { run: id, worker: "0", subscription: "reconnect", cursor: { generation: next.generation, offset: next.offset } });
   const replay = (await b.wait((e) => e.event === "x-agentlinkd.crew.log" && e.data.data)).data;
   assert.equal(text(replay), "offline\n");
   assert.equal(replay.reset, false);
+  assert.equal(replay.subscription, "reconnect");
+  b.send("x-agentlinkd.crew.close", { run: "run-ffffffffffff" });
+  const beforeOtherClose = b.events.length;
+  fs.appendFileSync(file, "still subscribed\n");
+  const afterOtherClose = (await b.wait((e) => e.event === "x-agentlinkd.crew.log" && e.data.data, beforeOtherClose)).data;
+  assert.equal(text(afterOtherClose), "still subscribed\n");
   b.send("x-agentlinkd.crew.unsubscribe", { run: id });
   await sleep(80);
   const before = b.events.filter((e) => e.event === "x-agentlinkd.crew.log").length;

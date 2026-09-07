@@ -13,8 +13,8 @@ export function readLogChunk(source, cursor) {
     if (!stat.isFile()) throw new Error("not a regular log");
     const generation = createHash("sha256").update(`${source.attempt}:${stat.dev}:${stat.ino}:${stat.birthtimeMs}`).digest("hex").slice(0, 32);
     const valid = cursor?.generation === generation && Number.isSafeInteger(cursor.offset) && cursor.offset >= 0 && cursor.offset <= stat.size;
-    const reset = !valid;
-    const start = valid ? cursor.offset : Math.max(0, stat.size - WINDOW_BYTES);
+    const reset = !valid || stat.size - cursor.offset > WINDOW_BYTES;
+    const start = reset ? Math.max(0, stat.size - WINDOW_BYTES) : cursor.offset;
     const data = Buffer.alloc(Math.min(CHUNK_BYTES, stat.size - start));
     const count = fs.readSync(fd, data, 0, data.length, start);
     return { generation, offset: start + count, start, reset, gap: reset && (!!cursor || start > 0), bytes: stat.size, data: data.subarray(0, count).toString("base64") };
@@ -38,18 +38,21 @@ export function subscribeLog({ source, cursor = null, send, writable = () => tru
         return;
       }
       const nextDirectory = path.dirname(current.file);
-      if (directory !== nextDirectory) {
+      if (directory !== nextDirectory || !watcher) {
         watcher?.close();
         directory = nextDirectory;
         try {
-          watcher = fs.watch(directory, { persistent: false }, tick);
-          watcher.on("error", () => { watcher?.close(); watcher = undefined; });
+          const installed = fs.watch(directory, { persistent: false }, tick);
+          watcher = installed;
+          installed.on("error", () => { installed.close(); if (watcher === installed) watcher = undefined; });
         } catch { /* timer is also the lost-notification reconciliation path */ }
       }
       const chunk = readLogChunk(current, observed);
-      missing = false;
-      if (!chunk.reset && chunk.start === chunk.offset) return;
-      if (send(chunk) !== false) observed = { generation: chunk.generation, offset: chunk.offset };
+      if (!chunk.reset && chunk.start === chunk.offset && !missing) return;
+      if (send(chunk) !== false) {
+        observed = { generation: chunk.generation, offset: chunk.offset };
+        missing = false;
+      }
     } catch {
       if (!missing) { send({ unavailable: true }); missing = true; }
     }

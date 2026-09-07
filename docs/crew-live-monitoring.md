@@ -2,11 +2,14 @@
 
 ## Scope
 
-Preserve the original UI styling, layout, typography, tool/output presentation, advisories, sidebar and approval UI. The only retained transcript changes are redundant tool-name cleanup and batches of more than three consecutive same-tool calls (`cfbac11`). Crew monitoring changes below are transport and lifecycle behavior, not a redesign.
+Preserve the original UI styling, layout, typography, tool/output presentation, sidebar and approval UI. The retained transcript changes are redundant tool-name cleanup and batches of more than three consecutive same-tool calls (`cfbac11`). A subsequent cosmetic-only cleanup collapses backend bash advisories into a “Bash guidance · details” disclosure, retaining the complete original text; error and authentication markers are not collapsed. Crew monitoring changes below are transport and lifecycle behavior, not a redesign.
 
 ## Implemented: live log transport and worker discovery
 
 - The selected worker's existing log pane subscribes over the authenticated WebSocket. No repeated browser `tail` requests. Switching workers replaces the single subscription; closing the pane/run or disconnecting releases it. Hidden tabs unsubscribe and resume when visible.
+- Each subscription has a client-generated identity echoed on every chunk, so in-flight frames from a previous selection or refresh cannot overwrite the current view. Closing another run cannot cancel the selected log. Missing logs clear stale displayed output, retain replay state, and explicitly signal recovery even when no bytes were appended.
+- Readers more than 64 KiB behind jump to the recent window with an explicit gap instead of accumulating unbounded latency. Client line clipping is reported as truncation. Failed log watchers are reinstalled; adapter shutdown refuses queued rescheduling.
+- Dynamic discovery runs only for nonterminal runs/groups, preventing orphaned sidecars from resurrecting finished workers, and uses deterministic directory ordering.
 - Host directory notifications drive reads, throttled to at most one per 100 ms, with a 250 ms reconciliation timer for missed notifications. Only new bytes are sent. A fixture measured 245 ms from file append to WebSocket receipt; this is not a live-model/browser rendering latency guarantee.
 - Chunks are bounded to 32 KiB, initial replay to the latest 64 KiB, and the client retains 64K UTF-16 code units plus its existing bounded line view. Bytes travel as base64 so a persistent UTF-8 decoder handles split characters. Sending yields while the socket has at least 256 KiB queued; there is no per-worker unbounded queue.
 - Reconnect uses `{generation, offset}` cursors. Generation includes file identity and the available `.state` process identity. Replacement, truncation below the cursor, or attempt changes reset the view and explicitly report a gap. Cursors never authorize paths. The host validates worker membership and confines regular non-symlink log access to the run.
@@ -60,6 +63,6 @@ A crew escalation answer reruns a paused step. It is **not** permission for a su
 
 ## Verification for the live-log slice
 
-- DextUI: 184 tests pass, including authenticated real-host WebSocket subscribe/reconnect/unsubscribe, cursor resets, bounded reads, symlink refusal, backpressure and dynamic discovery. Existing browser smoke passes; Svelte reports zero errors/warnings.
+- DextUI: 189 tests pass, including authenticated real-host WebSocket subscribe/reconnect/unsubscribe, cursor resets, bounded reads, symlink refusal, backpressure, dynamic discovery, stale subscription rejection, split UTF-8 across reconnects, missing-log recovery and advisory detection. Existing browser smoke passes; Svelte reports zero errors/warnings. Browser smoke does not specifically exercise the new advisory disclosure or hidden-tab monitoring.
 - Crew: 75 tests and release build pass from an isolated archive of commit `f0dd184`; that binary is installed in the global pack. The working checkout also passed 77 tests, including two from pre-existing uncommitted `src/run.rs` progress-publication changes. Those unrelated changes were neither committed nor included in the installed binary. The touched Rust file passes formatting.
 - No paid/live model crew was launched. No dext core source or interactive permission behavior changed. Structured worker events, archived-segment replay and reliable supervised continuation remain follow-up work.

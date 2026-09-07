@@ -242,9 +242,10 @@ function confined(root, p) {
  * Idle cost: one recursive fs.watch per root plus bounded 2 s reconciliation.
  */
 function discoverWorkers(manifest, runDir) {
-  return { ...manifest, steps: (manifest.steps ?? []).map((step) => {
-    if (step.kind !== "dynamic" || typeof step.dir !== "string" || !confined(runDir, step.dir)) return step;
-    const materialized = [...(step.materialized ?? [])];
+  return { ...manifest, steps: (Array.isArray(manifest.steps) ? manifest.steps : []).map((step) => {
+    if (!step || typeof step !== "object") return step;
+    if (!["pending", "running"].includes(normStatus(manifest.status)) || step.kind !== "dynamic" || !["pending", "running"].includes(normStatus(step.status)) || typeof step.dir !== "string" || !confined(runDir, step.dir)) return step;
+    const materialized = Array.isArray(step.materialized) ? step.materialized.filter((node) => node && typeof node === "object") : [];
     const known = new Set(materialized.filter((node) => typeof node.dir === "string").map((node) => path.resolve(node.dir)));
     let directory;
     try {
@@ -261,7 +262,7 @@ function discoverWorkers(manifest, runDir) {
       }
     } catch { /* transient directories are reconciled on the next scan */ }
     finally { directory?.closeSync(); }
-    return { ...step, materialized };
+    return { ...step, materialized: materialized.sort((a, b) => String(a.dir).localeCompare(String(b.dir))) };
   }) };
 }
 
@@ -273,6 +274,7 @@ export function createCrewAdapter({ roots = [], crewBin = "crew", dextBin, env =
   let timer = null;
   let heartbeat = null;
   let lastPayload = "";
+  let closed = false;
 
   function childEnv() {
     const e = { ...env, DEXT_NO_TUI: "1" };
@@ -352,7 +354,7 @@ export function createCrewAdapter({ roots = [], crewBin = "crew", dextBin, env =
   }
 
   function schedule() {
-    if (timer) return;
+    if (closed || timer) return;
     timer = setTimeout(() => {
       timer = null;
       try { scan(); } catch (err) { log(`crew: scan failed: ${err.message}`); }
@@ -368,6 +370,7 @@ export function createCrewAdapter({ roots = [], crewBin = "crew", dextBin, env =
   }
 
   function addRoot(root) {
+    if (closed) return;
     root = path.resolve(root);
     if (!roots.includes(root)) roots.push(root);
     if (watched.has(root)) return;
@@ -576,6 +579,7 @@ export function createCrewAdapter({ roots = [], crewBin = "crew", dextBin, env =
   }
 
   function close() {
+    closed = true;
     clearTimeout(timer);
     clearInterval(heartbeat);
     for (const watcher of watchers) watcher.close();

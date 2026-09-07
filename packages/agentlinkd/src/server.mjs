@@ -669,23 +669,23 @@ async function handleCrewCommand(client, frame) {
       return;
     }
     case "close":
-      client.crewLogClose?.();
-      client.crewLogClose = null;
+      if (client.crewLogRun === run) { client.crewLogClose?.(); client.crewLogClose = null; client.crewLogRun = null; }
       client.crewOpen.delete(run);
       return;
     case "unsubscribe":
-      client.crewLogClose?.();
-      client.crewLogClose = null;
+      if (client.crewLogRun === run) { client.crewLogClose?.(); client.crewLogClose = null; client.crewLogRun = null; }
       return;
     case "subscribe": {
+      if (typeof frame.subscription !== "string" || !/^[a-zA-Z0-9-]{1,80}$/.test(frame.subscription)) return sendError(client, "bad_request", "subscription identity required");
       if (!client.crewOpen.has(run)) return sendError(client, "bad_request", "open the run before subscribing");
       if (typeof frame.worker !== "string" || frame.worker.length > 100 || !CREW.detail(run)?.groups.some((g) => g.workers.some((w) => w.key === frame.worker))) return sendError(client, "no_worker", "unknown worker");
       client.crewLogClose?.();
+      client.crewLogRun = run;
       client.crewLogClose = subscribeLog({
         source: () => CREW.logSource(run, frame.worker),
         cursor: frame.cursor,
         writable: () => client.phase === "live" && client.writable(),
-        send: (chunk) => { sendControl(client, "x-agentlinkd.crew.log", { run, worker: frame.worker, ...chunk }); },
+        send: (chunk) => { sendControl(client, "x-agentlinkd.crew.log", { run, worker: frame.worker, subscription: frame.subscription, ...chunk }); },
       });
       return;
     }
@@ -3458,6 +3458,7 @@ server.on("upgrade", (req, socket, head) => {
     subs: new Set(),
     crewOpen: new Set(),
     crewLogClose: null,
+    crewLogRun: null,
     writable: () => !socket.destroyed && socket.writableLength < 256 * 1024,
     send: (text) => socket.write(encodeFrame(OP_TEXT, Buffer.from(text, "utf8"))),
     close: (code) => {

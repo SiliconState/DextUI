@@ -59,6 +59,11 @@ export function shortPath(p: string): string {
   return segs.length > 3 ? `${segs[0]}/…/${segs.slice(-2).join("/")}` : t;
 }
 
+/** Match only backend advisory markers, never ordinary narration or errors. */
+export function isBashAdvisory(text: string): boolean {
+  return /^(?:\[runtime-note\]\s*)?bash advisory:\s*\S/i.test(text.trim());
+}
+
 export function humanizeTool(name: string, summary: string): string {
   let raw = (summary ?? "").trim();
   // The row already names the tool; strip only redundant leading labels.
