@@ -2,7 +2,7 @@
   // Renders parsed markdown as real DOM: true <table>, lists, headings, safe
   // links. Terminal soul stays in the chrome; content gets the web — charts
   // and session-cwd images included.
-  import { parseMarkdown, prettyPath, type Inline } from "../lib/markdown";
+  import { parseMarkdown, prettyPath, type Inline, type MdBlock } from "../lib/markdown";
   import { fileUrl as fileUrlFor, isHtmlPath } from "../lib/files";
   import Chart from "./Chart.svelte";
   import { fenceFor } from "../ext";
@@ -13,6 +13,39 @@
   let { src, sessionId = "" }: { src: string; sessionId?: string } = $props();
 
   const blocks = $derived(parseMarkdown(src));
+  // Consecutive tables - each optionally titled by its own ###/#### heading -
+  // flow side-by-side in a wrapped flex row, so a wide pane shows 3-4 across
+  // instead of stacking every table full-width. Any other block between tables
+  // (h1/h2 section title, paragraph, code, list...) breaks the run; lone
+  // tables keep the classic full-width layout.
+  type MdTable = Extract<MdBlock, { kind: "table" }>;
+  type MdHeading = Extract<MdBlock, { kind: "heading" }>;
+  type TCard = { head: MdHeading | null; table: MdTable };
+  type Run = { kind: "single"; b: MdBlock } | { kind: "lone"; card: TCard } | { kind: "grid"; cards: TCard[] };
+  const layout = $derived.by(() => {
+    const runs: Run[] = [];
+    let cards: TCard[] = [];
+    const flush = () => {
+      if (cards.length === 1) runs.push({ kind: "lone", card: cards[0]! });
+      else if (cards.length > 1) runs.push({ kind: "grid", cards });
+      cards = [];
+    };
+    for (let i = 0; i < blocks.length; i++) {
+      const b = blocks[i]!;
+      const nx = blocks[i + 1];
+      if (b.kind === "table") {
+        cards.push({ head: null, table: b });
+      } else if (b.kind === "heading" && b.level >= 3 && nx?.kind === "table") {
+        cards.push({ head: b, table: nx });
+        i++;
+      } else {
+        flush();
+        runs.push({ kind: "single", b });
+      }
+    }
+    flush();
+    return runs;
+  });
   // One selection link per rendered message: charts sharing a dataset id
   // cross-highlight — click a bar in one, its siblings dim the same index.
   const link = new ChartLink();
@@ -50,8 +83,61 @@
   {/each}
 {/snippet}
 
+{#snippet renderTable(b: MdTable)}
+  <div class="md-tablewrap">
+    <table class="md-table">
+      <thead>
+        <tr>
+          {#each b.head as cell, ci (ci)}
+            <th style={`text-align:${b.align[ci] === "r" ? "right" : b.align[ci] === "c" ? "center" : "left"}`}>
+              {@render inline(cell)}
+            </th>
+          {/each}
+        </tr>
+      </thead>
+      <tbody>
+        {#each b.rows as row, ri (ri)}
+          <tr>
+            {#each row as cell, ci (ci)}
+              <td style={`text-align:${b.align[ci] === "r" ? "right" : b.align[ci] === "c" ? "center" : "left"}`}>
+                {@render inline(cell)}
+              </td>
+            {/each}
+          </tr>
+        {/each}
+      </tbody>
+    </table>
+  </div>
+{/snippet}
+
+{#snippet renderCard(c: TCard)}
+  <div class="md-tcard">
+    {#if c.head}
+      <svelte:element this={`h${Math.min(Math.max(c.head.level, 1), 4)}`} class="md-h md-tcardh">
+        {@render inline(c.head.inline)}
+      </svelte:element>
+    {/if}
+    {@render renderTable(c.table)}
+  </div>
+{/snippet}
+
 <div class="md">
-  {#each blocks as b, bi (bi)}
+  {#each layout as run, ri (ri)}
+    {#if run.kind === "single"}
+      {@render renderBlock(run.b)}
+    {:else if run.kind === "lone"}
+      {@render renderCard(run.card)}
+    {:else}
+      <div class="md-tgrid" data-agent-id="markdown.tgrid">
+        {#each run.cards as c, ci (ci)}
+          {@render renderCard(c)}
+        {/each}
+      </div>
+    {/if}
+  {/each}
+</div>
+
+{#snippet renderBlock(b: MdBlock)}
     {#if b.kind === "heading"}
       <svelte:element this={`h${Math.min(Math.max(b.level, 1), 4)}`} class="md-h">
         {@render inline(b.inline)}
@@ -117,38 +203,12 @@
           {/each}
         </ul>
       {/if}
-    {:else if b.kind === "table"}
-      <div class="md-tablewrap">
-        <table class="md-table">
-          <thead>
-            <tr>
-              {#each b.head as cell, ci (ci)}
-                <th style={`text-align:${b.align[ci] === "r" ? "right" : b.align[ci] === "c" ? "center" : "left"}`}>
-                  {@render inline(cell)}
-                </th>
-              {/each}
-            </tr>
-          </thead>
-          <tbody>
-            {#each b.rows as row, ri (ri)}
-              <tr>
-                {#each row as cell, ci (ci)}
-                  <td style={`text-align:${b.align[ci] === "r" ? "right" : b.align[ci] === "c" ? "center" : "left"}`}>
-                    {@render inline(cell)}
-                  </td>
-                {/each}
-              </tr>
-            {/each}
-          </tbody>
-        </table>
-      </div>
     {:else if b.kind === "quote"}
       <blockquote class="md-quote">{@render inline(b.inline)}</blockquote>
     {:else if b.kind === "hr"}
       <hr class="md-hr" />
     {/if}
-  {/each}
-</div>
+{/snippet}
 
 <style>
   .md {
@@ -283,6 +343,24 @@
   }
   .md-table tbody tr:nth-child(even) {
     background: color-mix(in srgb, var(--bg1) 55%, transparent);
+  }
+  .md-tgrid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 16px;
+    align-items: flex-start;
+  }
+  .md-tcard {
+    flex: 1 1 240px;
+    min-width: 200px;
+    max-width: 100%;
+  }
+  .md-tcard .md-h {
+    margin-top: 0;
+    font-size: 12.5px;
+  }
+  .md-tcard .md-tablewrap {
+    max-width: 100%;
   }
   .md-quote {
     border-left: 2px solid var(--faint);
