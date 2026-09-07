@@ -803,7 +803,7 @@ export interface PermissionResolvedEvent {
 /** Projection unit shared by snapshots and client stores. */
 export type Block =
   | { kind: "text"; text: string; complete: boolean; startedAt?: number; endedAt?: number }
-  | { kind: "thinking"; text: string; complete: boolean; startedAt?: number; endedAt?: number }
+  | { kind: "thinking"; text: string; complete: boolean; startedAt?: number; endedAt?: number; provisional?: boolean }
   | {
       kind: "tool";
       call_id: string;

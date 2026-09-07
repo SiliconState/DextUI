@@ -47,6 +47,35 @@ session index; default `~/.dextui/agentlinkd`) · `--crew` (crew binary; default
 
 In-session host commands: `/help`, `/approval <profile>` (applies from the next turn), `/pack run <name> <task>`, `/pack list`, `/pack inspect <name>`, `/pack create <shelf>/<name>`.
 
+## Bridge verification and thinking transactions
+
+With NDJSON-capable Dext, agentlinkd keeps a warm child per session. The pipe reader
+preserves UTF-8 across chunks and enforces output limits per encoded line, not per
+chunk. Writes reject frames over 256 KiB or beyond a 1 MiB pending stdin budget
+before enqueueing; `false` means the frame was not accepted locally, while core
+`input_ack` events report core-side refusals. Correlation value `seq: 0` is retained.
+
+Both the live `SessionStore` (`session.ts`) and journal snapshot fold (`fold.mjs`)
+apply `thinking_preview_discarded` and `thinking_preview_committed`. Thinking blocks
+remain provisional even after block completion until commit, so a retry removes
+all previews from that attempt without removing previously committed reasoning.
+Snapshots preserve the optional `provisional` flag for reconnect during an attempt;
+rollback rebuilds tool indexes. Local Chat's late thinking completion updates its
+existing block instead of duplicating reasoning or splitting text.
+
+Run the credential-free real-core integration gate in addition to `npm test`,
+`npm run typecheck`, and `npm run build`:
+
+```sh
+DEXT_CORE_BIN=/absolute/path/to/Dext/target/release/dext npm run test:core
+```
+
+This gate requires the binary explicitly (no silent skip). It uses isolated temporary
+state and a loopback mock provider to exercise real core retry/rollback through both
+projections, UTF-8 text, an approved file write, busy steering and overload refusal,
+interrupt, close, and EOF. Unit tests cover deterministic split-byte input, bounded
+writes, committed reasoning preservation, and mid-preview snapshot reconnect.
+
 ## Quickstart — mock (no API key)
 
 ```bash

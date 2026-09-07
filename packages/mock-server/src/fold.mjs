@@ -63,6 +63,13 @@ export function fold(journal) {
   // incomplete text/thinking block, not just the current pointers — a stream
   // that moved on without a *_block_complete leaves orphans behind, and the
   // client's sealOpenBlocks() closes those too (parity).
+  const commitThinking = () => {
+    for (const b of blocks) if (b.kind === "thinking") delete b.provisional;
+  };
+  const reindexTools = () => {
+    toolIndex.clear();
+    blocks.forEach((b, i) => { if (b.kind === "tool") toolIndex.set(b.call_id, i); });
+  };
   const sealOpen = () => {
     for (const b of blocks) {
       if ((b.kind === "text" || b.kind === "thinking") && b.complete === false) b.complete = true;
@@ -78,6 +85,7 @@ export function fold(journal) {
     const last = blocks[blocks.length - 1];
     if (last && (last.kind === "text" || last.kind === "thinking") && last.complete === false) blocks.splice(blocks.length - 1, 0, marker);
     else blocks.push(marker);
+    reindexTools();
   };
 
   const mergeTool = (d, patch) => {
@@ -105,6 +113,9 @@ export function fold(journal) {
   for (const env of journal) {
     const d = env.data;
     switch (env.event) {
+      case "turn_start":
+        commitThinking();
+        break;
       case "user_message":
         openText = null;
         openThinking = null;
@@ -143,14 +154,29 @@ export function fold(journal) {
           openThinking = { kind: "thinking", text: d, complete: false, startedAt: env.ts };
           blocks.push(openThinking);
         }
+        openThinking.provisional = true;
         break;
-      case "thinking_block_complete":
-        if (openThinking && blocks[blocks.length - 1] === openThinking) {
-          openThinking.text = d;
-          openThinking.complete = true;
-          openThinking.endedAt = env.ts;
-        } else blocks.push({ kind: "thinking", text: d, complete: true, startedAt: env.ts, endedAt: env.ts });
+      case "thinking_block_complete": {
+        const pending = blocks.findLast((b) => b.kind === "thinking" && b.provisional && b.endedAt === undefined);
+        if (pending) {
+          pending.text = d;
+          pending.complete = true;
+          pending.endedAt = env.ts;
+        } else blocks.push({ kind: "thinking", text: d, complete: true, startedAt: env.ts, endedAt: env.ts, provisional: true });
         openThinking = null;
+        break;
+      }
+      case "thinking_preview_committed":
+        commitThinking();
+        if (openThinking) openThinking.complete = true;
+        openThinking = null;
+        break;
+      case "thinking_preview_discarded":
+        for (let i = blocks.length - 1; i >= 0; i--) {
+          if (blocks[i].kind === "thinking" && blocks[i].provisional) blocks.splice(i, 1);
+        }
+        openThinking = null;
+        reindexTools();
         break;
       case "tool_call_preview":
         mergeTool(d, { status: "preview" });

@@ -101,6 +101,38 @@ test("spawnBridge: ready, frames, permission round-trip, close", async () => {
   assert.equal(b.user("late"), false);
 });
 
+test("spawnBridge: split UTF-8, many bounded lines in one chunk, and oversized line", { timeout: 5000 }, async (t) => {
+  const events = [];
+  const b = spawnBridge({ bin: process.execPath, args: ["-e", "setInterval(() => {}, 1000)"], maxBuffer: 64, onEvent: (e) => events.push(e) });
+  t.after(() => b.kill("SIGKILL"));
+  // Inject transport chunks deterministically: pipe chunk boundaries are otherwise OS-dependent.
+  const line = Buffer.from(JSON.stringify({ event: "text_delta", data: "café 🌍" }) + "\n");
+  const split = line.indexOf(Buffer.from("🌍")) + 2;
+  b.child.stdout.emit("data", line.subarray(0, split));
+  b.child.stdout.emit("data", line.subarray(split));
+  assert.equal(events[0].data, "café 🌍");
+  b.child.stdout.emit("data", Buffer.from('{"event":"ready"}\n'.repeat(20)));
+  assert.equal(events.length, 21, "limit applies per line, not per chunk");
+  b.child.stdout.emit("data", Buffer.from("x".repeat(65)));
+  await new Promise((resolve) => b.child.once("close", resolve));
+  assert.equal(b.exited, true);
+});
+
+test("spawnBridge: bounded writes refuse before enqueue, preserve seq=0", { timeout: 5000 }, async (t) => {
+  const b = spawnBridge({ bin: process.execPath, args: ["-e", "setInterval(() => {}, 1000)"], maxInputBuffer: 128 });
+  t.after(() => b.kill("SIGKILL"));
+  const frames = [];
+  const original = b.child.stdin.write;
+  b.child.stdin.write = (line) => { frames.push(JSON.parse(line)); return false; };
+  assert.equal(b.user("hello", 0), true, "Node false means accepted, not rejected");
+  assert.equal(frames[0].seq, 0);
+  assert.equal(b.user("é".repeat(128)), false);
+  assert.equal(frames.length, 1);
+  b.child.stdin.write = original;
+  Object.defineProperty(b.child.stdin, "writableLength", { value: 128 });
+  assert.equal(b.user("hello"), false);
+});
+
 test("spawnBridge: exit before ready rejects whenReady", async () => {
   const b = spawnBridge({ bin: process.execPath, args: ["-e", "process.exit(3)"], cwd: os.tmpdir(), env: process.env });
   await assert.rejects(b.whenReady(), /exited before ready/);

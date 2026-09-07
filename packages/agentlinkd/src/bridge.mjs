@@ -10,6 +10,7 @@
 // for binaries without `--input`.
 
 import { spawn } from "node:child_process";
+import { StringDecoder } from "node:string_decoder";
 
 export const BRIDGE_FRAMES = ["user", "steer", "control", "interrupt", "permission", "close"];
 
@@ -36,7 +37,7 @@ export function bridgeArgs({ cwd, approval, effort, seat, resume }) {
  *   onStderr(text)          stderr chunks
  *   onExit(code, signal)    once, after stdout is drained
  */
-export function spawnBridge({ bin, args, cwd, env, maxBuffer = 4 * 1024 * 1024, onEvent, onNoise, onStderr, onExit }) {
+export function spawnBridge({ bin, args, cwd, env, maxBuffer = 4 * 1024 * 1024, maxInputBuffer = 1024 * 1024, onEvent, onNoise, onStderr, onExit }) {
   const child = spawn(bin, args, {
     cwd,
     env,
@@ -46,6 +47,8 @@ export function spawnBridge({ bin, args, cwd, env, maxBuffer = 4 * 1024 * 1024, 
   child.stdin.on("error", () => {}); // EPIPE after exit is not an error for the host
 
   let buf = "";
+  const decoder = new StringDecoder("utf8");
+  let oversized = false;
   let ready = null;
   let exited = false;
   let readyResolve;
@@ -75,17 +78,20 @@ export function spawnBridge({ bin, args, cwd, env, maxBuffer = 4 * 1024 * 1024, 
   };
 
   child.stdout.on("data", (chunk) => {
-    buf += chunk.toString("utf8");
-    if (buf.length > maxBuffer) {
-      buf = "";
-      onStderr?.(`dext emitted more than ${maxBuffer} bytes without a newline`);
-      signal(child, "SIGKILL");
-      return;
-    }
+    if (oversized) return;
+    buf += decoder.write(chunk);
     let i;
     while ((i = buf.indexOf("\n")) >= 0) {
-      handleLine(buf.slice(0, i));
+      const line = buf.slice(0, i);
+      if (Buffer.byteLength(line) > maxBuffer) break;
+      handleLine(line);
       buf = buf.slice(i + 1);
+    }
+    if (i >= 0 || Buffer.byteLength(buf) > maxBuffer) {
+      oversized = true;
+      buf = "";
+      onStderr?.(`dext emitted a line exceeding ${maxBuffer} bytes`);
+      signal(child, "SIGKILL");
     }
   });
   child.stderr.on("data", (d) => onStderr?.(d.toString("utf8")));
@@ -95,7 +101,10 @@ export function spawnBridge({ bin, args, cwd, env, maxBuffer = 4 * 1024 * 1024, 
     if (finished) return;
     finished = true;
     exited = true;
-    if (buf.trim()) handleLine(buf);
+    if (!oversized) {
+      buf += decoder.end();
+      if (buf.trim()) handleLine(buf);
+    }
     buf = "";
     if (!ready) readyReject(new Error(`dext exited before ready (code ${code ?? sig ?? "?"})`));
     onExit?.(code, sig);
@@ -109,7 +118,12 @@ export function spawnBridge({ bin, args, cwd, env, maxBuffer = 4 * 1024 * 1024, 
   const write = (frame) => {
     if (exited || !child.stdin.writable) return false;
     try {
-      child.stdin.write(`${JSON.stringify(frame)}\n`);
+      const line = `${JSON.stringify(frame)}\n`;
+      const bytes = Buffer.byteLength(line);
+      // write(false) still accepts data: refuse BEFORE write, never invite a
+      // caller to retry a frame that Node already queued.
+      if (bytes > 256 * 1024 || child.stdin.writableLength + bytes > maxInputBuffer) return false;
+      child.stdin.write(line);
       return true;
     } catch {
       return false;
@@ -129,9 +143,9 @@ export function spawnBridge({ bin, args, cwd, env, maxBuffer = 4 * 1024 * 1024, 
     },
     whenReady: () => readyPromise,
     write,
-    user: (text, seq, confirmSecret = false) => write({ type: "user", text, ...(seq ? { seq } : {}), ...(confirmSecret ? { confirm_secret: true } : {}) }),
-    steer: (text, seq) => write({ type: "steer", text, ...(seq ? { seq } : {}) }),
-    control: (command, seq) => write({ type: "control", command, ...(seq ? { seq } : {}) }),
+    user: (text, seq, confirmSecret = false) => write({ type: "user", text, ...(seq !== undefined ? { seq } : {}), ...(confirmSecret ? { confirm_secret: true } : {}) }),
+    steer: (text, seq) => write({ type: "steer", text, ...(seq !== undefined ? { seq } : {}) }),
+    control: (command, seq) => write({ type: "control", command, ...(seq !== undefined ? { seq } : {}) }),
     interrupt: () => write({ type: "interrupt" }),
     permission: (id, choice) => write({ type: "permission", id, choice }),
     /** Graceful stop: close frame + EOF; dext autosaves and exits. */

@@ -187,13 +187,39 @@ export class SessionStore {
   }
 
   private completeStream(kind: "text" | "thinking", full: string, ts: number): void {
-    this.sealOpenOf(kind === "text" ? "thinking" : "text");
-    const i = this.lastOpen(kind);
-    if (i < 0) this.pushBlock({ kind, text: full, complete: true, startedAt: ts, endedAt: ts });
+    if (kind === "text") this.sealOpenOf("thinking");
+    // Local Chat emits thinking completion after text has already sealed it.
+    let i = this.lastOpen(kind);
+    if (kind === "thinking") {
+      i = -1;
+      for (let j = this.state.blocks.length - 1; j >= 0; j--) {
+        const b = this.state.blocks[j];
+        if (b?.kind === "thinking" && b.provisional && b.endedAt === undefined) {
+          i = j;
+          break;
+        }
+      }
+    }
+    if (i < 0) this.pushBlock({ kind, text: full, complete: true, startedAt: ts, endedAt: ts, ...(kind === "thinking" ? { provisional: true } : {}) });
     else {
       const open = this.state.blocks[i] as Extract<ViewBlock, { kind: "text" | "thinking" }>;
-      this.replaceBlock(i, { kind, text: full, complete: true, startedAt: open.startedAt, endedAt: ts });
+      this.replaceBlock(i, { kind, text: full, complete: true, startedAt: open.startedAt, endedAt: ts, ...(kind === "thinking" ? { provisional: true } : {}) });
     }
+  }
+
+  private markThinkingPreview(): void {
+    const i = this.state.blocks.length - 1;
+    const block = this.state.blocks[i];
+    if (block?.kind === "thinking") this.replaceBlock(i, { ...block, provisional: true });
+  }
+
+  private commitThinkingPreview(): void {
+    this.state.blocks = this.state.blocks.map((b) => {
+      if (b.kind !== "thinking" || !b.provisional) return b;
+      const { provisional: _, ...committed } = b;
+      return committed;
+    });
+    this.emit();
   }
 
   private remember(e: Envelope): void {
@@ -263,6 +289,7 @@ export class SessionStore {
         this.pushBlock({ kind: "user", text: (d as { text: string }).text });
         return;
       case "turn_start":
+        this.commitThinkingPreview();
         this.bump({ working: true, failed: false, turnStartedAt: e.ts, retry: undefined });
         return;
       case "turn_end": {
@@ -292,9 +319,22 @@ export class SessionStore {
         return;
       case "thinking_delta":
         this.appendStream("thinking", d as string, e.ts);
+        this.markThinkingPreview();
         return;
       case "thinking_block_complete":
         this.completeStream("thinking", d as string, e.ts);
+        return;
+      case "thinking_preview_committed":
+        this.commitThinkingPreview();
+        this.sealOpenOf("thinking");
+        return;
+      case "thinking_preview_discarded":
+        this.state.blocks = this.state.blocks.filter((b) => b.kind !== "thinking" || !b.provisional);
+        this.state.toolIndex = new Map();
+        this.state.blocks.forEach((b, i) => {
+          if (b.kind === "tool") this.state.toolIndex.set(b.call_id, i);
+        });
+        this.emit();
         return;
       // --- tools ---
       case "tool_call_preview": {

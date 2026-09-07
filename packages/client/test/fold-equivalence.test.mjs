@@ -136,7 +136,7 @@ test("(d) thinking deltas + complete collapse into one completed thinking block"
   ]);
   const store = assertEquivalent(envelopes);
   assert.deepStrictEqual(stripIds(store.state.blocks), [
-    { kind: "thinking", text: "hmm...", complete: true, startedAt: 1000, endedAt: 1002 },
+    { kind: "thinking", text: "hmm...", complete: true, startedAt: 1000, endedAt: 1002, provisional: true },
     { kind: "text", text: "ok", complete: true, startedAt: 1003, endedAt: 1004 },
   ]);
 });
