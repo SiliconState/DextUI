@@ -1115,6 +1115,23 @@ function handleBridgeEvent(s, v) {
       }));
       publish(journalData(s, "turn_end", d));
       persistIndex();
+      // Deferred restart (/approval during a live turn) lands here so the new
+      // profile applies to the very next spawn, not "whenever the child dies".
+      if (s.recycleOnTurnEnd) {
+        s.recycleOnTurnEnd = false;
+        recycleBridge(s);
+      }
+      // Turn boundary: queued steering auto-starts the next turn (parity with
+      // the one-shot engine). Skipped when closed or interrupted; the queue
+      // survives for the next prompt instead.
+      if (s.status === "live" && !s.killed && s.steeringQueue.length > 0) {
+        const text = s.steeringQueue.join("\n\n");
+        s.steeringQueue = [];
+        persistIndex();
+        publish(journalData(s, "user_message", { text }));
+        runBridgedTurn(s, text);
+        return;
+      }
       scheduleList();
       SELF.tick();
       return;
@@ -1174,6 +1191,8 @@ function runBridgedTurn(s, prompt) {
     s.working = false;
     s.turnStartedAt = null;
     persistIndex();
+    scheduleList();
+    SELF.tick();
   });
 }
 
@@ -1683,6 +1702,7 @@ function handleSlash(client, s, raw) {
     persistIndex();
     publish(journalData(s, "approval_profile_changed", { profile }));
     if (BRIDGE && !s.working) recycleBridge(s);
+    else if (BRIDGE) s.recycleOnTurnEnd = true; // turn in flight: restart at its boundary
     publish(journalData(s, "slash", `approval profile → ${profile}${s.working ? " (next turn)" : ""}`));
     return;
   }
@@ -2144,6 +2164,17 @@ async function handleCommand(client, frame) {
       const s = sessions.get(frame.session);
       if (!s) {
         sendError(client, "no_session", `unknown session ${frame.session}`);
+        return;
+      }
+      // Idle persistent bridge: no turn in flight. Killing the warm child
+      // would drop the live seat and approval wiring for nothing; the
+      // interruptible part is any queued steering.
+      if (BRIDGE && !s.working && s.bridge && !s.bridge.exited) {
+        if (s.steeringQueue.length > 0) {
+          s.steeringQueue = [];
+          persistIndex();
+          publish(journalData(s, "interrupted"));
+        }
         return;
       }
       killChild(s);
@@ -2937,14 +2968,14 @@ function readTodoFile(file) {
 }
 
 function todosFor(s) {
-  // (a) this seat's own dext session state dir, (b) the project-level file.
+  // Seat-scoped only: this seat's own dext session state dir. No project-level
+  // fallback — a missing session file must read as "no todos", so stale or
+  // cross-session items never bleed into the UI.
   const dextDir = findDextSessionDir(s);
   if (dextDir) {
     const hit = readTodoFile(path.join(dextDir, "DEXT.todo.json"));
     if (hit) return { session: s.id, source: "session", ...hit };
   }
-  const project = readTodoFile(path.join(s.cwd, "DEXT.todo.json"));
-  if (project) return { session: s.id, source: "project", ...project };
   return { session: s.id, source: "none", items: [] };
 }
 
