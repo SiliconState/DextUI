@@ -41,11 +41,14 @@ function fakeBin() {
   return file;
 }
 
-test("bridgeArgs: ndjson + stream-json, --resume only with history", () => {
+test("bridgeArgs: ndjson + stream-json, --resume only with history, explicit path after a folder change", () => {
   const a = bridgeArgs({ cwd: "/w", approval: "ask", effort: "low", seat: "s1", resume: false });
   assert.deepEqual(a.slice(0, 4), ["--input", "ndjson", "--output", "stream-json"]);
-  assert.ok(!a.includes("--resume"));
+  assert.ok(!a.some((x) => x.startsWith("--resume")));
   assert.ok(bridgeArgs({ cwd: "/w", approval: "ask", effort: "low", seat: "s1", resume: true }).includes("--resume"));
+  const moved = bridgeArgs({ cwd: "/w2", approval: "ask", effort: "low", seat: "s1", resume: "/state/sessions/abc" });
+  assert.ok(moved.includes("--resume=/state/sessions/abc"), "a string resume names the session explicitly (seat records are project-scoped)");
+  assert.ok(!moved.includes("--resume"), "never both forms");
 });
 
 test("probeNdjsonSupport keys off `--input ndjson` in --help", () => {

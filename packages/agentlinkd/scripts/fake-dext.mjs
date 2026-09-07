@@ -82,6 +82,10 @@ if (process.argv[2] === "--help") {
 if (process.argv.includes("--input") && process.argv[process.argv.indexOf("--input") + 1] === "ndjson") {
   const out = (event, data) => process.stdout.write(JSON.stringify({ event, ...(data === undefined ? {} : { data }) }) + "\n");
   const usage = { input: 3, output: 2, cache_create: 0, cache_read: 0, cost_usd: 0 };
+  // `--resume` (seat's latest) or `--resume=<path>` (explicit, after a folder
+  // change); echoed on turn_start so host tests can assert the argv contract.
+  const resumeArg = process.argv.find((a) => a === "--resume" || a.startsWith("--resume=")) ?? null;
+  const resume = resumeArg === null ? null : resumeArg === "--resume" ? "latest" : resumeArg.slice("--resume=".length);
   out("ready", { input: "ndjson", session_id: "fake-ndjson-1", model: "alpha", provider: "fake-a" });
   let busy = false;
   let buf = "";
@@ -92,7 +96,7 @@ if (process.argv.includes("--input") && process.argv[process.argv.indexOf("--inp
   };
   const runTurn = (text) => {
     busy = true;
-    out("turn_start", { pid: process.pid });
+    out("turn_start", { pid: process.pid, resume });
     if (text.includes("APPROVE")) {
       out("permission_request", { id: "perm-1", tool: "write_file", input: { path: "x" }, summary: "" });
       return;
@@ -153,7 +157,7 @@ emit("turn_start");
 await sleep(180);
 emit("text_delta", "fake ");
 await sleep(180);
-const resumed = process.argv.includes("--resume");
+const resumed = process.argv.some((a) => a === "--resume" || a.startsWith("--resume="));
 const packAt = process.argv.indexOf("--pack");
 const pack = packAt >= 0 ? process.argv[packAt + 1] : null;
 const partial = prompt.includes("partial-stream");

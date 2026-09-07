@@ -63,6 +63,21 @@ function resolveDext() {
 const PORT = Number(argValue("port", process.env.AGENTLINKD_PORT ?? 8788));
 const TOKEN = argValue("token", process.env.AGENTLINKD_TOKEN ?? crypto.randomBytes(9).toString("base64url"));
 const DEXT_BIN = resolveDext();
+// Every dext child (turns, catalog probes, auth) runs with the dext binary's
+// own directory (and ~/.cargo/bin) ahead of PATH: under a service unit PATH
+// is minimal, and the agent's *own* `bash` otherwise cannot find `dext`
+// ("command not found" on turn 1, then a hardcoded fallback path).
+const DEXT_PATH = (() => {
+  const dirs = [];
+  if (DEXT_BIN.includes(path.sep)) dirs.push(path.dirname(path.resolve(DEXT_BIN)));
+  const cargo = path.join(process.env.HOME ?? "", ".cargo", "bin");
+  if (fs.existsSync(cargo)) dirs.push(cargo);
+  const have = (process.env.PATH ?? "").split(path.delimiter);
+  return [...dirs.filter((d) => !have.includes(d)), ...have].filter(Boolean).join(path.delimiter);
+})();
+function dextEnv(extra = {}) {
+  return { ...process.env, PATH: DEXT_PATH, DEXT_NO_TUI: "1", ...extra };
+}
 const DEXT_HOME = process.env.DEXT_HOME ? path.resolve(process.env.DEXT_HOME) : path.join(process.env.HOME ?? "", ".dext");
 const DEFAULT_CWD = path.resolve(argValue("cwd", process.cwd()));
 const DEFAULT_APPROVAL = argValue("approval", process.env.DEXT_APPROVAL ?? "auto-read");
@@ -142,7 +157,7 @@ function noteAuthFailure() {
 function dextOutput(args) {
   const result = spawnSync(DEXT_BIN, args, {
     encoding: "utf8",
-    env: { ...process.env, DEXT_NO_TUI: "1" },
+    env: dextEnv(),
     timeout: 15_000,
     maxBuffer: 4 * 1024 * 1024,
   });
@@ -309,7 +324,7 @@ async function refreshModelCatalog() {
  *  credential off argv (patches/dext/0001) so /proc/<pid>/cmdline never has it. */
 function runDext(args, timeout = 60_000, stdin = null) {
   return new Promise((resolve) => {
-    const child = execFile(DEXT_BIN, args, { env: { ...process.env, DEXT_NO_TUI: "1" }, timeout, maxBuffer: 4 * 1024 * 1024, windowsHide: true }, (err, stdout, stderr) => {
+    const child = execFile(DEXT_BIN, args, { env: dextEnv(), timeout, maxBuffer: 4 * 1024 * 1024, windowsHide: true }, (err, stdout, stderr) => {
       resolve({ ok: !err, stdout: String(stdout ?? ""), stderr: String(stderr ?? "") });
     });
     child.stdin?.on("error", () => {});
@@ -458,7 +473,7 @@ function refreshPacks() {
     return packRefresh;
   }
   packRefresh = new Promise((resolve) => {
-    execFile(DEXT_BIN, PACK_LIST_ARGS, { env: { ...process.env, DEXT_NO_TUI: "1" }, timeout: 15_000, maxBuffer: 4 * 1024 * 1024 }, (err, stdout) => {
+    execFile(DEXT_BIN, PACK_LIST_ARGS, { env: dextEnv(), timeout: 15_000, maxBuffer: 4 * 1024 * 1024 }, (err, stdout) => {
       packRefresh = null;
       if (err) {
         console.error(`agentlinkd: pack refresh failed: ${err.message}`);
@@ -790,6 +805,7 @@ function indexEntryOf(s) {
     modelLocked: s.modelLocked,
     seat: s.seat,
     generation: s.generation ?? 0,
+    ...(s.moved ? { moved: true } : {}),
     ...(s.cleanup ? { cleanup: s.cleanup } : {}),
     ...(s.steeringQueue.length > 0 ? { steeringQueue: [...s.steeringQueue] } : {}),
     turns: s.turns,
@@ -915,6 +931,7 @@ function restoreSessions() {
       thinkingEffort: EFFORTS.has(e.thinkingEffort) ? e.thinkingEffort : "medium",
       modelLocked: !!e.modelLocked,
       seat: typeof e.seat === "string" && e.seat ? e.seat : `dextui-${crypto.randomBytes(4).toString("hex")}`,
+      moved: e.moved === true,
       steeringQueue: Array.isArray(e.steeringQueue)
         ? e.steeringQueue
             .filter((t) => typeof t === "string" && t.length > 0 && t.length <= STEERING_MAX_CHARS)
@@ -1043,8 +1060,20 @@ function zeroUsage() {
 
 // ---------- turn engine (bridge): one persistent dext child per session ----------
 
+/** What `--resume` should replay. dext's seat records are project-scoped
+ *  (<project of cwd>/seats/<seat>), so after a folder change the bare flag
+ *  would find no seat in the new project and the child would exit 1. The
+ *  host locates the seat's newest session by its header (any project) and
+ *  resumes that path explicitly; dext then records the seat in the new
+ *  project, so plain `--resume` would work again from the next turn on. */
+function resumeTarget(s) {
+  if (s.turns <= 0) return false;
+  if (!s.moved) return true;
+  return findDextSessionDir(s) ?? true;
+}
+
 function bridgeEnv(s) {
-  const env = { ...process.env, DEXT_NO_TUI: "1" };
+  const env = dextEnv();
   if (s.provider && s.model) {
     env.DEXT_PROVIDER = s.provider;
     env.DEXT_MODEL = s.model;
@@ -1058,7 +1087,7 @@ function ensureBridge(s) {
   if (s.bridge && !s.bridge.exited) return s.bridge.whenReady().then(() => s.bridge);
   const epoch = s.epoch;
   let errTail = "";
-  const args = bridgeArgs({ cwd: s.cwd, approval: s.approval, effort: s.thinkingEffort, seat: s.seat, resume: s.turns > 0 });
+  const args = bridgeArgs({ cwd: s.cwd, approval: s.approval, effort: s.thinkingEffort, seat: s.seat, resume: resumeTarget(s) });
   let bridge;
   const onEvent = (v) => {
     if (s.deleted || s.epoch !== epoch || s.bridge !== bridge) return;
@@ -1278,8 +1307,10 @@ function runTurn(s, prompt) {
     args.push("--pack", packRun.name);
     stdinText = packRun.task;
   }
-  if (s.turns > 0) args.push("--resume");
-  const childEnv = { ...process.env, DEXT_NO_TUI: "1" };
+  const resume = resumeTarget(s);
+  if (typeof resume === "string") args.push(`--resume=${resume}`);
+  else if (resume) args.push("--resume");
+  const childEnv = dextEnv();
   if (s.provider && s.model) {
     childEnv.DEXT_PROVIDER = s.provider;
     childEnv.DEXT_MODEL = s.model;
@@ -1749,7 +1780,7 @@ function handleSlash(client, s, raw) {
 
 function dextOutputAsync(args, cwd) {
   return new Promise((resolve) => {
-    execFile(DEXT_BIN, args, { cwd, env: { ...process.env, DEXT_NO_TUI: "1" }, timeout: 15_000, maxBuffer: 1024 * 1024 }, (err, stdout, stderr) => {
+    execFile(DEXT_BIN, args, { cwd, env: dextEnv(), timeout: 15_000, maxBuffer: 1024 * 1024 }, (err, stdout, stderr) => {
       resolve({ ok: !err, out: String(stdout ?? ""), err: String(stderr ?? err?.message ?? "") });
     });
   });
@@ -2075,7 +2106,10 @@ async function handleCommand(client, frame) {
         s.cwd = nextCwd;
         // History is the seat's, not the folder's: the next turn resumes it
         // from the new cwd (fresh DEXT.md / project context), so only the
-        // child restarts. A scrollback marker keeps the switch visible.
+        // child restarts. `moved` makes that resume name the session path
+        // explicitly (see resumeTarget). A scrollback marker keeps the switch
+        // visible.
+        if (s.turns > 0) s.moved = true;
         if (BRIDGE) recycleBridge(s);
         publish(journalData(s, "info", `Folder: ${from} → ${nextCwd}`));
       }
@@ -2558,7 +2592,7 @@ function startFlowRun(cwd, name, { by = "host", reason = "" } = {}) {
   try {
     child = spawn(CREW_BIN, ["run", "--spec", specPath, "--cwd", cwd], {
       cwd,
-      env: { ...process.env, DEXT_NO_TUI: "1" },
+      env: dextEnv(),
       detached: process.platform !== "win32",
       stdio: ["ignore", "pipe", "pipe"],
     });

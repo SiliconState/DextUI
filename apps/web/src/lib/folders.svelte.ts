@@ -19,6 +19,9 @@ export const folders = $state({
   onPick: null as ((path: string) => void) | null,
   /** Composer text to seed once the session opens (e.g. a pack starter). */
   seed: "",
+  /** Move this client asked for and is waiting on; the matching
+   *  session.configured{cwd} toasts once. Journal replay never toasts. */
+  pendingMove: null as { id: string; path: string } | null,
 });
 
 export function foldersEnabled(): boolean {
@@ -114,6 +117,7 @@ export function moveSession(id: string, path: string): void {
     pushToast("warn", "Wait for the current turn to finish before changing folders");
     return;
   }
+  folders.pendingMove = { id, path };
   c.configureSession(id, { cwd: path });
   if (s.status === "cold") c.openSession({ id });
 }
@@ -170,13 +174,17 @@ export function onDirsControl(env: Envelope): void {
   }
 }
 
-/** Session-plane tap (wired from state.svelte.ts): a confirmed folder change. */
+/** Session-plane tap (wired from state.svelte.ts): the confirmation of a
+ *  move this client asked for. Other clients' moves (and replayed history)
+ *  show through the scrollback marker and the status line instead. */
 export function onFolderEvent(env: Envelope): void {
   if (env.event !== "session.configured") return;
   const d = env.data as { cwd?: string };
-  if (typeof d?.cwd !== "string" || !env.session) return;
-  const s = app.sessions.find((x) => x.id === env.session);
-  if (s && s.cwd && s.cwd !== d.cwd) pushToast("ok", `Moved to ${shortFolder(d.cwd)}`);
+  const pending = folders.pendingMove;
+  if (!pending || typeof d?.cwd !== "string" || env.session !== pending.id) return;
+  if (d.cwd !== pending.path) return;
+  folders.pendingMove = null;
+  pushToast("ok", `Moved to ${shortFolder(d.cwd)}`);
 }
 
 /** Short display of a path relative to the picker root. */

@@ -641,6 +641,11 @@
   .use:hover {
     background: var(--bg2);
   }
+  .use[disabled] {
+    opacity: 0.55;
+    cursor: default;
+    background: transparent;
+  }
   .use b {
     color: var(--cyan);
     overflow: hidden;

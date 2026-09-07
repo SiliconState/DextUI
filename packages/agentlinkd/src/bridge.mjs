@@ -19,10 +19,13 @@ export function probeNdjsonSupport(dextOutput) {
   return typeof help === "string" && help.includes("--input ndjson");
 }
 
-/** Build argv for a bridged child; `resume` replays the seat's session. */
+/** Build argv for a bridged child; `resume` replays the seat's session —
+ *  `true` = the seat's latest in this project, a string = an explicit session
+ *  dir/file (needed after a folder change: seat records are project-scoped). */
 export function bridgeArgs({ cwd, approval, effort, seat, resume }) {
   const args = ["--input", "ndjson", "--output", "stream-json", "--cd", cwd, "--approval", approval, "--effort", effort, "--seat", seat];
-  if (resume) args.push("--resume");
+  if (typeof resume === "string" && resume) args.push(`--resume=${resume}`);
+  else if (resume) args.push("--resume");
   return args;
 }
 

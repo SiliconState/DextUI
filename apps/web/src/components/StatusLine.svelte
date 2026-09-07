@@ -9,7 +9,7 @@ import Meter from "./Meter.svelte";
   import { connectorFor, connectors, openProviders, providersEnabled, pushConnector, syncConnector } from "../lib/connectors.svelte";
   import { crew, crewLive, crewDur, crewAge, openRun, shortRun } from "../lib/crew.svelte";
   import { selfEdit, cancelRestart } from "../lib/selfedit.svelte";
-  import { foldersEnabled, movableSession, openFolderPicker } from "../lib/folders.svelte";
+  import { foldersEnabled, movableSession, openFolderPicker, shortFolder } from "../lib/folders.svelte";
   import { fmtTokens, fmtElapsed, prettyPath } from "../lib/markdown";
   import { useSession } from "../lib/useSession.svelte";
 
@@ -55,6 +55,16 @@ import Meter from "./Meter.svelte";
   // refuses then, and the agent's tool calls are resolving paths against it.
   const isReal = $derived(app.sessions.some((s) => s.id === view.id));
   const canMove = $derived(isReal && !!movableSession(view.id));
+  // "Workspace · <folder>": the folder name is picker-relative when inside the
+  // host root ("Clients/Acme Ltd", "Home"), else the user-anonymised path.
+  // Sessions in different folders must not all read the same.
+  const folderName = $derived.by(() => {
+    if (!view.cwd) return "DextUI";
+    const home = app.conn?.home ?? "";
+    if (home && (view.cwd === home || view.cwd.startsWith(home + "/"))) return shortFolder(view.cwd);
+    const p = prettyPath(view.cwd);
+    return p === "workspace" ? "Workspace" : p;
+  });
   const folderTitle = $derived(!foldersEnabled() ? view.cwd : view.working ? `${view.cwd}\nChange folder — available when the turn finishes` : `${view.cwd}\nChange folder (o)`);
   const dotClass = $derived(
     app.phase === "live"
@@ -125,9 +135,9 @@ import Meter from "./Meter.svelte";
   {/if}
   <span class={`dot ${dotClass}`} data-agent-id="status.phase" data-state={app.phase}>●</span>
   {#if foldersEnabled() && isReal}
-    <button class="act folder truncate" class:st-green={true} data-agent-id="status.folder" data-state={canMove ? "ready" : "locked"} disabled={!canMove} title={folderTitle} aria-label="Change this session's folder" onclick={() => openFolderPicker({ intent: "move", session: view.id })}>{view.cwd ? prettyPath(view.cwd, view.cwd) : "DextUI"}</button>
+    <button class="act folder st-green truncate" data-agent-id="status.folder" data-state={canMove ? "ready" : "locked"} disabled={!canMove} title={folderTitle} aria-label="Change this session's folder" onclick={() => openFolderPicker({ intent: "move", session: view.id })}><span class="faint">Workspace</span> {folderName}</button>
   {:else}
-    <span class="st-green truncate">{view.cwd ? prettyPath(view.cwd, view.cwd) : "DextUI"}</span>
+    <span class="st-green truncate" title={view.cwd}><span class="faint">Workspace</span> {folderName}</span>
   {/if}
   {#if connector}
     <span class="conn" data-agent-id="status.connector" data-state={connector.status} title={`${connector.remote}\nLast sync: ${connAge(connector.last_sync)}${connector.error ? `\n${connector.error}` : ""}`}>

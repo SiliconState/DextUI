@@ -156,9 +156,18 @@ test("bridge: warm child across idle interrupt, /approval recycle, queued-steer 
   at = a.events.length;
   a.send("session.configure", { id, cwd: elsewhere });
   assert.equal((await a.wait((e) => e.session === id && e.event === "session.configured", at)).data.cwd, elsewhere);
+  // dext's seat records are project-scoped, so the host must resume the seat's
+  // session by explicit path (found by its header, whatever project it is in).
+  const seat = JSON.parse(fs.readFileSync(path.join(h.state, "sessions.json"), "utf8")).find((e) => e.id === id).seat;
+  assert.ok(seat, "session index carries the seat");
+  const seatDir = path.join(h.home, "projects", "old-project-0000", "sessions", "1700000000-1-abc");
+  fs.mkdirSync(seatDir, { recursive: true });
+  fs.writeFileSync(path.join(seatDir, "_latest.jsonl"), `${JSON.stringify({ version: 4, seat: { id: seat } })}\n`);
   at = a.events.length;
   a.send("prompt.submit", { session: id, text: "four" });
-  assert.notEqual(await pidOf(at), pid3, "folder change must recycle the child");
+  const start4 = await a.wait((e) => e.session === id && e.event === "turn_start", at);
+  assert.notEqual(start4.data.pid, pid3, "folder change must recycle the child");
+  assert.equal(start4.data.resume, seatDir, "after a move, --resume names the seat's session explicitly");
   await a.wait((e) => e.session === id && e.event === "turn_end", at);
   assert.ok(!a.events.slice(at).some((e) => e.session === id && e.event === "error"), "recycle for a folder change must not surface as a turn failure");
 
