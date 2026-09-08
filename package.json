@@ -19,7 +19,7 @@
     "serve": "node packages/agentlinkd/src/server.mjs",
     "smoke": "node packages/mock-server/scripts/smoke.mjs",
     "smoke:agentlinkd": "node packages/agentlinkd/scripts/smoke.mjs",
-    "smoke:browser": "npm run build -w @dextui/web && bash apps/web/scripts/browser-test.sh"
+    "smoke:browser": "npm run build -w @dextui/web && bash apps/web/scripts/browser-test.sh && bash apps/web/scripts/chart-review-test.sh"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^6.2.1",

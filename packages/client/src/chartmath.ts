@@ -59,9 +59,11 @@ export function niceCeil(v: number): number {
   const a = Math.abs(v);
   if (!(a > 0)) return 1;
   const p = Math.pow(10, Math.floor(Math.log10(a)));
+  if (p === 0) return a;
   const m = a / p;
   const s = m <= 1 ? 1 : m <= 2 ? 2 : m <= 2.5 ? 2.5 : m <= 5 ? 5 : 10;
-  return Number((s * p).toPrecision(12));
+  const rounded = Number((s * p).toPrecision(12));
+  return Number.isFinite(rounded) && rounded > 0 ? rounded : a;
 }
 
 /**
@@ -70,15 +72,22 @@ export function niceCeil(v: number): number {
  */
 export function niceTicks(lo: number, hi: number, count = 4): number[] {
   if (!(hi > lo)) return [lo];
-  const raw = (hi - lo) / Math.max(1, count);
+  if (!Number.isFinite(lo) || !Number.isFinite(hi) || !Number.isFinite(hi - lo)) return [];
+  const raw = (hi - lo) / Math.max(1, Math.min(100, Number.isFinite(count) ? count : 4));
   const p = Math.pow(10, Math.floor(Math.log10(raw)));
   const m = raw / p;
   const step = (m <= 1.5 ? 1 : m <= 3 ? 2 : m <= 7 ? 5 : 10) * p;
-  const out: number[] = [];
-  const t0 = Math.ceil(lo / step - 1e-9) * step;
-  for (let t = t0; t <= hi + step * 1e-6; t += step) out.push(Number(t.toPrecision(12)));
-  if (lo < 0 && hi > 0 && !out.some((t) => t === 0)) out.push(0);
-  return out.sort((a, b) => a - b);
+  if (!(step > 0) || !Number.isFinite(step)) return [lo, hi];
+  const out = new Set<number>();
+  const start = Math.ceil(lo / step - 1e-9);
+  // Index iteration is bounded: adding a small step to a large float can stall.
+  for (let i = 0; i <= 250; i++) {
+    const t = Number(((start + i) * step).toPrecision(15));
+    if (t > hi) break;
+    if (t >= lo) out.add(t);
+  }
+  if (lo <= 0 && hi >= 0) out.add(0);
+  return out.size ? [...out].sort((a, b) => a - b) : [lo, hi];
 }
 
 /** Horizontal-bar axis domain: symmetric around 0 when any value is negative. */
@@ -100,7 +109,7 @@ export function hbarXAt(v: number, dom: [number, number]): number {
 export function hbarTrack(v: number, dom: [number, number]): { x: number; w: number } {
   const z = hbarXAt(Math.max(dom[0], Math.min(dom[1], 0)), dom);
   const e = hbarXAt(v, dom);
-  return { x: Math.min(z, e), w: Math.max(2, Math.abs(e - z)) };
+  return { x: Math.min(z, e), w: Math.abs(e - z) };
 }
 
 /** Inverse of hbarXAt, clamped to the domain (a drag may cross zero). */
@@ -112,6 +121,13 @@ export function hbarValueAtDom(x: number, dom: [number, number]): number {
 
 export function lineX(sc: Scale, i: number): number {
   return PLOT.l + ((PLOT.r - PLOT.l) * (i - sc.i0)) / sc.spanI;
+}
+
+export function barTrack(v: number, sc: Scale): { y: number; h: number; end: number; clipped: -1 | 0 | 1 } {
+  const clampY = (n: number) => Math.max(PLOT.top, Math.min(PLOT.bottom, scaleY(sc, n)));
+  const zero = clampY(0);
+  const end = clampY(v);
+  return { y: Math.min(zero, end), h: Math.abs(zero - end), end, clipped: v < sc.lo ? -1 : v > sc.hi ? 1 : 0 };
 }
 
 export function scaleY(sc: Scale, v: number): number {

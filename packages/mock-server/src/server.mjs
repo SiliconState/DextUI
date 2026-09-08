@@ -351,7 +351,8 @@ function packPlan(name, task) {
   ];
 }
 
-const MD_DEMO = `## Markdown rendering demo
+// Optional local fixture for repeatable visual/report regression checks.
+const MD_DEMO = process.env.MOCK_MARKDOWN_FILE ? fs.readFileSync(process.env.MOCK_MARKDOWN_FILE, "utf8") : `## Markdown rendering demo
 
 Structured agent output renders as **real HTML**, not wrapped monospace:
 

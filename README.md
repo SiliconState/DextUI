@@ -76,6 +76,32 @@ projections, UTF-8 text, an approved file write, busy steering and overload refu
 interrupt, close, and EOF. Unit tests cover deterministic split-byte input, bounded
 writes, committed reasoning preservation, and mid-preview snapshot reconnect.
 
+## Chart domains, ranking and report layout
+
+Chart specs accept `"domain":[-3,3]` (two finite numbers, increasing) for bar,
+hbar and line axes, and `"sort":"desc"` or `"asc"` for signed bar rankings.
+Bar outliers retain their real-value labels while clipping to the plot; line
+segments clip without flattening their underlying values. Interactive drag axes
+and ranked row positions stay frozen until release. Related charts must keep the
+same source label ordering when sharing a `dataset` ID.
+
+Tables immediately followed by bar/hbar charts form a tape grid. Below a 1000px
+message-container width it stacks; tape charts retain a 500px minimum content
+width and scroll locally rather than shrinking text. Ordinary table cards retain
+their existing sizing.
+
+`npm test` includes chart geometry/validation tests and real-browser drag,
+cross-highlight, clipping and responsive-layout checks (the browser gate visibly
+skips if `agent-browser` is unavailable). To replay a report without a model:
+
+```sh
+REPORT_FILE=/absolute/report.md REPORT_CHARTS=10 SCREENSHOT_DIR=/tmp/report-shots \
+  bash apps/web/scripts/chart-review-test.sh
+```
+
+See [the chart and market-report review](docs/chart-report-review.md) for findings,
+methodology corrections and remaining verification limits.
+
 ## Quickstart — mock (no API key)
 
 ```bash

@@ -10,7 +10,7 @@
 
 export type ChartType = "bar" | "hbar" | "line" | "spark" | "donut";
 
-import { barFill, barGroupLayout } from "./chartmath.js";
+import { barFill, barGroupLayout, barTrack, computeScale, hbarDomain, hbarTrack, hbarXAt, niceTicks, sortOrder } from "./chartmath.js";
 
 export interface ChartSeries {
   name: string;
@@ -26,7 +26,8 @@ export interface ChartSpec {
   /** Scale override (bar/hbar/line). Defaults to the data's own max. */
   max?: number;
   /** Fixed axis [lo, hi] (bar/hbar/line): pins the scale so charts compare across renders.
-   *  Values outside it clip at the edge and carry their real value in the label. */
+   *  Bar outliers clip at the edge and carry their real value in the label;
+   *  line segments clip to the plot, with real values available on hover. */
   domain?: [number, number];
   /** Initial bar/hbar order: "desc" ranks by value, "asc" the reverse; default source order. */
   sort?: "desc" | "asc";
@@ -103,12 +104,12 @@ export function parseChartSpec(json: string): ChartSpec | null {
   let domain: [number, number] | undefined;
   if (o.domain !== undefined) {
     if (!Array.isArray(o.domain) || o.domain.length !== 2) return null;
-    const lo = Number(o.domain[0]);
-    const hi = Number(o.domain[1]);
-    if (!Number.isFinite(lo) || !Number.isFinite(hi) || hi <= lo) return null;
+    const [lo, hi] = o.domain;
+    if (typeof lo !== "number" || typeof hi !== "number" || !Number.isFinite(lo) || !Number.isFinite(hi) || hi <= lo || !Number.isFinite(hi - lo)) return null;
     domain = [lo, hi];
   }
-  const sort = o.sort === "desc" || o.sort === "asc" ? o.sort : undefined;
+  if (o.sort !== undefined && o.sort !== "desc" && o.sort !== "asc") return null;
+  const sort = o.sort;
   let series: ChartSeries[] | undefined;
   if (hasSeries) {
     if (rawSeries.length > MAX_SERIES) return null;
@@ -147,16 +148,10 @@ export function parseChartSpec(json: string): ChartSpec | null {
   };
 }
 
-function scaleMax(spec: ChartSpec): number {
-  if (spec.max !== undefined) return spec.max;
-  return Math.max(1e-9, ...spec.values.map((v) => Math.abs(v)));
-}
-
 function gridY(x0: number, x1: number, top: number, bottom: number, hi: number, lo: number, unit?: string): string {
   let out = "";
-  for (let i = 0; i <= 3; i++) {
-    const y = bottom - ((bottom - top) * i) / 3;
-    const val = lo + ((hi - lo) * i) / 3;
+  for (const val of niceTicks(lo, hi)) {
+    const y = bottom - ((bottom - top) * (val - lo)) / (hi - lo);
     out += `<line x1="${x0}" y1="${y.toFixed(1)}" x2="${x1}" y2="${y.toFixed(1)}" style="stroke:var(--chart-grid,#2a2f37)" stroke-width="1"/>`;
     out += `<text x="${x1 + 4}" y="${(y + 3).toFixed(1)}" font-size="10" style="fill:var(--dim,#8b949e)">${esc(`${fmt(val)}${unit ?? ""}`)}</text>`;
   }
@@ -188,6 +183,7 @@ export function renderChartSVG(spec: ChartSpec): string {
   const W = 560;
   const unit = spec.unit ?? "";
   const labels = spec.labels ?? spec.values.map((_, i) => `#${i + 1}`);
+  const order = sortOrder(spec.values, spec.type === "line" ? 0 : spec.sort === "desc" ? 1 : spec.sort === "asc" ? 2 : 0);
 
   if (spec.type === "spark") {
     const H = 48;
@@ -241,17 +237,28 @@ export function renderChartSVG(spec: ChartSpec): string {
     const labelW = 118;
     const trackX = labelW + 6;
     const trackW = W - trackX - 64;
-    const hi = scaleMax(spec);
+    const dom = hbarDomain(spec.values, spec.max, spec.domain);
+    const diverging = dom[0] < 0 && dom[1] > 0;
     let rows = "";
-    for (let i = 0; i < spec.values.length; i++) {
+    for (const t of niceTicks(...dom)) {
+      const x = hbarXAt(t, dom);
+      rows += `<line x1="${x}" x2="${x}" y1="26" y2="${H - 8}" style="stroke:var(--chart-grid,#2a2f37)"/><text x="${x}" y="22" text-anchor="middle" font-size="9" style="fill:var(--dim,#8b949e)">${esc(`${fmt(t)}${unit}`)}</text>`;
+    }
+    for (const [p, i] of order.entries()) {
       const v = spec.values[i] ?? 0;
-      const y = 30 + i * 26;
-      const w = Math.max(2, (Math.abs(v) / hi) * trackW);
-      const color = v < 0 ? CHART_COLORS[4] : CHART_COLORS[i % CHART_COLORS.length];
+      const y = 30 + p * 26;
+      const tr = hbarTrack(v, dom);
+      const clipped = v < dom[0] || v > dom[1];
+      const text = `${clipped ? (v > dom[1] ? "▸" : "◂") : ""}${fmt(v)}${unit}`;
+      const end = hbarXAt(v, dom);
+      const outside = v >= 0 ? end + 5 + text.length * 6.6 <= W - 4 : end - 5 - text.length * 6.6 >= trackX;
+      const lx = v >= 0 ? outside ? end + 5 : W - 4 : outside ? end - 5 : end + 5;
+      const anchor = v >= 0 ? outside ? "start" : "end" : outside ? "end" : "start";
+      const color = barFill(CHART_COLORS, v, i, 0, 1, diverging);
       rows += `<text x="${labelW}" y="${y + 12}" text-anchor="end" font-size="11" style="fill:var(--dim,#8b949e)">${esc((labels[i] ?? "").slice(0, 14))}</text>`;
       rows += `<rect x="${trackX}" y="${y}" width="${trackW}" height="14" rx="3" style="fill:var(--chart-grid,#2a2f37)" opacity="0.35"/>`;
-      rows += `<rect x="${trackX}" y="${y}" width="${w.toFixed(1)}" height="14" rx="3" style="fill:${color}"/>`;
-      rows += `<text x="${trackX + trackW + 6}" y="${y + 12}" font-size="11" style="fill:var(--fg,#e6edf3)">${esc(`${fmt(v)}${unit}`)}</text>`;
+      rows += `<rect x="${tr.x.toFixed(1)}" y="${y}" width="${tr.w.toFixed(1)}" height="14" rx="3" style="fill:${color}"/>`;
+      rows += `<text x="${lx}" y="${y + 12}" text-anchor="${anchor}" font-size="11" font-weight="${clipped ? "bold" : "normal"}" style="fill:var(--fg,#e6edf3)">${esc(text)}</text>`;
     }
     return (
       `<svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block" role="img" aria-label="${esc(spec.title ?? "bar chart")}">` +
@@ -267,9 +274,8 @@ export function renderChartSVG(spec: ChartSpec): string {
   const axisL = 8;
   const axisR = W - 64; // room for y labels
   const H = bottom + 34;
-  const allV = spec.series?.length ? spec.series.flatMap((s) => s.values) : spec.values;
-  const hi = Math.max(0, spec.max ?? Math.max(...allV));
-  const lo = Math.min(0, ...allV);
+  const scale = computeScale(spec.series?.map((s) => s.values) ?? [spec.values], spec.values.length, null, spec.max, spec.domain);
+  const { hi, lo } = scale;
   const span = hi - lo || 1;
   const py = (v: number) => bottom - ((bottom - top) * (v - lo)) / span;
   const px = (i: number) => axisL + ((axisR - axisL) * (i + 0.5)) / spec.values.length;
@@ -283,24 +289,22 @@ export function renderChartSVG(spec: ChartSpec): string {
     const rowsArr = spec.series?.length ? spec.series.map((s) => s.values) : [spec.values];
     const m = rowsArr.length;
     const geo = barGroupLayout(spec.values.length, m, axisL, axisR);
-    for (let i = 0; i < spec.values.length; i++) {
+    for (const [p, i] of order.entries()) {
       for (let s = 0; s < m; s++) {
         const v = rowsArr[s]?.[i] ?? 0;
-        const y0 = py(0);
-        const y1 = py(v);
-        const by = Math.min(y0, y1);
-        const bh = Math.max(2, Math.abs(y0 - y1));
-        const bx = geo.x(i, s) - geo.bw / 2;
+        const tr = barTrack(v, scale);
+        const by = tr.y;
+        const bh = tr.h;
+        const bx = geo.x(p, s) - geo.bw / 2;
         const name = spec.series?.[s]?.name || `s${s + 1}`;
         const tipTxt = m > 1 ? `${labels[i] ?? ""} · ${name}: ${fmt(v)}${unit}` : `${labels[i] ?? ""}: ${fmt(v)}${unit}`;
         body +=
           `<rect x="${bx.toFixed(1)}" y="${by.toFixed(1)}" width="${geo.bw.toFixed(1)}" height="${bh.toFixed(1)}" rx="2"` +
-          ` style="fill:${barFill(CHART_COLORS, v, i, s, m)}"><title>${esc(tipTxt)}</title></rect>`;
-      }
-      if (m === 1) {
-        const v = rowsArr[0]?.[i] ?? 0;
-        const by = Math.min(py(0), py(v));
-        body += `<text x="${px(i).toFixed(1)}" y="${(by - 4).toFixed(1)}" text-anchor="middle" font-size="10" style="fill:var(--fg,#e6edf3)">${esc(`${fmt(v)}${unit}`)}</text>`;
+          ` style="fill:${barFill(CHART_COLORS, v, i, s, m, lo < 0)}"><title>${esc(tipTxt)}</title></rect>`;
+        if (tr.clipped || m === 1) {
+          const ly = tr.end + (tr.clipped < 0 || (!tr.clipped && v < 0) ? 11 : -4);
+          body += `<text x="${geo.x(p, s).toFixed(1)}" y="${ly.toFixed(1)}" text-anchor="middle" font-size="10" font-weight="${tr.clipped ? "bold" : "normal"}" style="fill:var(--fg,#e6edf3)">${esc(`${tr.clipped ? tr.clipped > 0 ? "▴" : "▾" : ""}${fmt(v)}${unit}`)}</text>`;
+        }
       }
     }
     if (m > 1) {
@@ -317,6 +321,8 @@ export function renderChartSVG(spec: ChartSpec): string {
       });
     }
   } else {
+    // Clip actual segments rather than flattening outliers at the boundary.
+    body += `<svg x="${axisL}" y="${top}" width="${axisR - axisL}" height="${bottom - top}" viewBox="${axisL} ${top} ${axisR - axisL} ${bottom - top}" overflow="hidden">`;
     const pts = spec.values.map((v, i) => `${px(i).toFixed(1)},${py(v).toFixed(1)}`).join(" ");
     body += `<polyline points="${pts}" fill="none" style="stroke:var(--chart-1,#3fb950)" stroke-width="2"/>`;
     for (let i = 0; i < spec.values.length; i++) {
@@ -324,9 +330,10 @@ export function renderChartSVG(spec: ChartSpec): string {
         `<circle cx="${px(i).toFixed(1)}" cy="${py(spec.values[i] ?? 0).toFixed(1)}" r="3" style="fill:var(--chart-1,#3fb950)"><title>${esc(`${labels[i] ?? ""}: ${fmt(spec.values[i] ?? 0)}${unit}`)}</title></circle>`;
     }
   }
+  if (spec.type === "line") body += `</svg>`;
   let xLabels = "";
-  for (let i = 0; i < spec.values.length; i++) {
-    xLabels += `<text x="${px(i).toFixed(1)}" y="${bottom + 16}" text-anchor="middle" font-size="10" style="fill:var(--dim,#8b949e)">${esc((labels[i] ?? "").slice(0, 10))}</text>`;
+  for (const [p, i] of order.entries()) {
+    xLabels += `<text x="${px(p).toFixed(1)}" y="${bottom + 16}" text-anchor="middle" font-size="10" style="fill:var(--dim,#8b949e)">${esc((labels[i] ?? "").slice(0, 10))}</text>`;
   }
   return (
     `<svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block" role="img" aria-label="${esc(spec.title ?? `${spec.type} chart`)}">` +

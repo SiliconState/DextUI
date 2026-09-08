@@ -26,8 +26,8 @@
     barGroupLayout,
     barGroupHitAtX,
     barFill,
+    barTrack,
     hbarRowAtY,
-    hbarScaleMax,
     hbarDomain,
     hbarTrack,
     hbarXAt,
@@ -49,7 +49,7 @@
   // Selection link: shared per message when provided; a private one otherwise
   // so click-to-highlight still works on a lone chart. Charts without a
   // dataset id get a unique key so they never cross-talk.
-  const uid = `#${Math.random().toString(36).slice(2, 8)}`;
+  const uid = `chart-${Math.random().toString(36).slice(2, 8)}`;
   const localLink = new ChartLink();
   const link = $derived(linkProp ?? localLink);
   const ds = $derived(spec.dataset ?? uid);
@@ -64,7 +64,8 @@
   // ---- interaction state
   let hidden = $state(new Set<number>());
   let edit = $state<Record<number, number[]>>({});
-  let sortMode = $state<0 | 1 | 2>(spec.sort === "desc" ? 1 : spec.sort === "asc" ? 2 : 0);
+  let sortOverride = $state<0 | 1 | 2 | null>(null);
+  const sortMode = $derived(sortOverride ?? (spec.sort === "desc" ? 1 : spec.sort === "asc" ? 2 : 0));
   // Compact rows (tape grid beside tables) keep the chart's height near the table's.
   const rowH = $derived(compact ? 20 : HBAR.rowH);
   let zoom = $state<[number, number] | null>(null);
@@ -75,7 +76,7 @@
   let svgEl = $state<SVGSVGElement | null>(null);
 
   type Gesture =
-    | { kind: "drag"; s: number; i: number; ax: "x" | "y"; sc: Scale; hiAbs: number; dom: [number, number]; neg: boolean; moved: number }
+    | { kind: "drag"; s: number; i: number; ax: "x" | "y"; sc: Scale; dom: [number, number]; order: number[]; moved: number }
     | { kind: "pan"; px: number; i0: number; w: number; moved: number }
     | { kind: "brush"; a: number; moved: number };
   let gesture = $state<Gesture | null>(null);
@@ -89,12 +90,12 @@
   // cursor (the value may exceed the frozen max; the scale refits on release).
   const liveScale = $derived(computeScale((visible.length ? visible : [0]).map(vals), n, zoom, spec.max, spec.domain));
   const scl = $derived(gesture?.kind === "drag" ? gesture.sc : liveScale);
-  const order = $derived(type === "bar" || type === "hbar" ? sortOrder(vals(0), sortMode) : vals(0).map((_, i) => i));
-  const hiAbs = $derived(hbarScaleMax(vals(0), spec.max));
-  // hbar axis: zero-anchored; symmetric (diverging) when any value is negative.
-  const hdom = $derived(hbarDomain(vals(0), spec.max, spec.domain));
+  const liveOrder = $derived(type === "bar" || type === "hbar" ? sortOrder(vals(0), sortMode) : vals(0).map((_, i) => i));
+  const order = $derived(gesture?.kind === "drag" ? gesture.order : liveOrder);
+  const liveHdom = $derived(hbarDomain(vals(0), spec.max, spec.domain));
+  const hdom = $derived(gesture?.kind === "drag" ? gesture.dom : liveHdom);
   const hticks = $derived(niceTicks(hdom[0], hdom[1], 4));
-  const diverging = $derived(vals(0).some((v) => v < 0));
+  const diverging = $derived(hdom[0] < 0 && hdom[1] > 0);
   const yticks = $derived(niceTicks(scl.lo, scl.hi, 4));
   const stats = $derived(seriesStats(vals(primary)));
   const donut = $derived(donutRows(vals(0)));
@@ -139,7 +140,7 @@
   };
 
   const startDrag = (e: PointerEvent, s: number, i: number, ax: "x" | "y") =>
-    begin(e, { kind: "drag", s, i, ax, sc: liveScale, hiAbs, dom: hdom, neg: (vals(s)[i] ?? 0) < 0, moved: 0 });
+    begin(e, { kind: "drag", s, i, ax, sc: liveScale, dom: liveHdom, order: liveOrder.slice(), moved: 0 });
 
   const onPointerMove = (e: PointerEvent) => {
     const g = gesture;
@@ -186,7 +187,7 @@
     zoom = wheelZoom(zoom, n, fx, e.deltaY);
   };
 
-  const cycleSort = () => (sortMode = ((sortMode + 1) % 3) as 0 | 1 | 2);
+  const cycleSort = () => (sortOverride = ((sortMode + 1) % 3) as 0 | 1 | 2);
   const toggleSeries = (s: number) => {
     const hs = new Set(hidden);
     if (hs.has(s)) hs.delete(s);
@@ -255,10 +256,12 @@
         {@const v = vals(0)[i] ?? 0}
         {@const tr = hbarTrack(v, hdom)}
         {@const clipped = v > hdom[1] || v < hdom[0]}
-        {@const txt = `${clipped ? (v > 0 ? "▸" : "◂") : ""}${v > 0 && diverging ? "+" : ""}${fmt(v)}${unit}`}
-        {@const room = tr.x - HBAR.x}
-        {@const lx = v >= 0 ? tr.x + tr.w + 5 : room >= 44 ? tr.x - 5 : zx + 5}
-        {@const anchor = v >= 0 || room < 44 ? "start" : "end"}
+        {@const txt = `${clipped ? (v > hdom[1] ? "▸" : "◂") : ""}${v > 0 && diverging ? "+" : ""}${fmt(v)}${unit}`}
+        {@const labelW = txt.length * (compact ? 6 : 6.6)}
+        {@const end = hbarXAt(v, hdom)}
+        {@const outside = v >= 0 ? end + 5 + labelW <= W - 4 : end - 5 - labelW >= HBAR.x}
+        {@const lx = v >= 0 ? outside ? end + 5 : W - 4 : outside ? end - 5 : end + 5}
+        {@const anchor = v >= 0 ? outside ? "start" : "end" : outside ? "end" : "start"}
         <g transform="translate(0,{HBAR.y0 + p * rowH})" style="transition: transform .18s ease">
           <!-- svelte-ignore a11y_click_events_have_key_events -->
           <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -266,7 +269,11 @@
           <rect x={HBAR.x} y="0" width={HBAR.w} height={bh} rx="3" style="fill:var(--chart-grid,#2a2f37)" opacity="0.25" />
           <!-- svelte-ignore a11y_no_static_element_interactions -->
           <rect x={tr.x} y="0" width={tr.w} height={bh} rx="3" style="fill:{barFill(CHART_COLORS, v, i, 0, 1, diverging)}; cursor:ew-resize" opacity={hoverI === i ? 1 : dim(i)} onpointerdown={(e) => startDrag(e, 0, i, "x")} />
-          <!-- value label rides the end of its own bar: right of positives, left of negatives (or just past zero when the bar hugs the label column) -->
+          {#if tr.w < 4}
+            <!-- svelte-ignore a11y_no_static_element_interactions -->
+            <rect x={Math.max(HBAR.x, Math.min(HBAR.x + HBAR.w - 4, end - 2))} y="0" width="4" height={bh} fill="transparent" style="cursor:ew-resize" onpointerdown={(e) => startDrag(e, 0, i, "x")} />
+          {/if}
+          <!-- Keep labels adjacent to bar endpoints, inside the SVG bounds. -->
           <text x={lx} y={bh - 2} text-anchor={anchor} font-size={compact ? 10 : 11} font-weight={clipped ? "bold" : "normal"} style="fill:{v < 0 ? 'var(--chart-5,#f85149)' : diverging ? 'var(--chart-1,#3fb950)' : 'var(--fg,#e6edf3)'}; pointer-events:none">{txt}</text>
         </g>
       {/each}
@@ -289,21 +296,24 @@
           {#each visible as s, vp (s)}
             {@const v = vals(s)[i] ?? 0}
             {@const bx = bars.x(p, vp)}
-            {@const y0 = scaleY(scl, 0)}
-            {@const clipped = v > scl.hi || v < scl.lo}
-            {@const y1 = Math.max(PLOT.top, Math.min(PLOT.bottom, scaleY(scl, v)))}
-            {@const by = Math.max(0, Math.min(y0, y1))}
-            {@const bh = Math.max(2, Math.abs(y0 - y1))}
+            {@const tr = barTrack(v, scl)}
+            {@const clipped = tr.clipped !== 0}
+            {@const by = tr.y}
+            {@const bh = tr.h}
             <g transform="translate({bx},0)" style="transition: transform .18s ease">
               <!-- svelte-ignore a11y_no_static_element_interactions -->
               <rect x={-bars.bw / 2} y={by} width={bars.bw} height={bh} rx="2" style="fill:{barFill(CHART_COLORS, v, i, s, mVis, scl.lo < 0)}; cursor:ns-resize" opacity={hoverI === i ? 1 : dim(i)} onpointerdown={(e) => startDrag(e, s, i, "y")} />
+              {#if bh < 4}
+                <!-- svelte-ignore a11y_no_static_element_interactions -->
+                <rect x={-bars.bw / 2} y={Math.max(PLOT.top, Math.min(PLOT.bottom - 4, tr.end - 2))} width={bars.bw} height="4" fill="transparent" style="cursor:ns-resize" onpointerdown={(e) => startDrag(e, s, i, "y")} />
+              {/if}
               {#if clipped}
                 <!-- clipped at the domain edge: a break mark; the label carries the real value -->
-                <line x1={-bars.bw / 2 - 1} y1={v > 0 ? PLOT.top + 5 : PLOT.bottom - 5} x2={bars.bw / 2 + 1} y2={v > 0 ? PLOT.top + 1 : PLOT.bottom - 1} style="stroke:var(--bg,#0d1117)" stroke-width="2.5" />
+                <line x1={-bars.bw / 2 - 1} y1={tr.clipped > 0 ? PLOT.top + 5 : PLOT.bottom - 5} x2={bars.bw / 2 + 1} y2={tr.clipped > 0 ? PLOT.top + 1 : PLOT.bottom - 1} style="stroke:var(--bg,#0d1117)" stroke-width="2.5" />
               {/if}
             </g>
             {#if visible.length === 1 || clipped}
-              <text x={bx} y={v < 0 ? by + bh + 11 : by - 4} text-anchor="middle" font-size="10" font-weight={clipped ? "bold" : "normal"} style="fill:var(--fg,#e6edf3); pointer-events:none">{clipped ? (v > 0 ? "▴" : "▾") : ""}{fmt(v)}{unit}</text>
+              <text x={bx} y={tr.end + (tr.clipped < 0 || (!clipped && v < 0) ? 11 : -4)} text-anchor="middle" font-size="10" font-weight={clipped ? "bold" : "normal"} style="fill:var(--fg,#e6edf3); pointer-events:none">{clipped ? (tr.clipped > 0 ? "▴" : "▾") : ""}{fmt(v)}{unit}</text>
             {/if}
           {/each}
           <!-- svelte-ignore a11y_click_events_have_key_events -->
@@ -314,6 +324,8 @@
       {:else}
         <!-- svelte-ignore a11y_no_static_element_interactions -->
         <rect x={PLOT.l} y={PLOT.top} width={PLOT.r - PLOT.l} height={PLOT.bottom - PLOT.top} fill="transparent" style="cursor:grab" onpointerdown={(e) => begin(e, { kind: "pan", px: e.clientX, i0: scl.i0, w: scl.i1 - scl.i0, moved: 0 })} ondblclick={() => (zoom = null)} />
+        <defs><clipPath id={`plot-${uid}`}><rect x={PLOT.l} y={PLOT.top} width={PLOT.r - PLOT.l} height={PLOT.bottom - PLOT.top} /></clipPath></defs>
+        <g clip-path={`url(#plot-${uid})`}>
         {#each visible as s (s)}
           {@const sv = vals(s)}
           <polyline points={sv.map((v, i) => (i >= scl.i0 - 0.5 && i <= scl.i1 + 0.5 ? `${lineX(scl, i).toFixed(1)},${scaleY(scl, v).toFixed(1)}` : "")).filter(Boolean).join(" ")} fill="none" style="stroke:{CHART_COLORS[s % 5]}" stroke-width="2" />
@@ -326,6 +338,7 @@
             {/each}
           {/if}
         {/each}
+        </g>
         {#if hoverI >= 0 && !gesture}
           <line x1={lineX(scl, hoverI)} y1={PLOT.top} x2={lineX(scl, hoverI)} y2={PLOT.bottom} style="stroke:var(--dim,#8b949e)" stroke-dasharray="3 3" opacity="0.7" />
         {/if}

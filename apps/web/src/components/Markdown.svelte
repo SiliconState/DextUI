@@ -109,7 +109,7 @@
   {@const numCol = b.rows.length > 0
     ? b.head.map((_, ci) => b.rows.filter((r) => NUM.test(cellText(r[ci] ?? []))).length >= Math.max(1, Math.ceil(b.rows.length * 0.6)))
     : b.head.map(() => false)}
-  {@const sign = (t: string) => (/^[+]\d/.test(t) ? "pos" : /^[\-\u2212]\d/.test(t) ? "neg" : "")}
+  {@const sign = (t: string) => (/^[+]\$?\d/.test(t) ? "pos" : /^[\-\u2212]\$?\d/.test(t) ? "neg" : "")}
   <div class="md-tablewrap">
     <table class="md-table">
       <thead>
@@ -257,6 +257,7 @@
     flex-direction: column;
     gap: 6px;
     min-width: 0;
+    container-type: inline-size;
   }
   .md-h {
     font-size: 13px;
@@ -329,12 +330,16 @@
      the right column takes the remainder, charts capped at their native width. */
   .md-tape {
     display: grid;
-    grid-template-columns: fit-content(62%) minmax(220px, 1fr);
+    grid-template-columns: fit-content(55%) minmax(440px, 1fr);
     gap: 1.5rem;
     align-items: start;
   }
   .md-tape__r .md-chartbox--fill {
     max-width: 600px;
+    overflow-x: auto;
+  }
+  .md-tape__r .md-chartbox--fill :global(.chart-wrap) {
+    min-width: 500px;
   }
   .md-tape__l,
   .md-tape__r {
@@ -346,7 +351,7 @@
   .md-tape .md-tcard .md-h {
     margin-top: 0;
   }
-  @media (max-width: 760px) {
+  @container (max-width: 1000px) {
     .md-tape {
       grid-template-columns: minmax(0, 1fr);
     }
