@@ -65,9 +65,10 @@ test("bar hit-test honors the sort permutation and slot geometry", () => {
   assert.equal(hit(PLOT.r + 1, id), -1, "right of the plot is a miss");
 });
 
-test("sort is stable and ascending/descending by magnitude", () => {
-  assert.deepStrictEqual(sortOrder([3, -9, 3, 1], 1), [1, 0, 2, 3]);
-  assert.deepStrictEqual(sortOrder([3, -9, 3, 1], 2), [3, 0, 2, 1]);
+test("sort is stable and a signed ranking (desc puts negatives last)", () => {
+  assert.deepStrictEqual(sortOrder([3, -9, 3, 1], 1), [0, 2, 3, 1]);
+  assert.deepStrictEqual(sortOrder([3, -9, 3, 1], 2), [1, 3, 0, 2]);
+  assert.deepStrictEqual(sortOrder([3, -9, 3, 1], 0), [0, 1, 2, 3]);
 });
 
 test("hbar: row hit-test by y, drag keeps the row's sign and clamps to the track", () => {

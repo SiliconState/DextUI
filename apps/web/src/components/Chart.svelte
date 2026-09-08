@@ -44,7 +44,7 @@
   } from "@dextui/client";
   import { ChartLink } from "../lib/chartlink.svelte";
 
-  let { spec, link: linkProp }: { spec: ChartSpec; link?: ChartLink } = $props();
+  let { spec, link: linkProp, compact = false }: { spec: ChartSpec; link?: ChartLink; compact?: boolean } = $props();
 
   // Selection link: shared per message when provided; a private one otherwise
   // so click-to-highlight still works on a lone chart. Charts without a
@@ -64,7 +64,9 @@
   // ---- interaction state
   let hidden = $state(new Set<number>());
   let edit = $state<Record<number, number[]>>({});
-  let sortMode = $state<0 | 1 | 2>(0);
+  let sortMode = $state<0 | 1 | 2>(spec.sort === "desc" ? 1 : spec.sort === "asc" ? 2 : 0);
+  // Compact rows (tape grid beside tables) keep the chart's height near the table's.
+  const rowH = $derived(compact ? 20 : HBAR.rowH);
   let zoom = $state<[number, number] | null>(null);
   let hoverI = $state(-1);
   let iso = $state(-1);
@@ -100,7 +102,7 @@
   const bars = $derived(barGroupLayout(n, mVis));
   const showBrush = $derived(type === "line" && linked);
   const viewH = $derived(
-    type === "spark" ? SPARK.h : type === "donut" ? Math.max(180, 24 + n * 20) : type === "hbar" ? HBAR.y0 + n * HBAR.rowH + 8 : PLOT.bottom + 48 + (showBrush ? 16 : 0),
+    type === "spark" ? SPARK.h : type === "donut" ? Math.max(180, 24 + n * 20) : type === "hbar" ? HBAR.y0 + n * rowH + 8 : PLOT.bottom + 48 + (showBrush ? 16 : 0),
   );
   const cursor = $derived(gesture ? (gesture.kind === "drag" ? (gesture.ax === "x" ? "ew-resize" : "ns-resize") : "grabbing") : "default");
 
@@ -124,7 +126,7 @@
     if (type === "line") return lineIndexAtX(scl, p.x, n);
     if (type === "spark") return sparkIndexAtX(p.x, n);
     if (type === "bar") return barGroupHitAtX(p.x, n, order, mVis)?.i ?? -1;
-    if (type === "hbar") return hbarRowAtY(p.y, n, order);
+    if (type === "hbar") return hbarRowAtY(p.y, n, order, rowH);
     return -1;
   };
 
@@ -238,7 +240,8 @@
 
     {:else if type === "hbar"}
       {@const zx = hbarXAt(Math.max(hdom[0], Math.min(hdom[1], 0)), hdom)}
-      {@const hEnd = HBAR.y0 + n * HBAR.rowH}
+      {@const hEnd = HBAR.y0 + n * rowH}
+      {@const bh = compact ? 11 : 14}
       <!-- round-number axis: gridlines behind the rows, labels above the track, zero line emphasized -->
       {#each hticks as t (t)}
         {@const tx = hbarXAt(t, hdom)}
@@ -251,14 +254,20 @@
       {#each order as i, p (i)}
         {@const v = vals(0)[i] ?? 0}
         {@const tr = hbarTrack(v, hdom)}
-        <g transform="translate(0,{HBAR.y0 + p * HBAR.rowH})" style="transition: transform .18s ease">
+        {@const clipped = v > hdom[1] || v < hdom[0]}
+        {@const txt = `${clipped ? (v > 0 ? "▸" : "◂") : ""}${v > 0 && diverging ? "+" : ""}${fmt(v)}${unit}`}
+        {@const room = tr.x - HBAR.x}
+        {@const lx = v >= 0 ? tr.x + tr.w + 5 : room >= 44 ? tr.x - 5 : zx + 5}
+        {@const anchor = v >= 0 || room < 44 ? "start" : "end"}
+        <g transform="translate(0,{HBAR.y0 + p * rowH})" style="transition: transform .18s ease">
           <!-- svelte-ignore a11y_click_events_have_key_events -->
           <!-- svelte-ignore a11y_no_static_element_interactions -->
-          <text x="118" y="12" text-anchor="end" font-size="11" style="fill:var(--dim,#8b949e); cursor:pointer" onclick={cycleSort}>{(labels[i] ?? "").slice(0, 14)}</text>
-          <rect x={HBAR.x} y="0" width={HBAR.w} height="14" rx="3" style="fill:var(--chart-grid,#2a2f37)" opacity="0.25" />
+          <text x="118" y={bh - 2} text-anchor="end" font-size={compact ? 10 : 11} style="fill:var(--dim,#8b949e); cursor:pointer" onclick={cycleSort}>{(labels[i] ?? "").slice(0, 14)}</text>
+          <rect x={HBAR.x} y="0" width={HBAR.w} height={bh} rx="3" style="fill:var(--chart-grid,#2a2f37)" opacity="0.25" />
           <!-- svelte-ignore a11y_no_static_element_interactions -->
-          <rect x={tr.x} y="0" width={tr.w} height="14" rx="3" style="fill:{barFill(CHART_COLORS, v, i, 0, 1, diverging)}; cursor:ew-resize" opacity={hoverI === i ? 1 : dim(i)} onpointerdown={(e) => startDrag(e, 0, i, "x")} />
-          <text x={HBAR.x + HBAR.w + 6} y="12" font-size="11" style="fill:{v < 0 ? 'var(--chart-5,#f85149)' : diverging ? 'var(--chart-1,#3fb950)' : 'var(--fg,#e6edf3)'}">{v > 0 && diverging ? "+" : ""}{fmt(v)}{unit}</text>
+          <rect x={tr.x} y="0" width={tr.w} height={bh} rx="3" style="fill:{barFill(CHART_COLORS, v, i, 0, 1, diverging)}; cursor:ew-resize" opacity={hoverI === i ? 1 : dim(i)} onpointerdown={(e) => startDrag(e, 0, i, "x")} />
+          <!-- value label rides the end of its own bar: right of positives, left of negatives (or just past zero when the bar hugs the label column) -->
+          <text x={lx} y={bh - 2} text-anchor={anchor} font-size={compact ? 10 : 11} font-weight={clipped ? "bold" : "normal"} style="fill:{v < 0 ? 'var(--chart-5,#f85149)' : diverging ? 'var(--chart-1,#3fb950)' : 'var(--fg,#e6edf3)'}; pointer-events:none">{txt}</text>
         </g>
       {/each}
 
@@ -281,15 +290,20 @@
             {@const v = vals(s)[i] ?? 0}
             {@const bx = bars.x(p, vp)}
             {@const y0 = scaleY(scl, 0)}
-            {@const y1 = scaleY(scl, v)}
+            {@const clipped = v > scl.hi || v < scl.lo}
+            {@const y1 = Math.max(PLOT.top, Math.min(PLOT.bottom, scaleY(scl, v)))}
             {@const by = Math.max(0, Math.min(y0, y1))}
             {@const bh = Math.max(2, Math.abs(y0 - y1))}
             <g transform="translate({bx},0)" style="transition: transform .18s ease">
               <!-- svelte-ignore a11y_no_static_element_interactions -->
               <rect x={-bars.bw / 2} y={by} width={bars.bw} height={bh} rx="2" style="fill:{barFill(CHART_COLORS, v, i, s, mVis, scl.lo < 0)}; cursor:ns-resize" opacity={hoverI === i ? 1 : dim(i)} onpointerdown={(e) => startDrag(e, s, i, "y")} />
+              {#if clipped}
+                <!-- clipped at the domain edge: a break mark; the label carries the real value -->
+                <line x1={-bars.bw / 2 - 1} y1={v > 0 ? PLOT.top + 5 : PLOT.bottom - 5} x2={bars.bw / 2 + 1} y2={v > 0 ? PLOT.top + 1 : PLOT.bottom - 1} style="stroke:var(--bg,#0d1117)" stroke-width="2.5" />
+              {/if}
             </g>
-            {#if visible.length === 1}
-              <text x={bx} y={v < 0 ? by + bh + 11 : by - 4} text-anchor="middle" font-size="10" style="fill:var(--fg,#e6edf3)">{fmt(v)}{unit}</text>
+            {#if visible.length === 1 || clipped}
+              <text x={bx} y={v < 0 ? by + bh + 11 : by - 4} text-anchor="middle" font-size="10" font-weight={clipped ? "bold" : "normal"} style="fill:var(--fg,#e6edf3); pointer-events:none">{clipped ? (v > 0 ? "▴" : "▾") : ""}{fmt(v)}{unit}</text>
             {/if}
           {/each}
           <!-- svelte-ignore a11y_click_events_have_key_events -->

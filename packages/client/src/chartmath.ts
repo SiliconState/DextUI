@@ -195,8 +195,8 @@ export function barFill(palette: readonly string[], v: number, i: number, s: num
 }
 
 /** Original index of the hbar row under y; -1 outside the rows. */
-export function hbarRowAtY(y: number, n: number, order: number[]): number {
-  const p = Math.floor((y - HBAR.y0) / HBAR.rowH);
+export function hbarRowAtY(y: number, n: number, order: number[], rowH: number = HBAR.rowH): number {
+  const p = Math.floor((y - HBAR.y0) / rowH);
   if (p < 0 || p >= n) return -1;
   return order[p] ?? -1;
 }
@@ -215,11 +215,11 @@ export function hbarValueAtX(x: number, hiAbs: number, negative: boolean): numbe
   return negative ? -mag : mag;
 }
 
-/** 0 = source order · 1 = |v| descending · 2 = |v| ascending. Stable. */
+/** 0 = source order · 1 = value descending (a ranking) · 2 = ascending. Stable. */
 export function sortOrder(values: number[], mode: 0 | 1 | 2): number[] {
   const o = values.map((_, i) => i);
   if (mode === 0) return o;
-  const key = (i: number) => Math.abs(values[i] ?? 0);
+  const key = (i: number) => values[i] ?? 0;
   return o.sort((a, b) => (mode === 1 ? key(b) - key(a) : key(a) - key(b)) || a - b);
 }
 

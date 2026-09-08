@@ -29,7 +29,7 @@
     // A table run immediately followed by a chart: one 2-column grid — first
     // (tallest) table left, remaining tables + the chart stacked right, so the
     // chart fills the column instead of trailing off into whitespace.
-    | { kind: "tape"; cards: TCard[]; chart: MdChart };
+    | { kind: "tape"; cards: TCard[]; charts: MdChart[] };
   const layout = $derived.by(() => {
     const runs: Run[] = [];
     let cards: TCard[] = [];
@@ -41,10 +41,17 @@
     for (let i = 0; i < blocks.length; i++) {
       const b = blocks[i]!;
       const nx = blocks[i + 1];
-      if (b.kind === "chart" && cards.length > 0 && (b.spec.type === "hbar" || b.spec.type === "bar")) {
-        runs.push({ kind: "tape", cards, chart: b });
-        cards = [];
-        continue;
+      if (b.kind === "chart" && (b.spec.type === "hbar" || b.spec.type === "bar")) {
+        const last = runs[runs.length - 1];
+        if (cards.length > 0) {
+          runs.push({ kind: "tape", cards, charts: [b] });
+          cards = [];
+          continue;
+        }
+        if (last?.kind === "tape") {
+          last.charts.push(b);
+          continue;
+        }
       }
       if (b.kind === "table") {
         cards.push({ head: null, table: b });
@@ -154,9 +161,11 @@
           {#each run.cards.slice(1) as c, ci (ci)}
             {@render renderCard(c)}
           {/each}
-          <div class="md-chartbox md-chartbox--fill" data-agent-id="markdown.chart">
-            <Chart spec={run.chart.spec} {link} />
-          </div>
+          {#each run.charts as ch, ci (ci)}
+            <div class="md-chartbox md-chartbox--fill" data-agent-id="markdown.chart">
+              <Chart spec={ch.spec} {link} compact />
+            </div>
+          {/each}
         </div>
       </div>
     {:else}
@@ -316,11 +325,16 @@
     width: 100%;
   }
   /* Tape: tables + a trailing bar chart share one grid with a single gutter. */
+  /* Left column hugs its table (no dead band between table edge and gutter);
+     the right column takes the remainder, charts capped at their native width. */
   .md-tape {
     display: grid;
-    grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
+    grid-template-columns: fit-content(62%) minmax(220px, 1fr);
     gap: 1.5rem;
     align-items: start;
+  }
+  .md-tape__r .md-chartbox--fill {
+    max-width: 600px;
   }
   .md-tape__l,
   .md-tape__r {
@@ -413,13 +427,14 @@
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
   }
-  .md-table td.pos {
+  /* Direction tint is per cell and text-led; striping stays on the row. */
+  .md-table tbody td.pos {
     color: var(--green, #3fb950);
-    background: color-mix(in srgb, var(--green, #3fb950) 9%, transparent);
+    background: color-mix(in srgb, var(--green, #3fb950) 6%, transparent);
   }
-  .md-table td.neg {
+  .md-table tbody td.neg {
     color: var(--red, #f85149);
-    background: color-mix(in srgb, var(--red, #f85149) 9%, transparent);
+    background: color-mix(in srgb, var(--red, #f85149) 6%, transparent);
   }
   .md-tgrid {
     display: flex;

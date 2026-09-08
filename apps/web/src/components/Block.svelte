@@ -4,7 +4,7 @@
   // are CSS borders, never literal glyphs — glyph gutters shred when lines wrap.
   import type { ViewBlock as Block } from "@dextui/client";
   import { app, copyText, packOfPrompt, prefillComposer } from "../lib/state.svelte";
-  import { humanizeTool, humanizeLabel, parseRunMeta, isBashAdvisory } from "../lib/display";
+  import { humanizeTool, humanizeLabel, parseRunMeta, isBashAdvisory, looksLikeDiff } from "../lib/display";
   import { fileUrl, htmlPathIn } from "../lib/files";
   import { packForAuthMarker, openPackCredentials } from "../lib/packcreds.svelte";
   import { prettyPath } from "../lib/markdown";
@@ -23,10 +23,6 @@
     if (!WRITER.test(block.name)) return null;
     return htmlPathIn(block.summary);
   });
-
-  function looksLikeDiff(t: string): boolean {
-    return /^[-+]{3} |^@@ |^diff --git /m.test(t);
-  }
 
   // Pack attribution: dext's `pack_start` stamps the turn's prompt block (the
   // fold does it), which is exact even when dext inferred the pack from plain
