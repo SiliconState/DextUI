@@ -3,8 +3,10 @@
   // links. Terminal soul stays in the chrome; content gets the web — charts
   // and session-cwd images included.
   import { parseMarkdown, prettyPath, type Inline, type MdBlock } from "../lib/markdown";
-  import { fileUrl as fileUrlFor, isHtmlPath } from "../lib/files";
+  import { fileUrl as fileUrlFor, isHtmlPath, isPdfPath, isTextPath, servablePath } from "../lib/files";
+  import Chart from "./Chart.svelte";
   import ChartRow from "./ChartRow.svelte";
+  import FileView from "./FileView.svelte";
   import { fenceFor } from "../ext";
   import HtmlArtifact from "./HtmlArtifact.svelte";
   import { ChartLink } from "../lib/chartlink.svelte";
@@ -83,7 +85,7 @@
 
 {#snippet inline(parts: Inline[])}
   {#each parts as tk, i (i)}
-    {#if tk.t === "code"}<code class="ic">{tk.s}</code>{:else if tk.t === "bold"}<strong>{tk.s}</strong>{:else if tk.t === "italic"}<em>{tk.s}</em>{:else if tk.t === "link"}<a href={tk.href} target="_blank" rel="noopener noreferrer">{tk.s}</a>{:else if tk.t === "image"}
+    {#if tk.t === "code"}<code class="ic">{tk.s}</code>{:else if tk.t === "bold"}<strong>{tk.s}</strong>{:else if tk.t === "italic"}<em>{tk.s}</em>{:else if tk.t === "link"}<a href={!/^https?:\/\//.test(tk.href) && sessionId && canFiles && servablePath(tk.href) ? fileUrl(tk.href) : tk.href} target="_blank" rel="noopener noreferrer">{tk.s}</a>{:else if tk.t === "image"}
       {#if /^https?:\/\//.test(tk.href)}
         <!-- model-chosen remote URLs stay links: never fetch them silently -->
         <a href={tk.href} target="_blank" rel="noopener noreferrer">{tk.s || tk.href}</a>
@@ -92,6 +94,16 @@
       {:else if isHtmlArtifact(tk.href)}
         <!-- HTML artifact: self-contained dashboard in a sandboxed opaque-origin frame -->
         <HtmlArtifact src={fileUrl(tk.href, { theme: true })} name={tk.s || prettyPath(tk.href, sessCwd)} />
+      {:else if isPdfPath(tk.href)}
+        <!-- workspace PDF: the browser's own viewer, served inline by the host -->
+        <div class="md-chartbox" data-agent-id="markdown.pdf">
+          <FileView src={fileUrl(tk.href)} name={prettyPath(tk.href, sessCwd)} kind="pdf" />
+        </div>
+      {:else if isTextPath(tk.href)}
+        <!-- workspace text file: fetched and shown as a bounded pre -->
+        <div class="md-chartbox" data-agent-id="markdown.textfile">
+          <FileView src={fileUrl(tk.href)} name={prettyPath(tk.href, sessCwd)} kind="text" />
+        </div>
       {:else if broken[tk.href]}
         <span class="md-imgmiss" data-agent-id="markdown.image.missing">✗ image not found under the session workspace: {prettyPath(tk.href, sessCwd)}</span>
       {:else}
@@ -261,7 +273,6 @@
     flex-direction: column;
     gap: 6px;
     min-width: 0;
-    container-type: inline-size;
   }
   .md-h {
     font-size: 13px;

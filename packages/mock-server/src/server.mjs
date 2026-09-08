@@ -49,6 +49,10 @@ const CAPABILITIES = [
   "effort_select",
   "todos_read",
   "session_manage",
+  // GET /sessions/:id/file + POST /sessions/:id/{upload,fetch} over an
+  // in-memory store — the attach flow is demoable offline in dev.
+  "files_read",
+  "files_write",
   "packs",
   // x-agentlinkd.dirs.{list,create} over an in-memory tree (no filesystem).
   "dirs",
@@ -1118,6 +1122,52 @@ function requireAuth(req) {
   return header === `Bearer ${TOKEN}`;
 }
 
+// ---------- session files + uploads (in-memory, dev parity) ----------
+
+const MOCK_UPLOADS = new Map(); // "<session>/<rel>" -> { mime, buf }
+const MOCK_FILE_MIME = {
+  ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif",
+  ".webp": "image/webp", ".svg": "image/svg+xml", ".html": "text/html; charset=utf-8",
+  ".htm": "text/html; charset=utf-8", ".pdf": "application/pdf",
+  ".txt": "text/plain; charset=utf-8", ".md": "text/plain; charset=utf-8",
+  ".csv": "text/plain; charset=utf-8", ".json": "text/plain; charset=utf-8",
+};
+
+function mockSafeName(raw) {
+  let n = String(raw ?? "").replaceAll("\\", "/").split("/").filter(Boolean).pop() ?? "";
+  n = n.replace(/\p{C}/gu, "").replace(/^\.+/, "").trim().replace(/\s+/g, " ");
+  if (!n || n === "." || n === "..") n = "file";
+  return n.slice(0, 120);
+}
+
+function mockUniqueKey(sid, name) {
+  const ext = name.includes(".") ? "." + name.split(".").pop() : "";
+  const stem = name.slice(0, name.length - ext.length);
+  for (let i = 1; i <= 999; i++) {
+    const n = i === 1 ? name : `${stem}-${i}${ext}`;
+    if (!MOCK_UPLOADS.has(`${sid}/uploads/${n}`)) return n;
+  }
+  return null;
+}
+
+function readBody(req, cap) {
+  return new Promise((resolve) => {
+    const chunks = [];
+    let n = 0;
+    req.on("data", (d) => {
+      n += d.length;
+      if (n > cap) {
+        req.pause(); // keep the socket so the 413 can still be written
+        resolve(null);
+        return;
+      }
+      chunks.push(d);
+    });
+    req.on("end", () => resolve(Buffer.concat(chunks)));
+    req.on("error", () => resolve(null));
+  });
+}
+
 function digest() {
   return {
     server: "agentlink-mock",
@@ -1171,6 +1221,93 @@ const server = http.createServer((req, res) => {
     }
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify(digest()));
+    return;
+  }
+  // Session-scoped files/upload/fetch over the in-memory store. Auth accepts
+  // the header or ?t= (subresource loads cannot send headers).
+  if (pathName.startsWith("/sessions/") && pathName !== "/sessions") {
+    const q = new URL(req.url, "http://localhost");
+    if (!requireAuth(req) && q.searchParams.get("t") !== TOKEN) {
+      res.writeHead(401, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "unauthorized" }));
+      return;
+    }
+    const parts = pathName.split("/").filter(Boolean); // sessions, id, verb, rel...
+    const s = sessions.get(parts[1]);
+    if (!s || parts.length < 3) {
+      res.writeHead(404, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "no_session" }));
+      return;
+    }
+    if (parts[2] === "file" && req.method === "GET") {
+      let rel = q.searchParams.get("p");
+      if (rel === null) {
+        try {
+          rel = parts.slice(3).map(decodeURIComponent).join("/");
+        } catch {
+          rel = "";
+        }
+      }
+      rel = rel.replace(/^\/+/, "");
+      const hit = MOCK_UPLOADS.get(`${s.id}/${rel}`);
+      if (!hit) {
+        res.writeHead(404, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "no_file" }));
+        return;
+      }
+      res.writeHead(200, { "content-type": hit.mime, "cache-control": "private, no-store" });
+      res.end(hit.buf);
+      return;
+    }
+    if (parts[2] === "upload" && req.method === "POST" && parts.length === 3) {
+      const rawName = q.searchParams.get("name") ?? "file";
+      readBody(req, 8 * 1024 * 1024).then((buf) => {
+        if (!buf) {
+          res.writeHead(413, { "content-type": "application/json" });
+          res.end(JSON.stringify({ error: "too_large" }));
+          return;
+        }
+        const name = mockUniqueKey(s.id, mockSafeName(rawName));
+        if (!name) {
+          res.writeHead(409, { "content-type": "application/json" });
+          res.end(JSON.stringify({ error: "exists" }));
+          return;
+        }
+        const mime = MOCK_FILE_MIME[name.slice(name.lastIndexOf("."))] ?? "application/octet-stream";
+        MOCK_UPLOADS.set(`${s.id}/uploads/${name}`, { mime, buf });
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ path: `uploads/${name}`, bytes: buf.length, name }));
+      });
+      return;
+    }
+    if (parts[2] === "fetch" && req.method === "POST" && parts.length === 3) {
+      readBody(req, 8192).then((buf) => {
+        let opts = null;
+        try { opts = JSON.parse(buf.toString("utf8") || "{}"); } catch { /* below */ }
+        if (!opts || typeof opts.url !== "string" || !opts.url.trim()) {
+          res.writeHead(400, { "content-type": "application/json" });
+          res.end(JSON.stringify({ error: "bad_request", message: "url required" }));
+          return;
+        }
+        // No network in the mock: the fetch lands as a stand-in note so the
+        // chip/preview flow still works end to end in dev.
+        let base = "";
+        try { base = new URL(opts.url).pathname.split("/").filter(Boolean).pop() ?? ""; } catch { /* below */ }
+        const file = mockUniqueKey(s.id, mockSafeName(opts.name || base || "fetched.txt"));
+        const note = `DextUI mock fetch placeholder\nurl: ${opts.url}\nThe real host downloads this file; the mock records the request only.\n`;
+        if (!file) {
+          res.writeHead(409, { "content-type": "application/json" });
+          res.end(JSON.stringify({ error: "exists" }));
+          return;
+        }
+        MOCK_UPLOADS.set(`${s.id}/uploads/${file}`, { mime: "text/plain; charset=utf-8", buf: Buffer.from(note) });
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ path: `uploads/${file}`, bytes: Buffer.byteLength(note), name: file }));
+      });
+      return;
+    }
+    res.writeHead(404, { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: "no_session" }));
     return;
   }
   // static PWA

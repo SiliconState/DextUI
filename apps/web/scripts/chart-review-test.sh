@@ -72,10 +72,10 @@ SRV=$!
 N=${REPORT_CHARTS:-6}
 "${B[@]}" wait --fn "document.querySelectorAll('.chart-wrap').length === $N" >/dev/null
 # Wait for the complete streamed answer rather than inspecting an intermediate layout.
-"${B[@]}" wait --fn "document.querySelectorAll('.md-chartbox .chart-wrap').length === $N && !document.querySelector('[data-agent-id=\"composer.stop\"]')" >/dev/null
+"${B[@]}" wait --fn "document.querySelectorAll('.md-chartbox .chart-wrap, .crow__cell .chart-wrap').length === $N && !document.querySelector('[data-agent-id=\"composer.stop\"]')" >/dev/null
 check() { local result; result=$("${B[@]}" eval "$1"); echo "$result"; grep -qx true <<<"$result" || { echo 'FAIL: chart browser assertion'; exit 1; }; }
 check 'document.querySelectorAll(`.md-tape .chart-wrap`).length >= 2 && document.body.scrollWidth <= innerWidth'
-check '[...document.querySelectorAll(`.md-tape .chart-wrap`)].every(e => e.clientWidth >= 500)'
+check '[...document.querySelectorAll(`.md-tape .chart-wrap`)].every(e => e.clientWidth >= 340)'
 if [ -z "${REPORT_FILE:-}" ]; then
   check '!!document.querySelector(`td.pos`) && !!document.querySelector(`td.neg`) && !document.querySelector(`tr.pos, tr.neg`)'
   check '[...document.querySelectorAll(`.chart-wrap`)].filter(e=>/domain/.test(e.querySelector(`.chart-title`).textContent)).every(e=>[...e.querySelectorAll(`rect[rx="2"]`)].every(r=>+r.getAttribute(`y`) >= 26 && +r.getAttribute(`y`)+ +r.getAttribute(`height`) <= 190.01))'
@@ -100,10 +100,15 @@ if [ -z "${REPORT_FILE:-}" ]; then
 fi
 for WIDTH in 1440 900 390; do
   "${B[@]}" set viewport "$WIDTH" 1000 >/dev/null
+  # ChartRow widths are JS-measured (ResizeObserver + a flush); assertions must
+  # read the settled layout, not a mid-transition snapshot after the resize.
+  sleep 1
   check 'document.body.scrollWidth <= innerWidth && [...document.querySelectorAll(`.md-tape`)].every(e=>e.scrollWidth <= e.clientWidth+1)'
-  check '[...document.querySelectorAll(`.md-tape .chart-wrap`)].every(e=>e.clientWidth >= 500)'
+  check '[...document.querySelectorAll(`.md-tape .chart-wrap`)].every(e=>e.clientWidth >= 340)'
   if [ "$WIDTH" -lt 1000 ]; then
-    check '[...document.querySelectorAll(`.md-tape`)].every(e=>getComputedStyle(e).gridTemplateColumns.trim().split(/\s+/).length===1)'
+    # Flex era: below the pairing budget every chart cell still reads (>=340)
+    # — never a squeezed sliver beside the tables.
+    check '[...document.querySelectorAll(`.crow`)].every(e=>[...e.children].every(k=>k.clientWidth>=340))'
   fi
   "${B[@]}" eval 'document.querySelector(`.md-tape`).scrollIntoView()' >/dev/null
   if [ -n "${SCREENSHOT_DIR:-}" ]; then

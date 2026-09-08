@@ -6,6 +6,8 @@
   import { app, connection, newSession, stepSession, trackDelivery } from "../lib/state.svelte";
   import { useSession } from "../lib/useSession.svelte";
   import { runSlash as runExtSlash, slashCommands as extSlashCommands } from "../ext";
+  import { fileUrl } from "../lib/files";
+  import { attachFiles, attachUrl, attachmentBlock, attachmentsFor, clearAttachments, removeAttachment } from "../lib/uploads.svelte";
 
   let { store }: { store: SessionStore } = $props();
 
@@ -94,8 +96,15 @@
   // Real hosts may not support mid-turn steering; honor the hello capability
   // (snapshotted into reactive app.caps at phase=live).
   const canSteer = $derived(app.caps.includes("steering"));
+  // Attachments (files_write): chips upload into <cwd>/uploads and their
+  // paths ride the prompt tail; a send waits for in-flight uploads.
+  const canAttach = $derived(app.caps.includes("files_write") && live);
+  const atts = $derived(attachmentsFor(app.activeId));
+  const uploading = $derived(atts.some((a) => a.status === "uploading"));
+  const sessCwd = $derived(app.sessions.find((s) => s.id === app.activeId)?.cwd ?? "");
   const canSend = $derived(
-    text.trim().length > 0 &&
+    (text.trim().length > 0 || atts.some((a) => a.status === "done")) &&
+      !uploading &&
       app.phase === "live" &&
       app.activeId !== "" &&
       live &&
@@ -228,14 +237,20 @@
     if (!canSend || !c) return;
     const sid = app.activeId;
     const t = text;
-    recordHistory(sid, t);
+    // Attachment paths ride the prompt as a tail the agent can act on; slash
+    // commands leave the chips in place for the next real prompt.
+    const slash = t.trim().startsWith("/");
+    const block = slash ? "" : attachmentBlock(atts);
+    const full = block ? (t.trim() ? `${t.trimEnd()}\n\n` : "") + block : t;
+    recordHistory(sid, full);
     // Each send is nonce-tagged: a reconnect replay can't double-run it, and a
     // lost/rejected send restores its text (trackDelivery + cmd_ack).
-    if (t.trim().startsWith("/")) {
+    if (slash) {
       // An extension may claim the command locally; otherwise the host handles it.
       if (!runExtSlash(t, sid)) trackDelivery(c.slash(sid, t.trim()), { sessionId: sid, text: t, kind: "slash" });
-    } else if (view.working && canSteer) trackDelivery(c.steer(sid, t), { sessionId: sid, text: t, kind: "steer" });
-    else trackDelivery(c.prompt(sid, t), { sessionId: sid, text: t, kind: "prompt" });
+    } else if (view.working && canSteer) trackDelivery(c.steer(sid, full), { sessionId: sid, text: full, kind: "steer" });
+    else trackDelivery(c.prompt(sid, full), { sessionId: sid, text: full, kind: "prompt" });
+    if (!slash) clearAttachments(sid);
     localStorage.removeItem(`dextui.draft.${sid}`);
     text = "";
     menuHidden = false;
@@ -346,9 +361,68 @@
     menuHidden = false;
     exitHistory();
   }
+
+  // ----- attachments -----
+  let fileInput: HTMLInputElement | undefined = $state();
+  let urlInput: HTMLInputElement | undefined = $state();
+  let urlOpen = $state(false);
+  let urlText = $state("");
+  let dragging = $state(false);
+
+  function onPick(e: Event) {
+    const el = e.currentTarget as HTMLInputElement;
+    if (canAttach && el.files?.length) attachFiles(app.activeId, [...el.files]);
+    el.value = "";
+  }
+  function onDrop(e: DragEvent) {
+    dragging = false;
+    const files = [...(e.dataTransfer?.files ?? [])];
+    if (canAttach && files.length > 0) {
+      e.preventDefault();
+      attachFiles(app.activeId, files);
+    }
+  }
+  function onDragLeave(e: DragEvent) {
+    // Leaving for a child still counts as inside; only a real exit clears.
+    const to = e.relatedTarget as Node | null;
+    if (!to || !(e.currentTarget as HTMLElement).contains(to)) dragging = false;
+  }
+  function onPaste(e: ClipboardEvent) {
+    const files = [...(e.clipboardData?.files ?? [])];
+    if (canAttach && files.length > 0) {
+      e.preventDefault();
+      attachFiles(app.activeId, files);
+    }
+  }
+  async function toggleUrl() {
+    urlOpen = !urlOpen;
+    await tick();
+    (urlOpen ? urlInput : inputEl)?.focus();
+  }
+  function submitUrl() {
+    const u = urlText.trim();
+    if (!u) return;
+    attachUrl(app.activeId, u);
+    urlText = "";
+    urlOpen = false;
+  }
 </script>
 
-<div class="c-root" data-agent-id="composer.root">
+<!-- drop target: mouse-drag only — keyboard users have the [+] picker -->
+<!-- svelte-ignore a11y_no_static_element_interactions -->
+<div
+  class="c-root"
+  class:drop={dragging}
+  data-agent-id="composer.root"
+  ondragover={(e) => {
+    if (canAttach && e.dataTransfer?.types.includes("Files")) {
+      e.preventDefault();
+      dragging = true;
+    }
+  }}
+  ondragleave={onDragLeave}
+  ondrop={onDrop}
+>
   {#if slashOpen && slashList.length > 0}
     <div class="c-menu" data-agent-id="composer.menu" data-state="open" bind:this={menuEl}>
       {#each slashList as c, i (c.cmd)}
@@ -368,6 +442,52 @@
     </div>
   {/if}
 
+  {#if urlOpen && canAttach}
+    <div class="c-urlrow" data-agent-id="composer.attachurl.row">
+      <span class="pg">⤓</span>
+      <input
+        class="c-url"
+        placeholder="https://… — the host downloads it into the workspace"
+        bind:this={urlInput}
+        bind:value={urlText}
+        onkeydown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            submitUrl();
+          } else if (e.key === "Escape") {
+            urlOpen = false;
+            inputEl?.focus();
+          }
+        }}
+        data-agent-id="composer.attachurl.input"
+      />
+      <button class="act accent" data-agent-id="composer.attachurl.go" onclick={submitUrl}>fetch</button>
+    </div>
+  {/if}
+  {#if atts.length > 0}
+    <div class="c-atts" data-agent-id="composer.attachments">
+      {#each atts as a (a.id)}
+        <span class="c-att" class:err={a.status === "error"} data-agent-id="composer.attachment" data-state={a.status} title={a.error ?? a.path ?? a.name}>
+          {#if a.thumb}<img class="c-thumb" src={a.thumb} alt="" />{/if}
+          {#if a.status === "done" && a.path}
+            <a class="c-attname" href={fileUrl(app.activeId, a.path, sessCwd)} target="_blank" rel="noopener noreferrer">{a.name}</a>
+          {:else}
+            <span class="c-attname">{a.name}</span>
+          {/if}
+          {#if a.status === "uploading"}
+            <span class="faint">{a.size > 0 && a.progress > 0 ? `${Math.round(a.progress * 100)}%` : "…"}</span>
+          {:else if a.status === "error"}
+            <span class="c-attmeta">{a.error}</span>
+          {:else}
+            <span class="faint">{a.path}</span>
+          {/if}
+          <button class="c-attx" data-agent-id="composer.attachment.remove" title="remove chip (the file stays in uploads/)" onclick={() => removeAttachment(app.activeId, a.id)}>✕</button>
+        </span>
+      {/each}
+    </div>
+  {/if}
+  <input class="c-file" type="file" multiple bind:this={fileInput} onchange={onPick} data-agent-id="composer.attach.input" />
+
   <div class="c-row">
     <span class="pg" class:pg-busy={view.working}>❯</span>
     <textarea
@@ -375,12 +495,17 @@
       bind:value={text}
       onkeydown={onKey}
       oninput={onInput}
+      onpaste={onPaste}
       rows="1"
       {placeholder}
       data-agent-id="composer.input"
       data-state={view.working ? "working" : "idle"}
     ></textarea>
     <span class="c-side">
+      {#if canAttach}
+        <button class="act" data-agent-id="composer.attach" title="attach files (or drop / paste them here)" onclick={() => fileInput?.click()}>[+]</button>
+        <button class="act" data-agent-id="composer.attachurl" title="fetch a URL into the workspace" onclick={toggleUrl}>[⤓]</button>
+      {/if}
       {#if histIdx > 0}
         <span class="faint" data-agent-id="composer.histmark">[↑{histIdx}]</span>
       {/if}
@@ -434,6 +559,59 @@
     align-items: baseline;
     padding-bottom: 3px;
     flex-shrink: 0;
+  }
+  .c-root.drop {
+    outline: 1px dashed var(--green);
+    outline-offset: -4px;
+  }
+  .c-file {
+    display: none;
+  }
+  .c-urlrow {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    padding: 2px 0 4px;
+  }
+  .c-url {
+    flex: 1;
+    min-width: 0;
+  }
+  .c-atts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 2px 0 4px 20px;
+  }
+  .c-att {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    border: 1px solid var(--line);
+    background: var(--bg1);
+    padding: 1px 6px;
+    max-width: 100%;
+    font-size: 11.5px;
+  }
+  .c-att.err {
+    border-color: color-mix(in srgb, var(--red, #f85149) 45%, var(--line));
+    color: var(--red, #f85149);
+  }
+  .c-thumb {
+    width: 20px;
+    height: 20px;
+    object-fit: cover;
+    display: block;
+  }
+  .c-attname,
+  .c-attmeta {
+    max-width: 220px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .c-attx {
+    padding: 0 2px;
   }
   .c-menu {
     position: absolute;

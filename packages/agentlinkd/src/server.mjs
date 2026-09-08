@@ -42,6 +42,7 @@ import { createConnectors } from "./connectors.mjs";
 import { compileFlow, deleteFlow, listFlows, readFlow, writeFlow } from "./flows.mjs";
 import { createScheduler } from "./triggers.mjs";
 import { TASK_STATUSES, createTasksAdapter } from "./tasks.mjs";
+import { fetchToFile, receiveUpload, uploadDirFor } from "./uploads.mjs";
 import { bridgeArgs, probeNdjsonSupport, spawnBridge, toBridgeChoice, toPermissionRequest } from "./bridge.mjs";
 
 const here = path.dirname(url.fileURLToPath(import.meta.url));
@@ -368,6 +369,9 @@ const CAPABILITIES = [
   "slash.approval",
   "todos_read",
   "files_read",
+  // POST /sessions/:id/upload and /sessions/:id/fetch: attachments written
+  // into <cwd>/uploads so the agent reads them from disk (the write half).
+  "files_write",
   // session.delete / session.clear / session.delete_all: true purge of the
   // journal, index entry, and the dext seat's own state dirs.
   "session_manage",
@@ -3228,7 +3232,7 @@ function todosFor(s) {
 
 // ---------- session files (GET /sessions/:id/file?p=rel) ----------
 
-const FILE_MAX_BYTES = 20 * 1024 * 1024;
+const FILE_MAX_BYTES = 64 * 1024 * 1024;
 const FILE_MIME = {
   ".png": "image/png",
   ".jpg": "image/jpeg",
@@ -3238,6 +3242,11 @@ const FILE_MIME = {
   ".svg": "image/svg+xml",
   ".html": "text/html; charset=utf-8",
   ".htm": "text/html; charset=utf-8",
+  ".pdf": "application/pdf",
+  ".txt": "text/plain; charset=utf-8",
+  ".md": "text/plain; charset=utf-8",
+  ".csv": "text/plain; charset=utf-8",
+  ".json": "text/plain; charset=utf-8",
 };
 
 // Resolve a session-relative path to a servable image. Confined to the
@@ -3266,13 +3275,19 @@ function sessionFile(s, rel) {
 // never touch the app's storage/cookies, network is limited to images.
 function fileHeaders(mime) {
   const html = mime.startsWith("text/html");
+  const pdf = mime === "application/pdf";
   return {
     "content-type": mime,
     "cache-control": "private, no-store",
     "x-content-type-options": "nosniff",
+    // PDFs render in the browser's own viewer document (no scripts, opaque to
+    // the app); everything else stays under CSP sandbox as before.
+    "content-disposition": pdf ? "inline" : undefined,
     "content-security-policy": html
       ? "default-src 'none'; style-src 'unsafe-inline'; img-src * data: blob:; script-src 'unsafe-inline'; font-src data:; sandbox allow-scripts"
-      : "default-src 'none'; style-src 'unsafe-inline'; sandbox",
+      : pdf
+        ? "default-src 'none'; img-src data:; object-src 'none'; base-uri 'none'"
+        : "default-src 'none'; style-src 'unsafe-inline'; sandbox",
   };
 }
 
@@ -3292,7 +3307,7 @@ function serveSessionFile(s, rel, req, res) {
   stream.pipe(res);
 }
 
-const server = http.createServer((req, res) => {
+const server = http.createServer(async (req, res) => {
   const pathName = new URL(req.url, "http://localhost").pathname;
   if (pathName === "/health") {
     res.writeHead(200, { "content-type": "application/json" });
@@ -3442,6 +3457,70 @@ const server = http.createServer((req, res) => {
         rel = new URL(req.url, "http://localhost").searchParams.get("p") ?? "";
       }
       serveSessionFile(s, rel, req, res);
+      return;
+    }
+    if (parts.length === 3 && parts[2] === "upload") {
+      // Raw-body upload into <cwd>/uploads: the write half of the files
+      // surface (files_write). No multipart — the body IS the file.
+      if (req.method !== "POST") {
+        res.writeHead(405, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "method_not_allowed" }));
+        return;
+      }
+      const dir = uploadDirFor(s.cwd);
+      if (!dir) {
+        res.writeHead(400, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "bad_dir", message: "uploads directory cannot be made safe" }));
+        return;
+      }
+      const name = new URL(req.url, "http://localhost").searchParams.get("name") ?? "";
+      const out = await receiveUpload(req, dir, name);
+      if (out.error) {
+        const code = out.error === "too_large" ? 413 : out.error === "exists" ? 409 : 400;
+        // The body may still be arriving: answer, then drop the socket instead
+        // of letting node drain the remainder for keep-alive.
+        res.on("finish", () => req.destroy());
+        res.writeHead(code, { "content-type": "application/json", connection: "close" });
+        res.end(JSON.stringify({ error: out.error, message: out.message }));
+        return;
+      }
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify(out));
+      return;
+    }
+    if (parts.length === 3 && parts[2] === "fetch") {
+      // Host-side download of a public http(s) URL into <cwd>/uploads: the
+      // browser cannot fetch cross-origin files itself, and the host refuses
+      // anything that resolves to this machine.
+      if (req.method !== "POST") {
+        res.writeHead(405, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "method_not_allowed" }));
+        return;
+      }
+      const chunks = [];
+      let size = 0;
+      req.on("data", (d) => {
+        size += d.length;
+        if (size <= 8192) chunks.push(d);
+      });
+      req.on("end", async () => {
+        let opts = null;
+        try { opts = size > 8192 ? null : JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}"); } catch { /* below */ }
+        const dir = uploadDirFor(s.cwd);
+        if (!dir || !opts || typeof opts.url !== "string" || !opts.url.trim()) {
+          res.writeHead(400, { "content-type": "application/json" });
+          res.end(JSON.stringify({ error: "bad_request", message: "url required" }));
+          return;
+        }
+        let out;
+        try {
+          out = await fetchToFile(opts.url, dir, { name: typeof opts.name === "string" ? opts.name : undefined });
+        } catch (e) {
+          out = { error: "fetch_failed", message: String(e?.message ?? e) };
+        }
+        res.writeHead(out.error ? (out.error === "too_large" ? 413 : 400) : 200, { "content-type": "application/json" });
+        res.end(JSON.stringify(out));
+      });
       return;
     }
     res.writeHead(404, { "content-type": "application/json" });
