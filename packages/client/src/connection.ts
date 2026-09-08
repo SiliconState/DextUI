@@ -324,8 +324,12 @@ export class Connection {
     this.sendRaw(cmd(`${CREW_EXT}.tail`, { run, worker, lines }));
   }
 
-  crewSubscribe(run: string, worker: string, subscription: string, cursor?: { generation: string; offset: number }): void {
-    this.sendRaw(cmd(`${CREW_EXT}.subscribe`, { run, worker, subscription, ...(cursor ? { cursor } : {}) }));
+  crewSubscribe(run: string, worker: string, subscription: string, cursor?: { generation: string; offset: number }, events_cursor?: { attempt: string; seq: number }): void {
+    this.sendRaw(cmd(`${CREW_EXT}.subscribe`, { run, worker, subscription, ...(cursor ? { cursor } : {}), ...(events_cursor ? { events_cursor } : {}) }));
+  }
+
+  crewPermission(run: string, worker: string, attempt: string, id: string, choice: "once" | "always" | "deny"): void {
+    this.sendRaw(cmd(`${CREW_EXT}.permission`, { run, worker, attempt, id, choice }));
   }
 
   crewUnsubscribe(run: string): void {

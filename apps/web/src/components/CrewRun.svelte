@@ -4,8 +4,9 @@
   // tail pane; actions conditional on run state (stop while live, answer
   // while paused, deliverables + tails always). Keys are scoped to the dialog.
   import type { CrewGroup, CrewWorker } from "@dextui/protocol";
+  import Block from "./Block.svelte";
   import Meter from "./Meter.svelte";
-  import { crew, crewDur, crewAge, closeRun, syncCrewLog, requestTail, refreshTail, openFile, stopRun, answerRun, removeRun, crewFinished, shortRun, GLYPH } from "../lib/crew.svelte";
+  import { crew, crewDur, crewAge, closeRun, syncCrewLog, requestTail, refreshTail, openFile, stopRun, answerRun, answerWorker, removeRun, crewFinished, shortRun, GLYPH } from "../lib/crew.svelte";
 
   /** Sentence-case a host label (first letter only): "final-report" → "Final-report". */
   const sc = (s: string): string => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
@@ -252,6 +253,13 @@
     <div class="task faint" title={run.cwd}>{run.task}</div>
 
     <div class="body">
+      {#if run.continuation}
+        <details class="task faint">
+          <summary>Continuation · {run.continuation.state}{run.continuation.message ? ` · ${run.continuation.message}` : ""}</summary>
+          <div>{run.continuation.unit}{run.continuation.exit_code !== undefined ? ` · exit ${run.continuation.exit_code}` : ""}</div>
+          {#if run.continuation.stderr}<Tail text={run.continuation.stderr} />{/if}
+        </details>
+      {/if}
       {#if paused && run.escalation}
         <section class="esc" data-agent-id={`crew.run.${run.id}.escalation`} data-state={crew.answering ? "answering" : "open"} aria-label="Escalation">
           <div class="esc-head"><span class="st-yellow">⚠ Escalation</span> <span class="dim">· {run.escalation.label}{run.escalation.reason ? ` · ${run.escalation.reason}` : ""}</span></div>
@@ -307,7 +315,25 @@
                 <div class="tailpane" data-agent-id={`crew.run.${run.id}.tail`} data-state={crew.tailPending ? "loading" : "shown"}>
                   <div class="tail-head faint">live.log · {w.label}{crew.tail ? ` · last ${crew.tail.lines.length} lines${crew.tail.truncated ? " (truncated)" : ""}` : ""}
                     <button class="act" data-agent-id={`crew.run.${run.id}.tail.refresh`} onclick={refreshTail}>[r] refresh</button></div>
-                  <Tail text={crew.tailPending && !crew.tail ? "…" : crew.tail?.lines.join("\n") || "(empty)"} bind:raw={rawView} />
+                  {#if crew.transcriptAvailable && !rawView}
+                    <div class="tail-head faint">Worker transcript{crew.transcriptGap ? " · retained window (gap/truncation)" : ""}</div>
+                    {#each crew.transcript as block (block.id)}
+                      <Block {block} />
+                    {/each}
+                  {:else}
+                    <Tail text={crew.tailPending && !crew.tail ? "…" : crew.tail?.lines.join("\n") || "(empty)"} bind:raw={rawView} />
+                  {/if}
+                  {#each crew.permissions as permission (permission.id)}
+                    <div class="tail-head" role="group" aria-label="Worker tool approval">
+                      <span>{permission.tool} · {permission.summary}</span>
+                      {#each ["once", "always", "deny"] as choice}
+                        {#if permission.choices.includes(choice)}
+                          <button class="act" disabled={permission.sent} onclick={() => answerWorker(permission.id, choice as "once" | "always" | "deny")}>{choice === "once" ? "Once" : choice === "always" ? "Always" : "Deny"}</button>
+                        {/if}
+                      {/each}
+                      {#if permission.sent}<span class="faint">Awaiting worker receipt…</span>{/if}
+                    </div>
+                  {/each}
                 </div>
               {/if}
             {/each}

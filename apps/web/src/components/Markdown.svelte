@@ -351,9 +351,11 @@
     align-items: flex-start;
   }
   .md-tcard {
+    max-width: 100%;
+  }
+  .md-tgrid .md-tcard {
     flex: 1 1 240px;
     min-width: 200px;
-    max-width: 100%;
   }
   .md-tcard .md-h {
     margin-top: 0;

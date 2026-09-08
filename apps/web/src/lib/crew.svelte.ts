@@ -6,6 +6,7 @@
 
 import type {
   CrewControlEvent,
+  CrewEventsChunk,
   CrewLogChunk,
   CrewFileReply,
   CrewRunDetail,
@@ -14,7 +15,8 @@ import type {
   CrewsPayload,
   Envelope,
 } from "@dextui/protocol";
-import { CrewLogBuffer } from "@dextui/client";
+import { CrewLogBuffer, CrewTranscript } from "@dextui/client";
+import type { ViewBlock, WorkerPermission } from "@dextui/client";
 import { CREW_EXT } from "@dextui/protocol";
 import { app, pushToast } from "./state.svelte";
 
@@ -31,6 +33,10 @@ export const crew = $state({
   tailWorker: "",
   tail: null as (CrewTailReply & { at: number }) | null,
   tailPending: false,
+  transcript: [] as ViewBlock[],
+  transcriptAvailable: false,
+  transcriptGap: false,
+  permissions: [] as WorkerPermission[],
   file: null as CrewFileReply | null,
   /** Resume in flight (first answer wins; the host rejects the loser). */
   answering: false,
@@ -40,9 +46,25 @@ export const crew = $state({
 });
 
 const logBuffer = new CrewLogBuffer();
+const transcript = new CrewTranscript();
+function projectTranscript(): void {
+  crew.transcript = [...transcript.store.state.blocks];
+  crew.transcriptAvailable = transcript.available;
+  crew.transcriptGap = transcript.gap;
+  crew.permissions = transcript.interactive && !transcript.ended ? [...transcript.permissions] : [];
+}
+export function answerWorker(id: string, choice: "once" | "always" | "deny"): void {
+  const permission = transcript.permissions.find((p) => p.id === id);
+  if (!permission || permission.sent || !transcript.cursor || !app.conn) return;
+  permission.sent = true;
+  projectTranscript();
+  app.conn.crewPermission(crew.openId, crew.tailWorker, transcript.cursor.attempt, id, choice);
+}
 let logSubscription = "";
 function resetLog(): void {
   logBuffer.reset();
+  transcript.reset();
+  projectTranscript();
   logSubscription = "";
 }
 
@@ -50,7 +72,7 @@ export function syncCrewLog(): void {
   if (!crew.openId || !crew.tailWorker) return;
   logSubscription = crypto.randomUUID();
   if (document.hidden) app.conn?.crewUnsubscribe(crew.openId);
-  else app.conn?.crewSubscribe(crew.openId, crew.tailWorker, logSubscription, logBuffer.cursor);
+  else app.conn?.crewSubscribe(crew.openId, crew.tailWorker, logSubscription, logBuffer.cursor, transcript.cursor);
 }
 
 export function crewEnabled(): boolean {
@@ -262,6 +284,18 @@ export function onCrewControl(env: Envelope): void {
         crew.open = d;
         crew.openAt = Date.now();
       }
+      return;
+    }
+    case `${CREW_EXT}.events`: {
+      const d = env.data as CrewEventsChunk;
+      if (!d || d.run !== crew.openId || d.worker !== crew.tailWorker) return;
+      if (transcript.accept(d, logSubscription)) projectTranscript();
+      return;
+    }
+    case `${CREW_EXT}.permission_ack`: {
+      const d = env.data as { run: string; worker: string; attempt: string; id: string; accepted: boolean };
+      if (d.run !== crew.openId || d.worker !== crew.tailWorker || d.attempt !== transcript.cursor?.attempt) return;
+      if (!d.accepted) { pushToast("err", "Worker approval rejected or owner unavailable; refresh to reconcile."); }
       return;
     }
     case `${CREW_EXT}.log`: {

@@ -34,6 +34,9 @@ test("real core: retry rollback, permission, steering, interrupt, close and EOF"
     } else if (mode === "permission") {
       mode = "finish";
       res.end(chunk({ tool_calls: [{ index: 0, id: "call_write", function: { name: "write_file", arguments: JSON.stringify({ path: "proof.txt", content: "approved" }) } }] }, "tool_calls") + "data: [DONE]\n\n");
+    } else if (mode === "bash") {
+      mode = "finish";
+      res.end(chunk({ tool_calls: [{ index: 0, id: "call_bash", function: { name: "bash", arguments: JSON.stringify({ command: "printf 'live café'; sleep 0.1; printf ' tail'" }) } }] }, "tool_calls") + "data: [DONE]\n\n");
     } else if (mode === "hold") {
       res.write(chunk({ reasoning_content: "waiting for interrupt" }));
     } else {
@@ -104,6 +107,16 @@ test("real core: retry rollback, permission, steering, interrupt, close and EOF"
   assert.equal(fs.readFileSync(path.join(root, "proof.txt"), "utf8"), "approved");
   assert.ok(events.slice(at).some((e) => e.event === "steering_received"));
   assert.ok(JSON.stringify(requests.at(-1)).includes("Keep your final reply brief"));
+
+  mode = "bash";
+  at = events.length;
+  assert.ok(b.user("Run the short bash output fixture"));
+  const bashPermission = await wait((e) => e.event === "permission_request", at);
+  assert.ok(b.permission(bashPermission.data.id, "once"));
+  await wait((e) => e.event === "turn_end", at);
+  const deltas = events.slice(at).filter((e) => e.event === "tool_output_delta" && e.data.call_id === "call_bash");
+  assert.equal(deltas.map((e) => e.data.text).join(""), "live café tail");
+  assert.ok(events.slice(at).findIndex((e) => e.event === "tool_output_delta") < events.slice(at).findIndex((e) => e.event === "tool_call_result"));
 
   mode = "hold";
   at = events.length;

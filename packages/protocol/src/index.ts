@@ -734,6 +734,7 @@ export interface CrewGroup {
 export interface CrewRunDetail extends CrewRunSummary {
   created_at: number;
   paused_reason?: string;
+  continuation?: { unit: string; state: string; message?: string; stderr?: string; exit_code?: number };
   groups: CrewGroup[];
   /** Deliverables in the chain dir root (basenames). */
   files: string[];
@@ -744,6 +745,19 @@ export interface CrewsPayload {
   /** Runs beyond the cap (8) — oldest terminal runs drop first. */
   omitted: number;
 }
+
+export interface CrewEventCursor { attempt: string; seq: number }
+export interface CrewEventRecord {
+  v: 1; run: string; worker: string; attempt: string; seq: number; ts: number;
+  event: string; data: unknown;
+}
+export type CrewEventsChunk = {
+  run: string; worker: string; subscription: string;
+} & ({ unavailable: true } | (CrewEventCursor & {
+  unavailable?: false; reset: boolean; gap: boolean; events: CrewEventRecord[];
+  ended: boolean; interactive: boolean;
+  permission?: { id: string; tool: string; summary: string; choices: string[]; sent?: boolean } | null;
+}));
 
 export interface CrewLogCursor {
   generation: string;
@@ -1017,6 +1031,8 @@ export interface ControlEventMap {
   /** Direct replies to `x-agentlinkd.crew.tail` / `.file`. */
   "x-agentlinkd.crew.tail": CrewTailReply;
   "x-agentlinkd.crew.log": CrewLogChunk;
+  "x-agentlinkd.crew.events": CrewEventsChunk;
+  "x-agentlinkd.crew.permission_ack": { run: string; worker: string; attempt: string; id: string; accepted: boolean };
   "x-agentlinkd.crew.file": CrewFileReply;
   /** Outcome of `.stop` / `.resume`, broadcast to every live client. */
   "x-agentlinkd.crew.control": CrewControlEvent;

@@ -10,7 +10,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
-import { execFile, spawn } from "node:child_process";
+import { execFile } from "node:child_process";
+import { createContinuationMonitor } from "./crew-continuation.mjs";
 import { checkedPath } from "./session-files.mjs";
 
 export const RUN_ID_RE = /^run-[a-f0-9]{12}$/;
@@ -275,6 +276,7 @@ export function createCrewAdapter({ roots = [], crewBin = "crew", dextBin, env =
   let heartbeat = null;
   let lastPayload = "";
   let closed = false;
+  const continuation = createContinuationMonitor({ changed: schedule });
 
   function childEnv() {
     const e = { ...env, DEXT_NO_TUI: "1" };
@@ -314,7 +316,7 @@ export function createCrewAdapter({ roots = [], crewBin = "crew", dextBin, env =
       }
       seen.add(e.name);
       const prev = runs.get(e.name);
-      const live = prev && (prev.summary.status === "running" || prev.summary.status === "pending");
+      const live = prev && (prev.summary.status === "running" || prev.summary.status === "pending" || prev.detail.continuation);
       // Re-read on mtime change; live runs also re-project so `.state` timing stays fresh.
       if (prev && prev.mtimeMs === st.mtimeMs && !live) continue;
       try {
@@ -323,6 +325,15 @@ export function createCrewAdapter({ roots = [], crewBin = "crew", dextBin, env =
         const manifest = discoverWorkers(read.json, dir);
         const proj = projectManifest(manifest, { now, mtimeMs: read.mtimeMs, stateOf: (p) => confined(dir, p) ? readState(p) : null, files: chainFiles(read.json.chainDir) });
         if (!proj || proj.summary.id !== e.name) continue;
+        const launch = continuation.inspect(dir);
+        if (launch) {
+          proj.detail.continuation = launch;
+          if (["pending", "running"].includes(proj.summary.status) && ["failed", "exited"].includes(launch.state)) {
+            proj.summary.status = proj.summary.state = "failed";
+            proj.detail.status = proj.detail.state = "failed";
+            proj.detail.paused_reason = launch.message || "continuation exited without a terminal manifest";
+          }
+        }
         runs.set(e.name, { dir, manifest, mtimeMs: read.mtimeMs, detailKey: prev?.detailKey, ...proj });
       } catch (err) {
         log(`crew: skipping ${file}: ${err.message}`);
@@ -427,6 +438,16 @@ export function createCrewAdapter({ roots = [], crewBin = "crew", dextBin, env =
     return node && typeof node.dir === "string" ? node : null;
   }
 
+  function eventSource(id, key) {
+    const r = runs.get(id);
+    if (!r) return null;
+    const node = findWorker(r, key);
+    if (!node) return null;
+    const registration = confined(r.dir, path.join(node.dir, "worker.json"));
+    const events = confined(r.dir, path.join(node.dir, "events.jsonl"));
+    return registration && events ? { registration, events, run: id } : null;
+  }
+
   function logSource(id, key) {
     const r = runs.get(id);
     if (!r) return null;
@@ -489,8 +510,7 @@ export function createCrewAdapter({ roots = [], crewBin = "crew", dextBin, env =
     return { ok: res.ok, message: res.ok ? "stopped" : res.err.slice(0, 200) };
   }
 
-  /** crew's two-step contract: record the answer, then execute the printed
-   *  `crew run --manifest … --cwd …` (spawned detached so the host never blocks). */
+  /** The crew owner records the answer and supervisor intent under its run lease. */
   async function resume(id, answer) {
     const r = runs.get(id);
     if (!r) return { ok: false, code: "no_run", message: "unknown run" };
@@ -500,15 +520,12 @@ export function createCrewAdapter({ roots = [], crewBin = "crew", dextBin, env =
     try {
       const manifest = path.join(r.dir, "manifest.json");
       const cwd = r.summary.cwd || r.dir;
-      const res = await crew(["resume", manifest, "--answer", answer, "--cwd", cwd], cwd);
-      if (!res.ok) return { ok: false, code: "crew_failed", message: res.err.slice(0, 200) };
-      const args = ["run", "--manifest", manifest, "--cwd", cwd];
+      const args = ["resume", manifest, "--answer", answer, "--cwd", cwd, "--launch"];
       if (dextBin) args.push("--dext", dextBin);
-      const child = spawn(crewBin, args, { cwd, env: childEnv(), detached: true, stdio: "ignore" });
-      child.on("error", (err) => log(`crew: run --manifest failed to spawn: ${err.message}`));
-      child.unref();
+      const res = await crew(args, cwd);
       schedule();
-      return { ok: true, message: "answer recorded; run resumed" };
+      if (!res.ok) return { ok: false, code: "crew_failed", message: res.err.slice(0, 200) };
+      return { ok: true, message: "answer recorded; continuation submitted to supervisor (completion unconfirmed)" };
     } finally {
       inflight.delete(id);
     }
@@ -580,6 +597,7 @@ export function createCrewAdapter({ roots = [], crewBin = "crew", dextBin, env =
 
   function close() {
     closed = true;
+    continuation.close();
     clearTimeout(timer);
     clearInterval(heartbeat);
     for (const watcher of watchers) watcher.close();
@@ -589,5 +607,5 @@ export function createCrewAdapter({ roots = [], crewBin = "crew", dextBin, env =
   heartbeat.unref();
   for (const root of [...roots]) addRoot(root);
   try { scan(); } catch (err) { log(`crew: initial scan failed: ${err.message}`); }
-  return { addRoot, scan, schedule, summaries, detail, tail, logSource, file, stop, resume, remove, clearFinished, close, runs };
+  return { addRoot, scan, schedule, summaries, detail, tail, logSource, eventSource, file, stop, resume, remove, clearFinished, close, runs };
 }

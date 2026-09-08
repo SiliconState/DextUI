@@ -33,6 +33,7 @@ import { fold, foldMeta } from "../../mock-server/src/fold.mjs";
 import { checkedPath, purgeSeat, seatFiles } from "./session-files.mjs";
 import { GALLERY_DEFAULTS, PACK_NAME_RE, buildCatalog, listPackFiles, listPackTree, loadGallery, packCommands, parsePackListingJson, parsePackSlash, readPackFile, renderPackList, suggestPack, unmetRequirements, writePackFile } from "./packs.mjs";
 import { subscribeLog } from "./crew-stream.mjs";
+import { subscribeEvents, replyPermission } from "./crew-events.mjs";
 import { RUN_ID_RE as CREW_RUN_ID_RE, TAIL_MAX_LINES, createCrewAdapter } from "./crew.mjs";
 import { createSelfEdit, resolveStaticDir } from "./selfedit.mjs";
 import { confine, createDir, listDirs } from "./dirs.mjs";
@@ -681,12 +682,29 @@ async function handleCrewCommand(client, frame) {
       if (typeof frame.worker !== "string" || frame.worker.length > 100 || !CREW.detail(run)?.groups.some((g) => g.workers.some((w) => w.key === frame.worker))) return sendError(client, "no_worker", "unknown worker");
       client.crewLogClose?.();
       client.crewLogRun = run;
-      client.crewLogClose = subscribeLog({
+      const closeLog = subscribeLog({
         source: () => CREW.logSource(run, frame.worker),
         cursor: frame.cursor,
         writable: () => client.phase === "live" && client.writable(),
         send: (chunk) => { sendControl(client, "x-agentlinkd.crew.log", { run, worker: frame.worker, subscription: frame.subscription, ...chunk }); },
       });
+      const closeEvents = subscribeEvents({
+        source: () => CREW.eventSource(run, frame.worker),
+        cursor: frame.events_cursor,
+        writable: () => client.phase === "live" && client.writable(),
+        send: (chunk) => { sendControl(client, "x-agentlinkd.crew.events", { run, worker: frame.worker, subscription: frame.subscription, ...chunk }); },
+      });
+      client.crewLogClose = () => { closeLog(); closeEvents(); };
+      return;
+    }
+    case "permission": {
+      if (!client.crewOpen.has(run)) return sendError(client, "bad_request", "open the run before answering");
+      const source = CREW.eventSource(run, frame.worker);
+      let accepted = false;
+      if (source) {
+        try { ({ accepted } = await replyPermission(source, frame)); } catch { /* unavailable owner denies */ }
+      }
+      sendControl(client, "x-agentlinkd.crew.permission_ack", { run, worker: frame.worker, attempt: frame.attempt, id: frame.id, accepted });
       return;
     }
     case "tail": {
