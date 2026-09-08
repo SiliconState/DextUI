@@ -17,6 +17,11 @@ function writeAuth(a) {
 }
 
 if (process.argv[2] === "auth" && process.argv[3] === "models") {
+  const catalog = path.join(process.env.DEXT_HOME ?? "/nonexistent", "fake-models.json");
+  if (fs.existsSync(catalog)) {
+    process.stdout.write(fs.readFileSync(catalog, "utf8"));
+    process.exit(0);
+  }
   process.stdout.write(
     "* provider 'fake-a' models:\n- alpha\n- alpha-pro\n\n  provider 'fake-b' models:\n- beta\n",
   );
@@ -86,7 +91,7 @@ if (process.argv.includes("--input") && process.argv[process.argv.indexOf("--inp
   // change); echoed on turn_start so host tests can assert the argv contract.
   const resumeArg = process.argv.find((a) => a === "--resume" || a.startsWith("--resume=")) ?? null;
   const resume = resumeArg === null ? null : resumeArg === "--resume" ? "latest" : resumeArg.slice("--resume=".length);
-  out("ready", { input: "ndjson", session_id: "fake-ndjson-1", model: "alpha", provider: "fake-a" });
+  out("ready", { input: "ndjson", session_id: "fake-ndjson-1", model: process.env.DEXT_MODEL || "alpha", provider: process.env.DEXT_PROVIDER || "fake-a" });
   let busy = false;
   let buf = "";
   const endTurn = (failed = false) => {

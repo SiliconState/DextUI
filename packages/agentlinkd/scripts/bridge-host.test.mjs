@@ -80,6 +80,35 @@ async function open(c) {
   return list.data.sessions.find((s) => !existing.has(s.id) && s.title === "New session").id;
 }
 
+test("catalog refresh discovers externally enabled Anthropic models and selects them for a worker", { timeout: 60000 }, async (t) => {
+  const h = await harness(t);
+  const a = await h.client();
+  assert.ok(!a.hello.data.model_catalog.some((g) => g.provider === 'anthropic'));
+  fs.mkdirSync(h.home, { recursive: true });
+  const models = ['claude-sonnet-4-6', 'claude-opus-4-6'];
+  fs.writeFileSync(path.join(h.home, 'fake-models.json'), JSON.stringify({ version: 1, providers: [
+    { id: 'fake-a', models: ['alpha'] }, { id: 'anthropic', models },
+  ] }));
+  a.send('x-agentlinkd.auth.status');
+  const refreshed = await a.wait((e) => e.event === 'x-agentlinkd.auth.status');
+  assert.deepEqual(refreshed.data.model_catalog.find((g) => g.provider === 'anthropic').models, models);
+  const id = await open(a);
+  a.send('session.subscribe', { id });
+  let at = a.events.length;
+  a.send('session.configure', { id, provider: 'anthropic', model: models[0] });
+  const selected = await a.wait((e) => e.session === id && e.event === 'session.configured', at);
+  assert.equal(selected.data.provider, 'anthropic');
+  assert.equal(selected.data.model, models[0]);
+  at = a.events.length;
+  a.send('prompt.submit', { session: id, text: 'test selected provider' });
+  const ready = await a.wait((e) => e.session === id && e.event === 'session.configured', at);
+  assert.equal(ready.data.provider, 'anthropic', 'provider reaches child environment');
+  assert.equal(ready.data.model, models[0], 'model reaches child environment');
+  await a.wait((e) => e.session === id && e.event === 'turn_end', at);
+  const b = await h.client();
+  assert.deepEqual(b.hello.data.model_catalog.find((g) => g.provider === 'anthropic').models, models);
+});
+
 test("bridge: live steering, permission round-trip, capability flags", { timeout: 60000 }, async (t) => {
   const h = await harness(t);
   const a = await h.client();

@@ -111,6 +111,18 @@ function goLive(conn, hello = helloOk()) {
 
 // ---------- tests ----------
 
+test('provider catalog refreshes after hello and auth status updates the connection before subscribers', (t) => {
+  const { conn } = setup(t);
+  const ws = goLive(conn, helloOk({ capabilities: ['provider_auth', 'model_select'] }));
+  assert.equal(ws.frames('x-agentlinkd.auth.status').length, 1);
+  const catalog = [{ provider: 'anthropic', models: ['claude-sonnet-4-6'] }];
+  let seen;
+  conn.onControl((event) => { if (event.event === 'x-agentlinkd.auth.status') seen = conn.modelCatalog; });
+  ws.receive({ v: 1, ts: 2, event: 'x-agentlinkd.auth.status', data: { providers: [], model_catalog: catalog } });
+  assert.deepEqual(conn.modelCatalog, catalog);
+  assert.deepEqual(seen, catalog);
+});
+
 test("(a) open → hello with token → hello_ok → live, capabilities/commands/instance captured", (t) => {
   const { conn, calls } = setup(t);
   conn.connect();

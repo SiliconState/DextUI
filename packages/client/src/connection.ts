@@ -641,6 +641,12 @@ export class Connection {
         // Replay anything typed while the socket was down, verbatim — the host
         // remembers nonces, so a reconnect replay can never double-run work.
         this.flushOutbox();
+        if (this.capabilities.includes("provider_auth")) this.authStatus();
+        break;
+      }
+      case "x-agentlinkd.auth.status": {
+        const d = env.data as { model_catalog?: ModelGroup[] };
+        if (Array.isArray(d?.model_catalog)) this.modelCatalog = d.model_catalog;
         break;
       }
       case "hello_fail": {

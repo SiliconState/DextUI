@@ -46,6 +46,24 @@ test('registration secrets never leave event replay; pending approval survives e
   assert.ok(!JSON.stringify(reply).includes('secret-token'));
   assert.ok(!JSON.stringify(reply).includes('private-arguments'));
 });
+test('replay waits for publication and advances past malformed records without looping', (t) => {
+  const f = fixture(t);
+  fs.appendFileSync(f.source.events, JSON.stringify(f.event(3)) + '\n');
+  const cursor = { attempt: f.meta.attempt, seq: 2 };
+  assert.equal(readEvents(f.source, cursor).seq, 2, 'unpublished event cannot advance cursor');
+  f.meta.last_seq = 3; f.save();
+  const published = readEvents(f.source, cursor);
+  assert.equal(published.reset, false);
+  assert.deepEqual(published.events.map((r) => r.seq), [3]);
+  f.meta.last_seq = 600; f.save();
+  fs.writeFileSync(f.source.events, 'malformed\n' + Array.from({ length: 600 }, (_, i) => JSON.stringify(f.event(i + 1))).join('\n') + '\n');
+  const first = readEvents(f.source);
+  assert.equal(first.gap, true);
+  const second = readEvents(f.source, { attempt: first.attempt, seq: first.seq });
+  assert.equal(second.reset, false, 'old malformed line must not reset each page');
+  assert.equal(second.events[0].seq, 257);
+  assert.equal(second.seq, 512);
+});
 test('worker files refuse symlinks', (t) => {
   const f = fixture(t);
   fs.unlinkSync(f.source.events);
@@ -86,6 +104,39 @@ test('permission relay validates attempt and only reports owner acceptance', asy
   assert.equal(calls, 0);
   assert.equal((await replyPermission(f.source, { attempt: f.meta.attempt, id: 'p', choice: 'once' })).accepted, true);
   assert.equal((await replyPermission(f.source, { attempt: f.meta.attempt, id: 'p', choice: 'once' })).accepted, false);
+});
+test('continuation observations never overwrite owner records or follow obsolete units', async (t) => {
+  const f = fixture(t);
+  const file = path.join(f.dir, 'continuation.json');
+  const record = { unit: 'dext-crew-run-123456789abc-resume-run-abcdef123456', state: 'pending', created: 1 };
+  fs.writeFileSync(file, JSON.stringify(record));
+  let callback;
+  const monitor = createContinuationMonitor({ exec: (_bin, _args, _options, cb) => { callback = cb; } });
+  t.after(() => monitor.close());
+  assert.equal(monitor.inspect(f.dir, null), null, 'manual reruns ignore obsolete launch');
+  monitor.inspect(f.dir, record.unit);
+  const replacement = { ...record, unit: 'dext-crew-run-123456789abc-resume-run-123456abcdef' };
+  fs.writeFileSync(file, JSON.stringify(replacement));
+  callback(null, 'LoadState=loaded\nActiveState=active\nResult=success\n', '');
+  assert.deepEqual(JSON.parse(fs.readFileSync(file)), replacement);
+  assert.equal(fs.existsSync(path.join(f.dir, 'continuation-observed.json')), false);
+  monitor.inspect(f.dir, replacement.unit);
+  callback(null, 'LoadState=loaded\nActiveState=active\nResult=success\n', '');
+  assert.deepEqual(JSON.parse(fs.readFileSync(file)), replacement);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(f.dir, 'continuation-observed.json'))).state, 'running');
+  fs.writeFileSync(file, JSON.stringify({ ...replacement, state: 'failed', error: 'launch failed' }));
+  assert.equal(monitor.inspect(f.dir, replacement.unit).state, 'failed', 'owner failure overrides cached running state');
+});
+test('continuation query errors remain unconfirmed even with partial success output', async (t) => {
+  const f = fixture(t);
+  const record = { unit: 'dext-crew-run-123456789abc-resume-run-abcdef123456', state: 'pending', created: 1 };
+  fs.writeFileSync(path.join(f.dir, 'continuation.json'), JSON.stringify(record));
+  const exec = (bin, _args, _options, cb) => queueMicrotask(() => cb(new Error('timeout'), bin === 'systemctl' ? 'LoadState=loaded\nActiveState=inactive\nExecMainCode=1\nExecMainStatus=0\n' : '', 'query timeout'));
+  const monitor = createContinuationMonitor({ exec });
+  t.after(() => monitor.close());
+  monitor.inspect(f.dir);
+  await new Promise((r) => setImmediate(r));
+  assert.equal(monitor.inspect(f.dir).state, 'unknown');
 });
 test('continuation reconciliation persists supervisor failure and never launches on restart', async (t) => {
   const f = fixture(t);

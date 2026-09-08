@@ -325,7 +325,7 @@ export function createCrewAdapter({ roots = [], crewBin = "crew", dextBin, env =
         const manifest = discoverWorkers(read.json, dir);
         const proj = projectManifest(manifest, { now, mtimeMs: read.mtimeMs, stateOf: (p) => confined(dir, p) ? readState(p) : null, files: chainFiles(read.json.chainDir) });
         if (!proj || proj.summary.id !== e.name) continue;
-        const launch = continuation.inspect(dir);
+        const launch = continuation.inspect(dir, manifest.unit ?? null);
         if (launch) {
           proj.detail.continuation = launch;
           if (["pending", "running"].includes(proj.summary.status) && ["failed", "exited"].includes(launch.state)) {

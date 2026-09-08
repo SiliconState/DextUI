@@ -157,6 +157,7 @@ import Meter from "./Meter.svelte";
       <select
         value={modelValue}
         onchange={selectModel}
+        onfocus={() => app.conn?.authStatus()}
         disabled={!canSelectModel}
         data-agent-id="status.model.select"
         data-state={view.modelLocked ? "locked" : canSelectModel ? "ready" : "disabled"}

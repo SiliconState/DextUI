@@ -317,7 +317,12 @@ async function providerStatusAsync() {
 // After a login the model list may grow (a provider's models appear once it
 // is authenticated): refresh the catalog in place so hello_ok and the status
 // reply agree.
-async function refreshModelCatalog() {
+let modelRefresh = null;
+function refreshModelCatalog() {
+  modelRefresh ??= reloadModelCatalog().finally(() => { modelRefresh = null; });
+  return modelRefresh;
+}
+async function reloadModelCatalog() {
   const j = await dextOutputAsync(["auth", "models", "--json"]);
   const groups = j.ok ? parseModelsJson(j.out) : null;
   if (groups) {
@@ -357,7 +362,7 @@ const CAPABILITIES = [
   "usage",
   "thinking",
   "effort_select",
-  ...(MODEL_CATALOG.length > 0 ? ["model_select"] : []),
+  "model_select",
   "slash",
   "slash.help",
   "slash.approval",
@@ -2575,12 +2580,13 @@ async function handleConnectorsCommand(client, frame) {
 
 // Credentials are pasted (never a browser flow: the host may be headless or
 // paired over LAN/hosted, so `web`/`import` modes are refused). The value
-// goes to `dext auth login <provider> <credential>` on argv of a child we
-// spawn directly — no shell, no history — and is never echoed in any frame.
+// goes to `dext auth login <provider>` over the child's stdin, never argv,
+// shell history or a browser response.
 async function handleAuthCommand(client, frame) {
   const op = frame.cmd.slice("x-agentlinkd.auth.".length);
   if (op === "status") {
-    sendControl(client, "x-agentlinkd.auth.status", { ...(await providerStatusAsync()), model_catalog: MODEL_CATALOG });
+    const [status] = await Promise.all([providerStatusAsync(), refreshModelCatalog()]);
+    sendControl(client, "x-agentlinkd.auth.status", { ...status, model_catalog: MODEL_CATALOG });
     return;
   }
   if (op !== "login" && op !== "logout") {

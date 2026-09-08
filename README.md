@@ -106,7 +106,7 @@ answers `markdown table demo` with a rich-markdown turn.
 - **Shortcuts overlay** (`?`): every binding in one dialog; overlays (finder, inspector, drawers) trap focus and restore it on close
 - **Responsive working surface**: chat/history stay left-anchored and use the available main pane; the composer keeps its full-window prompt behavior; document height is fixed to the viewport and only scrollback scrolls
 - **Status line** in dext's TUI idiom: `● cwd | title │ model │ effort │ approval │ Ctx [██████░░░░] │ ↑↓ $`
-- **Per-session model + reasoning controls**: native web selectors populated from dext's configured provider catalog. Choose a provider/model before a fresh session's first turn; model then locks to the durable seat. Reasoning effort (`off` through `max`) remains changeable between turns and is reapplied after resume.
+- **Per-session model + reasoning controls**: native web selectors populated from core's available provider catalog, including Anthropic/Claude. The catalog refreshes on connection/reconnection, model-picker focus and opening Providers; credentials or models added through core appear without restarting the host. With the NDJSON bridge, model/provider changes apply between turns while preserving history; reasoning effort can change mid-turn. Legacy one-shot hosts lock the model after the first turn. Dext remains the only credential holder; no separate Anthropic key or model list is stored in the UI.
 - **Themes**: dark / light / system (follows OS live), persisted
 - **Capability negotiation**: steer/approve controls appear only when the host
   advertises them (`hello_ok.capabilities`)
@@ -320,7 +320,9 @@ DextUI is designed to be drivable by other agents, not just humans:
 - `GET /__agent` returns a bounded scene digest (auth required)
 - `window.__agentlink` counts received envelopes by event type — transport debugging
 
-## Real-host limits (until the upstream dext bridge lands)
+## Legacy one-shot host limits (without core's NDJSON bridge)
+
+Current core builds support live approvals/steering and between-turn model switching. The host probes for `--input ndjson`; only older binaries fall back to the following limits.
 
 - **Model changes after history exists require a new UI session** — resumed dext seats restore their persisted model. DextUI rejects the change instead of mutating dext's global provider defaults or pretending it applied. Effort remains configurable between turns.
 - **Queued steering, not live injection** — one-shot children have no live stdin, so mid-turn input queues on the host and delivers automatically as the next turn's prompt at the turn boundary (the composer stays enabled; interrupting keeps the queue). True in-stream steering needs the upstream dext bridge.

@@ -17,7 +17,7 @@ function readRegular(file, limit, tail = false) {
 }
 export function registration(source) {
   const meta = JSON.parse(readRegular(source.registration, 256 * 1024).text);
-  if (meta.v !== 1 || !/^[a-f0-9]{48}$/.test(meta.attempt) || meta.run !== source.run || typeof meta.worker !== "string" || !Number.isSafeInteger(meta.last_seq)) throw new Error("invalid worker identity");
+  if (meta.v !== 1 || !/^[a-f0-9]{48}$/.test(meta.attempt) || meta.run !== source.run || typeof meta.worker !== "string" || !Number.isSafeInteger(meta.last_seq) || meta.last_seq < 0 || !Number.isSafeInteger(meta.first_seq) || meta.first_seq < 1 || meta.first_seq > meta.last_seq + 1) throw new Error("invalid worker identity");
   return meta;
 }
 export function readEvents(source, cursor) {
@@ -32,23 +32,32 @@ export function readEvents(source, cursor) {
   for (const line of lines) {
     try {
       const r = JSON.parse(line);
-      if (r.v !== 1 || r.attempt !== meta.attempt || r.run !== meta.run || r.worker !== meta.worker || !Number.isSafeInteger(r.seq) || typeof r.event !== "string") throw new Error("invalid record");
-      records.push(r);
+      if (r.v !== 1 || r.attempt !== meta.attempt || r.run !== meta.run || r.worker !== meta.worker || !Number.isSafeInteger(r.seq) || r.seq < 1 || typeof r.event !== "string") throw new Error("invalid record");
+      // The journal write precedes metadata publication. Never advance into an
+      // uncommitted record (or replay an archived range during rotation).
+      if (r.seq >= meta.first_seq && r.seq <= meta.last_seq) records.push(r);
     } catch { malformed = true; }
   }
   const first = records[0]?.seq ?? meta.first_seq;
-  const gap = malformed || (same ? cursor.seq < first - 1 : first > 1 || !!cursor);
+  const gap = same ? cursor.seq < first - 1 : first > 1 || !!cursor;
   const reset = !same || gap;
   const after = reset ? 0 : cursor.seq;
-  const events = records.filter((r) => r.seq > after).slice(0, 256);
+  const events = [];
   let expected = reset ? first : after + 1;
-  for (const r of events) { if (r.seq !== expected) malformed = true; expected = r.seq + 1; }
+  for (const r of records) {
+    if (r.seq <= after) continue;
+    if (r.seq !== expected) malformed = true;
+    if (r.seq < expected) continue;
+    events.push(r);
+    expected = r.seq + 1;
+    if (events.length === 256) break;
+  }
   const p = meta.permission;
   const permission = !meta.ended && p && typeof p.id === "string" ? {
     id: p.id, tool: String(p.tool ?? "tool"), summary: String(p.summary ?? "").slice(0, 4096),
     choices: Array.isArray(p.choices) ? p.choices.filter((c) => ["once", "always", "deny"].includes(c)) : [], sent: p.sent === true,
   } : null;
-  return { attempt: meta.attempt, seq: events.at(-1)?.seq ?? (same ? cursor.seq : 0), reset, gap: gap || malformed, events, ended: meta.ended === true, interactive: meta.interactive === true, permission };
+  return { attempt: meta.attempt, seq: events.at(-1)?.seq ?? (same ? cursor.seq : 0), reset, gap: gap || (malformed && (reset || events.length > 0)), events, ended: meta.ended === true, interactive: meta.interactive === true, permission };
 }
 export function subscribeEvents({ source, cursor = null, send, writable = () => true }) {
   let observed = cursor;
@@ -65,7 +74,7 @@ export function subscribeEvents({ source, cursor = null, send, writable = () => 
       if (!chunk.reset && !chunk.events.length && !unavailable && state === lastState) return;
       if (send(chunk) !== false) { observed = { attempt: chunk.attempt, seq: chunk.seq }; unavailable = false; lastState = state; }
     } catch {
-      if (!unavailable) { send({ unavailable: true }); unavailable = true; }
+      if (!unavailable && send({ unavailable: true }) !== false) unavailable = true;
     }
   }
   const timer = setInterval(tick, 250);

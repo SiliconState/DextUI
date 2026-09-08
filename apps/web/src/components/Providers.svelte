@@ -3,7 +3,7 @@
   // from the /login device pairing (that one signs this browser into the
   // host). Here each provider row invokes dext's own auth store: "Sign in"
   // opens an inline paste field whose value goes to the host once
-  // (x-agentlinkd.auth.login → `dext auth login <provider> <credential>`)
+  // (x-agentlinkd.auth.login → `dext auth login <provider>` over stdin)
   // and is cleared here immediately — never stored client-side. Browser
   // OAuth flows are not offered in-app: the host may be headless or paired
   // over LAN, so browser-only providers sign in from the host's terminal.
