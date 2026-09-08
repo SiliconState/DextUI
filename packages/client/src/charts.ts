@@ -25,6 +25,8 @@ export interface ChartSpec {
   unit?: string;
   /** Scale override (bar/hbar/line). Defaults to the data's own max. */
   max?: number;
+  /** Fixed axis [lo, hi] (bar/hbar/line): pins the scale so charts compare across renders. */
+  domain?: [number, number];
   /** Named series. When present, this list IS the data (entry 0 mirrors
    *  `values`); every entry must match `values` length. */
   series?: ChartSeries[];
@@ -95,6 +97,14 @@ export function parseChartSpec(json: string): ChartSpec | null {
     if (!Number.isFinite(m) || m <= 0) return null;
     max = m;
   }
+  let domain: [number, number] | undefined;
+  if (o.domain !== undefined) {
+    if (!Array.isArray(o.domain) || o.domain.length !== 2) return null;
+    const lo = Number(o.domain[0]);
+    const hi = Number(o.domain[1]);
+    if (!Number.isFinite(lo) || !Number.isFinite(hi) || hi <= lo) return null;
+    domain = [lo, hi];
+  }
   let series: ChartSeries[] | undefined;
   if (hasSeries) {
     if (rawSeries.length > MAX_SERIES) return null;
@@ -124,6 +134,7 @@ export function parseChartSpec(json: string): ChartSpec | null {
     values,
     unit,
     ...(max !== undefined ? { max } : {}),
+    ...(domain !== undefined ? { domain } : {}),
     ...(series ? { series } : {}),
     ...(dataset !== undefined ? { dataset } : {}),
     ...(ax !== undefined ? { x: ax } : {}),

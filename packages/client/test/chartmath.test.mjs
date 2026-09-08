@@ -145,3 +145,25 @@ test("barGroupHitAtX: resolves (bar, series) under sort, nulls between groups an
   assert.equal(barGroupHitAtX(g2.x(0, 1) + 40, 3, order, 2), null, "past the group is null");
   assert.equal(barGroupHitAtX(PLOT.l - 4, 3, order, 2), null, "outside the plot is null");
 });
+
+test("diverging: nice ticks, symmetric hbar domain, zero-anchored tracks, fixed domain", async () => {
+  const m = await import("../dist/chartmath.js");
+  assert.deepEqual(m.niceTicks(-3, 3, 4), [-3, -2, -1, 0, 1, 2, 3]);
+  assert.deepEqual(m.niceTicks(-250, 250, 4), [-200, -100, 0, 100, 200]);
+  assert.ok(m.niceTicks(-50, 224.6, 4).includes(0), "zero tick always present when in range");
+  assert.deepEqual(m.hbarDomain([1.67, -0.93, 0.5]), [-2, 2], "symmetric, nice-rounded");
+  assert.deepEqual(m.hbarDomain([1.67, 0.5]), [0, 2], "all-positive stays zero-based");
+  assert.deepEqual(m.hbarDomain([1, -1], undefined, [-3, 3]), [-3, 3], "explicit domain wins");
+  const dom = [-3, 3];
+  const z = m.hbarXAt(0, dom);
+  const pos = m.hbarTrack(1.5, dom);
+  const neg = m.hbarTrack(-1.5, dom);
+  assert.equal(pos.x, z, "positive grows right from zero");
+  assert.ok(Math.abs(neg.x + neg.w - z) < 1e-9, "negative grows left to zero");
+  assert.ok(Math.abs(pos.w - neg.w) < 1e-9, "same magnitude, same width");
+  assert.ok(Math.abs(m.hbarValueAtDom(z, dom)) < 1e-9, "drag to the zero line reads 0");
+  const s = m.computeScale([[1.67, -0.93]], 2, null);
+  assert.deepEqual([s.lo, s.hi], [-2, 2], "bar/line scale goes symmetric when negatives exist");
+  const f = m.computeScale([[1.67, -0.93]], 2, null, undefined, [-3, 3]);
+  assert.deepEqual([f.lo, f.hi], [-3, 3]);
+});

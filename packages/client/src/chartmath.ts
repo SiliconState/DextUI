@@ -26,7 +26,7 @@ export interface Scale {
  * zoom window. `max` pins the top; otherwise the data's own max. `lo` is
  * never above 0 so bars keep a baseline.
  */
-export function computeScale(rows: number[][], n: number, zoom: [number, number] | null, max?: number): Scale {
+export function computeScale(rows: number[][], n: number, zoom: [number, number] | null, max?: number, domain?: [number, number]): Scale {
   const i0 = zoom ? zoom[0] : 0;
   const i1 = zoom ? zoom[1] : n - 1;
   const vs: number[] = [];
@@ -39,9 +39,75 @@ export function computeScale(rows: number[][], n: number, zoom: [number, number]
     }
   }
   let hi = max ?? (vs.length ? Math.max(1e-9, ...vs) : 1);
-  const lo = vs.length ? Math.min(0, ...vs) : 0;
+  let lo = vs.length ? Math.min(0, ...vs) : 0;
+  if (domain) {
+    // Fixed axis: comparable across renders (e.g. daily % moves pinned to ±3).
+    lo = domain[0];
+    hi = domain[1];
+  } else if (max === undefined && lo < 0) {
+    // Diverging data: symmetric, nice-rounded so 0 sits mid-plot and ticks are round.
+    const a = niceCeil(Math.max(Math.abs(lo), Math.abs(hi)));
+    lo = -a;
+    hi = a;
+  }
   if (hi <= lo) hi = lo + 1;
   return { i0, i1, hi, lo, spanI: Math.max(1e-6, i1 - i0) };
+}
+
+/** Smallest 1/2/2.5/5 × 10^k at or above |v| (0 → 1). */
+export function niceCeil(v: number): number {
+  const a = Math.abs(v);
+  if (!(a > 0)) return 1;
+  const p = Math.pow(10, Math.floor(Math.log10(a)));
+  const m = a / p;
+  const s = m <= 1 ? 1 : m <= 2 ? 2 : m <= 2.5 ? 2.5 : m <= 5 ? 5 : 10;
+  return Number((s * p).toPrecision(12));
+}
+
+/**
+ * Round-number axis ticks covering [lo, hi] (about `count` of them, always
+ * including 0 when it lies in range). Step is 1/2/2.5/5 × 10^k.
+ */
+export function niceTicks(lo: number, hi: number, count = 4): number[] {
+  if (!(hi > lo)) return [lo];
+  const raw = (hi - lo) / Math.max(1, count);
+  const p = Math.pow(10, Math.floor(Math.log10(raw)));
+  const m = raw / p;
+  const step = (m <= 1.5 ? 1 : m <= 3 ? 2 : m <= 7 ? 5 : 10) * p;
+  const out: number[] = [];
+  const t0 = Math.ceil(lo / step - 1e-9) * step;
+  for (let t = t0; t <= hi + step * 1e-6; t += step) out.push(Number(t.toPrecision(12)));
+  if (lo < 0 && hi > 0 && !out.some((t) => t === 0)) out.push(0);
+  return out.sort((a, b) => a - b);
+}
+
+/** Horizontal-bar axis domain: symmetric around 0 when any value is negative. */
+export function hbarDomain(values: number[], max?: number, domain?: [number, number]): [number, number] {
+  if (domain) return domain;
+  const neg = values.some((v) => v < 0);
+  if (max !== undefined) return neg ? [-max, max] : [0, max];
+  const a = niceCeil(hbarScaleMax(values));
+  return neg ? [-a, a] : [0, a];
+}
+
+/** x of a value on the hbar track for a domain (clamped). */
+export function hbarXAt(v: number, dom: [number, number]): number {
+  const [lo, hi] = dom;
+  return HBAR.x + (HBAR.w * (Math.max(lo, Math.min(hi, v)) - lo)) / (hi - lo);
+}
+
+/** Fill rect for a zero-anchored hbar: grows right for v>0, left for v<0. */
+export function hbarTrack(v: number, dom: [number, number]): { x: number; w: number } {
+  const z = hbarXAt(Math.max(dom[0], Math.min(dom[1], 0)), dom);
+  const e = hbarXAt(v, dom);
+  return { x: Math.min(z, e), w: Math.max(2, Math.abs(e - z)) };
+}
+
+/** Inverse of hbarXAt, clamped to the domain (a drag may cross zero). */
+export function hbarValueAtDom(x: number, dom: [number, number]): number {
+  const [lo, hi] = dom;
+  const f = Math.max(0, Math.min(1, (x - HBAR.x) / HBAR.w));
+  return lo + f * (hi - lo);
 }
 
 export function lineX(sc: Scale, i: number): number {
@@ -121,8 +187,10 @@ export function barGroupHitAtX(x: number, n: number, order: number[], m: number)
 
 /** Bar colour: negatives always the warning colour (palette[4]); with several
  *  series a bar takes its series' colour, alone it takes the per-bar colour. */
-export function barFill(palette: readonly string[], v: number, i: number, s: number, m: number): string {
+export function barFill(palette: readonly string[], v: number, i: number, s: number, m: number, diverging = false): string {
   if (v < 0) return palette[4] ?? palette[0] ?? "";
+  // Diverging single series: direction is the cue, so positives share one green.
+  if (diverging && m <= 1) return palette[0] ?? "";
   return palette[(m > 1 ? s : i) % palette.length] ?? "";
 }
 

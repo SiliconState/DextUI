@@ -28,8 +28,11 @@
     barFill,
     hbarRowAtY,
     hbarScaleMax,
-    hbarWidth,
-    hbarValueAtX,
+    hbarDomain,
+    hbarTrack,
+    hbarXAt,
+    hbarValueAtDom,
+    niceTicks,
     sortOrder,
     panWindow,
     wheelZoom,
@@ -70,7 +73,7 @@
   let svgEl = $state<SVGSVGElement | null>(null);
 
   type Gesture =
-    | { kind: "drag"; s: number; i: number; ax: "x" | "y"; sc: Scale; hiAbs: number; neg: boolean; moved: number }
+    | { kind: "drag"; s: number; i: number; ax: "x" | "y"; sc: Scale; hiAbs: number; dom: [number, number]; neg: boolean; moved: number }
     | { kind: "pan"; px: number; i0: number; w: number; moved: number }
     | { kind: "brush"; a: number; moved: number };
   let gesture = $state<Gesture | null>(null);
@@ -82,10 +85,15 @@
 
   // Frozen for the duration of a drag so the axis does not rescale under the
   // cursor (the value may exceed the frozen max; the scale refits on release).
-  const liveScale = $derived(computeScale((visible.length ? visible : [0]).map(vals), n, zoom, spec.max));
+  const liveScale = $derived(computeScale((visible.length ? visible : [0]).map(vals), n, zoom, spec.max, spec.domain));
   const scl = $derived(gesture?.kind === "drag" ? gesture.sc : liveScale);
   const order = $derived(type === "bar" || type === "hbar" ? sortOrder(vals(0), sortMode) : vals(0).map((_, i) => i));
   const hiAbs = $derived(hbarScaleMax(vals(0), spec.max));
+  // hbar axis: zero-anchored; symmetric (diverging) when any value is negative.
+  const hdom = $derived(hbarDomain(vals(0), spec.max, spec.domain));
+  const hticks = $derived(niceTicks(hdom[0], hdom[1], 4));
+  const diverging = $derived(vals(0).some((v) => v < 0));
+  const yticks = $derived(niceTicks(scl.lo, scl.hi, 4));
   const stats = $derived(seriesStats(vals(primary)));
   const donut = $derived(donutRows(vals(0)));
   const mVis = $derived(Math.max(1, visible.length));
@@ -129,7 +137,7 @@
   };
 
   const startDrag = (e: PointerEvent, s: number, i: number, ax: "x" | "y") =>
-    begin(e, { kind: "drag", s, i, ax, sc: liveScale, hiAbs, neg: (vals(s)[i] ?? 0) < 0, moved: 0 });
+    begin(e, { kind: "drag", s, i, ax, sc: liveScale, hiAbs, dom: hdom, neg: (vals(s)[i] ?? 0) < 0, moved: 0 });
 
   const onPointerMove = (e: PointerEvent) => {
     const g = gesture;
@@ -143,7 +151,7 @@
     g.moved++;
     const p = toSvg(e);
     if (g.kind === "drag") {
-      if (g.ax === "x") setVal(g.s, g.i, hbarValueAtX(p.x, g.hiAbs, g.neg));
+      if (g.ax === "x") setVal(g.s, g.i, hbarValueAtDom(p.x, g.dom));
       else setVal(g.s, g.i, valueAtY(g.sc, p.y));
     } else if (g.kind === "pan") {
       const r = svgEl?.getBoundingClientRect();
@@ -229,24 +237,38 @@
       {/each}
 
     {:else if type === "hbar"}
+      {@const zx = hbarXAt(Math.max(hdom[0], Math.min(hdom[1], 0)), hdom)}
+      {@const hEnd = HBAR.y0 + n * HBAR.rowH}
+      <!-- round-number axis: gridlines behind the rows, labels above the track, zero line emphasized -->
+      {#each hticks as t (t)}
+        {@const tx = hbarXAt(t, hdom)}
+        <line x1={tx} y1={HBAR.y0 - 4} x2={tx} y2={hEnd} style="stroke:var(--chart-grid,#2a2f37)" opacity={t === 0 ? 0 : 0.6} />
+        <text x={tx} y={HBAR.y0 - 8} text-anchor="middle" font-size="9" style="fill:var(--dim,#8b949e)">{t > 0 && diverging ? "+" : ""}{fmt(t)}{unit}</text>
+      {/each}
+      {#if diverging}
+        <line x1={zx} y1={HBAR.y0 - 4} x2={zx} y2={hEnd} style="stroke:var(--dim,#8b949e)" stroke-width="1.5" />
+      {/if}
       {#each order as i, p (i)}
         {@const v = vals(0)[i] ?? 0}
+        {@const tr = hbarTrack(v, hdom)}
         <g transform="translate(0,{HBAR.y0 + p * HBAR.rowH})" style="transition: transform .18s ease">
           <!-- svelte-ignore a11y_click_events_have_key_events -->
           <!-- svelte-ignore a11y_no_static_element_interactions -->
           <text x="118" y="12" text-anchor="end" font-size="11" style="fill:var(--dim,#8b949e); cursor:pointer" onclick={cycleSort}>{(labels[i] ?? "").slice(0, 14)}</text>
-          <rect x={HBAR.x} y="0" width={HBAR.w} height="14" rx="3" style="fill:var(--chart-grid,#2a2f37)" opacity="0.35" />
+          <rect x={HBAR.x} y="0" width={HBAR.w} height="14" rx="3" style="fill:var(--chart-grid,#2a2f37)" opacity="0.25" />
           <!-- svelte-ignore a11y_no_static_element_interactions -->
-          <rect x={HBAR.x} y="0" width={hbarWidth(v, hiAbs)} height="14" rx="3" style="fill:{barFill(CHART_COLORS, v, i, 0, 1)}; cursor:ew-resize" opacity={hoverI === i ? 1 : dim(i)} onpointerdown={(e) => startDrag(e, 0, i, "x")} />
-          <text x={HBAR.x + HBAR.w + 6} y="12" font-size="11" style="fill:var(--fg,#e6edf3)">{fmt(v)}{unit}</text>
+          <rect x={tr.x} y="0" width={tr.w} height="14" rx="3" style="fill:{barFill(CHART_COLORS, v, i, 0, 1, diverging)}; cursor:ew-resize" opacity={hoverI === i ? 1 : dim(i)} onpointerdown={(e) => startDrag(e, 0, i, "x")} />
+          <text x={HBAR.x + HBAR.w + 6} y="12" font-size="11" style="fill:{v < 0 ? 'var(--chart-5,#f85149)' : diverging ? 'var(--chart-1,#3fb950)' : 'var(--fg,#e6edf3)'}">{v > 0 && diverging ? "+" : ""}{fmt(v)}{unit}</text>
         </g>
       {/each}
 
     {:else}
-      {#each [0, 1, 2, 3] as g (g)}
-        {@const gy = PLOT.bottom - ((PLOT.bottom - PLOT.top) * g) / 3}
-        <line x1={PLOT.l} y1={gy} x2={PLOT.r} y2={gy} style="stroke:var(--chart-grid,#2a2f37)" opacity="0.55" />
-        <text x={PLOT.r + 4} y={gy + 3} font-size="10" style="fill:var(--dim,#8b949e)">{fmt(scl.lo + ((scl.hi - scl.lo) * g) / 3)}{unit}</text>
+      {#each yticks as t (t)}
+        {@const gy = scaleY(scl, t)}
+        {#if gy >= PLOT.top - 1 && gy <= PLOT.bottom + 1}
+          <line x1={PLOT.l} y1={gy} x2={PLOT.r} y2={gy} style="stroke:var(--chart-grid,#2a2f37)" opacity={t === 0 ? 0 : 0.55} />
+          <text x={PLOT.r + 4} y={gy + 3} font-size="10" style="fill:var(--dim,#8b949e)" font-weight={t === 0 ? "bold" : "normal"}>{t > 0 && scl.lo < 0 ? "+" : ""}{fmt(t)}{unit}</text>
+        {/if}
       {/each}
       {#if scl.lo < 0 && scl.hi > 0}
         <line x1={PLOT.l} y1={scaleY(scl, 0)} x2={PLOT.r} y2={scaleY(scl, 0)} style="stroke:var(--dim,#8b949e)" stroke-width="1.5" />
@@ -264,10 +286,10 @@
             {@const bh = Math.max(2, Math.abs(y0 - y1))}
             <g transform="translate({bx},0)" style="transition: transform .18s ease">
               <!-- svelte-ignore a11y_no_static_element_interactions -->
-              <rect x={-bars.bw / 2} y={by} width={bars.bw} height={bh} rx="2" style="fill:{barFill(CHART_COLORS, v, i, s, mVis)}; cursor:ns-resize" opacity={hoverI === i ? 1 : dim(i)} onpointerdown={(e) => startDrag(e, s, i, "y")} />
+              <rect x={-bars.bw / 2} y={by} width={bars.bw} height={bh} rx="2" style="fill:{barFill(CHART_COLORS, v, i, s, mVis, scl.lo < 0)}; cursor:ns-resize" opacity={hoverI === i ? 1 : dim(i)} onpointerdown={(e) => startDrag(e, s, i, "y")} />
             </g>
             {#if visible.length === 1}
-              <text x={bx} y={by - 4} text-anchor="middle" font-size="10" style="fill:var(--fg,#e6edf3)">{fmt(v)}{unit}</text>
+              <text x={bx} y={v < 0 ? by + bh + 11 : by - 4} text-anchor="middle" font-size="10" style="fill:var(--fg,#e6edf3)">{fmt(v)}{unit}</text>
             {/if}
           {/each}
           <!-- svelte-ignore a11y_click_events_have_key_events -->

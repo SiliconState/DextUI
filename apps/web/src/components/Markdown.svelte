@@ -21,7 +21,15 @@
   type MdTable = Extract<MdBlock, { kind: "table" }>;
   type MdHeading = Extract<MdBlock, { kind: "heading" }>;
   type TCard = { head: MdHeading | null; table: MdTable };
-  type Run = { kind: "single"; b: MdBlock } | { kind: "lone"; card: TCard } | { kind: "grid"; cards: TCard[] };
+  type MdChart = Extract<MdBlock, { kind: "chart" }>;
+  type Run =
+    | { kind: "single"; b: MdBlock }
+    | { kind: "lone"; card: TCard }
+    | { kind: "grid"; cards: TCard[] }
+    // A table run immediately followed by a chart: one 2-column grid — first
+    // (tallest) table left, remaining tables + the chart stacked right, so the
+    // chart fills the column instead of trailing off into whitespace.
+    | { kind: "tape"; cards: TCard[]; chart: MdChart };
   const layout = $derived.by(() => {
     const runs: Run[] = [];
     let cards: TCard[] = [];
@@ -33,6 +41,11 @@
     for (let i = 0; i < blocks.length; i++) {
       const b = blocks[i]!;
       const nx = blocks[i + 1];
+      if (b.kind === "chart" && cards.length > 0 && (b.spec.type === "hbar" || b.spec.type === "bar")) {
+        runs.push({ kind: "tape", cards, chart: b });
+        cards = [];
+        continue;
+      }
       if (b.kind === "table") {
         cards.push({ head: null, table: b });
       } else if (b.kind === "heading" && b.level >= 3 && nx?.kind === "table") {
@@ -84,12 +97,18 @@
 {/snippet}
 
 {#snippet renderTable(b: MdTable)}
+  {@const NUM = /^[+\u2212\-]?\$?\d[\d,]*(\.\d+)?\s?(%|[kKMBT]|bp|x|pts?)?$|^(n\/a|—|-)$/}
+  {@const cellText = (c: Inline[]) => c.map((t) => ("s" in t ? t.s : "")).join("").trim()}
+  {@const numCol = b.rows.length > 0
+    ? b.head.map((_, ci) => b.rows.filter((r) => NUM.test(cellText(r[ci] ?? []))).length >= Math.max(1, Math.ceil(b.rows.length * 0.6)))
+    : b.head.map(() => false)}
+  {@const sign = (t: string) => (/^[+]\d/.test(t) ? "pos" : /^[\-\u2212]\d/.test(t) ? "neg" : "")}
   <div class="md-tablewrap">
     <table class="md-table">
       <thead>
         <tr>
           {#each b.head as cell, ci (ci)}
-            <th style={`text-align:${b.align[ci] === "r" ? "right" : b.align[ci] === "c" ? "center" : "left"}`}>
+            <th class:num={numCol[ci]} style={`text-align:${b.align[ci] === "r" || (numCol[ci] && b.align[ci] !== "c") ? "right" : b.align[ci] === "c" ? "center" : "left"}`}>
               {@render inline(cell)}
             </th>
           {/each}
@@ -99,7 +118,8 @@
         {#each b.rows as row, ri (ri)}
           <tr>
             {#each row as cell, ci (ci)}
-              <td style={`text-align:${b.align[ci] === "r" ? "right" : b.align[ci] === "c" ? "center" : "left"}`}>
+              {@const t = cellText(cell)}
+              <td class:num={numCol[ci]} class:pos={numCol[ci] && sign(t) === "pos"} class:neg={numCol[ci] && sign(t) === "neg"} style={`text-align:${b.align[ci] === "r" || (numCol[ci] && b.align[ci] !== "c") ? "right" : b.align[ci] === "c" ? "center" : "left"}`}>
                 {@render inline(cell)}
               </td>
             {/each}
@@ -127,6 +147,18 @@
       {@render renderBlock(run.b)}
     {:else if run.kind === "lone"}
       {@render renderCard(run.card)}
+    {:else if run.kind === "tape"}
+      <div class="md-tape" data-agent-id="markdown.tape">
+        <div class="md-tape__l">{@render renderCard(run.cards[0]!)}</div>
+        <div class="md-tape__r">
+          {#each run.cards.slice(1) as c, ci (ci)}
+            {@render renderCard(c)}
+          {/each}
+          <div class="md-chartbox md-chartbox--fill" data-agent-id="markdown.chart">
+            <Chart spec={run.chart.spec} {link} />
+          </div>
+        </div>
+      </div>
     {:else}
       <div class="md-tgrid" data-agent-id="markdown.tgrid">
         {#each run.cards as c, ci (ci)}
@@ -221,12 +253,18 @@
     font-size: 13px;
     font-weight: bold;
     color: var(--fg);
-    margin-top: 6px;
+    margin-top: 10px;
   }
   .md :is(h1, h2).md-h {
     font-size: 14px;
+    font-weight: 700;
+    letter-spacing: 0.01em;
     border-bottom: 1px solid var(--line);
-    padding-bottom: 2px;
+    padding-bottom: 3px;
+    margin-top: 16px;
+  }
+  .md > :first-child.md-h {
+    margin-top: 2px;
   }
   .md-p {
     white-space: pre-line;
@@ -272,6 +310,32 @@
   }
   .md-chartbox {
     max-width: 720px;
+  }
+  .md-chartbox--fill {
+    max-width: none;
+    width: 100%;
+  }
+  /* Tape: tables + a trailing bar chart share one grid with a single gutter. */
+  .md-tape {
+    display: grid;
+    grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
+    gap: 1.5rem;
+    align-items: start;
+  }
+  .md-tape__l,
+  .md-tape__r {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+  }
+  .md-tape .md-tcard .md-h {
+    margin-top: 0;
+  }
+  @media (max-width: 760px) {
+    .md-tape {
+      grid-template-columns: minmax(0, 1fr);
+    }
   }
   .md-img {
     display: inline-flex;
@@ -343,6 +407,19 @@
   }
   .md-table tbody tr:nth-child(even) {
     background: color-mix(in srgb, var(--bg1) 55%, transparent);
+  }
+  .md-table td.num,
+  .md-table th.num {
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  .md-table td.pos {
+    color: var(--green, #3fb950);
+    background: color-mix(in srgb, var(--green, #3fb950) 9%, transparent);
+  }
+  .md-table td.neg {
+    color: var(--red, #f85149);
+    background: color-mix(in srgb, var(--red, #f85149) 9%, transparent);
   }
   .md-tgrid {
     display: flex;
