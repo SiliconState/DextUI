@@ -5,7 +5,7 @@
     connection,
     activate,
     newSession,
-    toggleTheme,
+    openSettings,
     copyText,
     rePair,
     queue,
@@ -161,10 +161,11 @@
       run: () => (app.shortcutsOpen = true),
     });
     out.push({
-      slug: "theme.toggle",
-      label: `Theme: ${app.theme} → ${app.theme === "dark" ? "dim" : app.theme === "dim" ? "light" : app.theme === "light" ? "system" : "dark"}`,
+      slug: "settings.open",
+      label: "Settings — theme, notifications, sign out",
+      hint: `theme: ${app.theme}`,
       group: "app",
-      run: toggleTheme,
+      run: () => openSettings(),
     });
     out.push({ slug: "pair.reset", label: "Sign out of this device", hint: "Forgets the access code", group: "app", run: rePair });
     if (providersEnabled()) out.push({ slug: "providers.open", label: "Providers — sign in to a model vendor", hint: "API key", group: "app", run: openProviders });

@@ -60,7 +60,7 @@ H2=$(agent-browser eval 'Math.round(parseFloat(document.querySelector(`[data-age
 echo "height after send: $H2"
 [ "$H2" -le 30 ] || { echo "FAIL: height reset after send"; FAIL=1; }
 
-note "charts render and follow theme (echo session — fixture sessions replay canned text)"
+note "charts render and follow theme via settings menu (echo session — fixture sessions replay canned text)"
 agent-browser click '[data-agent-id="session.new"]' >/dev/null
 agent-browser wait '[data-agent-id="composer.input"]' >/dev/null
 sleep 0.8
@@ -68,25 +68,28 @@ agent-browser fill '[data-agent-id="composer.input"]' 'markdown demo' >/dev/null
 agent-browser press Enter >/dev/null
 wait_js 'document.querySelectorAll(`.chart-wrap`).length >= 3' || { echo "FAIL: charts"; FAIL=1; }
 sleep 1.5
-T0=$(agent-browser eval 'document.documentElement.dataset.theme')
-C0=$(agent-browser eval 'getComputedStyle(document.documentElement).getPropertyValue("--chart-1").trim()')
-B0=$(agent-browser eval 'getComputedStyle(document.documentElement).getPropertyValue("--bg3").trim() + "|" + getComputedStyle(document.documentElement).getPropertyValue("--chart-grid").trim()')
-F0=$(agent-browser eval 'getComputedStyle(document.querySelector(`.chart-wrap svg rect`)).fill')
-agent-browser click '[data-agent-id="theme.toggle"]' >/dev/null
-sleep 0.3
-T1=$(agent-browser eval 'document.documentElement.dataset.theme')
-C1=$(agent-browser eval 'getComputedStyle(document.documentElement).getPropertyValue("--chart-1").trim()')
-B1=$(agent-browser eval 'getComputedStyle(document.documentElement).getPropertyValue("--bg3").trim() + "|" + getComputedStyle(document.documentElement).getPropertyValue("--chart-grid").trim()')
-F1=$(agent-browser eval 'getComputedStyle(document.querySelector(`.chart-wrap svg rect`)).fill')
-agent-browser click '[data-agent-id="theme.toggle"]' >/dev/null
-sleep 0.3
-T2=$(agent-browser eval 'document.documentElement.dataset.theme')
-echo "themes: $T0 -> $T1 -> $T2; chart-1: $C0 -> $C1"
-echo "tip surface + grid: $B0 -> $B1; bar fill: $F0 -> $F1"
-[ "$T0" != "$T1" ] && [ "$T1" != "$T2" ] || { echo "FAIL: theme cycle"; FAIL=1; }
-[ "$C0" != "$C1" ] || { echo "FAIL: --chart-1 unchanged"; FAIL=1; }
-[ "$B0" != "$B1" ] || { echo "FAIL: tooltip surface/grid vars unchanged"; FAIL=1; }
-[ "$F0" != "$F1" ] || { echo "FAIL: bar fill unchanged across theme"; FAIL=1; }
+# Theme is an explicit choice in the settings menu now, not a blind cycle.
+CHART1='getComputedStyle(document.documentElement).getPropertyValue("--chart-1").trim()'
+SURF='getComputedStyle(document.documentElement).getPropertyValue("--bg3").trim() + "|" + getComputedStyle(document.documentElement).getPropertyValue("--chart-grid").trim()'
+BARFILL='getComputedStyle(document.querySelector(".chart-wrap svg rect")).fill'
+pick_theme() { agent-browser click "[data-agent-id=\"theme.set.$1\"]" >/dev/null; sleep 0.35; }
+agent-browser click '[data-agent-id="settings.open"]' >/dev/null
+agent-browser wait '[data-agent-id="settings.overlay"]' >/dev/null
+pick_theme light
+CL=$(agent-browser eval "$CHART1"); FL=$(agent-browser eval "$BARFILL")
+pick_theme dark
+TD=$(agent-browser eval 'document.documentElement.dataset.theme' | tr -d '"')
+CD=$(agent-browser eval "$CHART1"); FD=$(agent-browser eval "$BARFILL"); BD=$(agent-browser eval "$SURF")
+pick_theme dim
+TM=$(agent-browser eval 'document.documentElement.dataset.theme' | tr -d '"'); BM=$(agent-browser eval "$SURF")
+agent-browser click '[data-agent-id="settings.scrim"]' >/dev/null
+wait_js '!document.querySelector(`[data-agent-id="settings.overlay"]`)' || { echo "FAIL: settings menu stayed open"; FAIL=1; }
+echo "themes: light -> $TD -> $TM; chart-1 light/dark: $CL / $CD"
+echo "surfaces dark/dim: $BD / $BM; bar fill light/dark: $FL / $FD"
+{ [ "$TD" = "dark" ] && [ "$TM" = "dim" ]; } || { echo "FAIL: theme.set did not apply"; FAIL=1; }
+[ "$CL" != "$CD" ] || { echo "FAIL: --chart-1 unchanged light→dark"; FAIL=1; }
+[ "$FL" != "$FD" ] || { echo "FAIL: bar fill unchanged light→dark"; FAIL=1; }
+[ "$BD" != "$BM" ] || { echo "FAIL: dim surfaces identical to dark (dim not a distinct theme)"; FAIL=1; }
 
 note "session: draft saved on switch, rename, true delete purges local state"
 agent-browser click '[data-agent-id="session.sess_002.open"]' >/dev/null

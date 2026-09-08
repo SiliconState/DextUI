@@ -42,6 +42,11 @@ export const app = $state({
   paletteOpen: false,
   /** Raw envelope tail drawer for the active session. */
   eventsOpen: false,
+  /** Settings popover (theme · notifications · providers · sign out). */
+  settingsOpen: false,
+  /** Viewport rect of the trigger, so the popover anchors to it and opens
+   *  away from the nearest edge; null → default bottom-right corner. */
+  settingsAnchor: null as { top: number; bottom: number; right: number } | null,
   sidebarCollapsed: false,
   theme: "dark" as Theme,
   /** Resolved (never "system") — drives <html data-theme>. "dim" is a
@@ -347,6 +352,25 @@ export function toggleTheme(): void {
   app.theme = app.theme === "dark" ? "dim" : app.theme === "dim" ? "light" : app.theme === "light" ? "system" : "dark";
   localStorage.setItem("dextui.theme", app.theme);
   applyTheme(app.theme);
+}
+
+/** Pick a theme directly (settings popover); persisted like the cycle. */
+export function setTheme(t: Theme): void {
+  app.theme = t;
+  localStorage.setItem("dextui.theme", t);
+  applyTheme(t);
+}
+
+/** Open the settings popover, anchored to the trigger's viewport rect so it
+ *  opens away from the nearest edge; pass nothing to fall back to the corner. */
+export function openSettings(anchor?: { top: number; bottom: number; right: number }): void {
+  app.settingsAnchor = anchor ?? null;
+  app.settingsOpen = true;
+}
+
+export function closeSettings(): void {
+  app.settingsOpen = false;
+  app.settingsAnchor = null;
 }
 
 /** Resolved app theme collapsed to the binary artifact-theming contract

@@ -129,7 +129,7 @@ answers `markdown table demo` with a rich-markdown turn.
 - **Desktop notifications** (opt-in): approval requests, turn completion with usage/cost, failures — only while the tab is hidden, deduped across reconnect replays
 - **Keyboard-first approvals** (mock/upstream): `a` / `s` / `d`, note, diff preview — local dock or the global queue
 - **Composer ergonomics**: per-session prompt history (shell semantics: `↑` from the first line, edit forks the draft, `[↑n]` recall marker), per-session drafts, host-driven `/` completion with legacy capability fallback, hero-typing spawns a seeded session
-- **Finder** (`⌘K`/`Ctrl+K`): fzf-style — approvals first, then sessions, theme, stop, re-pair
+- **Finder** (`⌘K`/`Ctrl+K`): fzf-style — approvals first, then sessions, settings, stop, sign out
 - **Shortcuts overlay** (`?`): every binding in one dialog; overlays (finder, inspector, drawers) trap focus and restore it on close
 - **Responsive working surface**: chat/history stay left-anchored and use the available main pane; the composer keeps its full-window prompt behavior; document height is fixed to the viewport and only scrollback scrolls
 - **Status line** in dext's TUI idiom: `● cwd | title │ model │ effort │ approval │ Ctx [██████░░░░] │ ↑↓ $`

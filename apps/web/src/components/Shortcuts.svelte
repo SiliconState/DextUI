@@ -67,7 +67,7 @@
     {
       name: "app",
       rows: [
-        ["status line", "model · effort · theme: · notify: · re-pair"],
+        ["status line", "model · effort · approval · ⚙ settings menu"],
         ["rail / finder", "open todos panel · inspect blocks · raw events"],
       ],
     },

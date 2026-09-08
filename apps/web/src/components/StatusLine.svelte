@@ -5,8 +5,8 @@
 import Meter from "./Meter.svelte";
   import type { SessionStore } from "@dextui/client";
   import type { ThinkingEffort } from "@dextui/protocol";
-  import { app, toggleTheme, rePair, toggleSidebar, queueTotal, jumpToOldestPending, toggleNotify } from "../lib/state.svelte";
-  import { connectorFor, connectors, openProviders, providersEnabled, pushConnector, syncConnector } from "../lib/connectors.svelte";
+  import { app, openSettings, toggleSidebar, queueTotal, jumpToOldestPending } from "../lib/state.svelte";
+  import { connectorFor, connectors, pushConnector, syncConnector } from "../lib/connectors.svelte";
   import { crew, crewLive, crewDur, crewAge, openRun, shortRun } from "../lib/crew.svelte";
   import { selfEdit, cancelRestart } from "../lib/selfedit.svelte";
   import { foldersEnabled, movableSession, openFolderPicker, shortFolder } from "../lib/folders.svelte";
@@ -109,6 +109,36 @@ import Meter from "./Meter.svelte";
     app.conn?.configureSession(view.id, { thinking_effort });
   }
 
+  // Approval: what dext may do without asking. Redefined from a static yellow
+  // badge into a live control consistent with model/effort — the graded
+  // spectrum plus whatever the session actually holds (e.g. always/never). The
+  // host defers /approval during a live turn, so it applies from the next turn.
+  const APPROVAL_LABELS: Record<string, string> = {
+    ask: "Ask each time",
+    "auto-read": "Auto reads",
+    "auto-write": "Auto edits",
+    always: "Approve all",
+    never: "Deny all",
+  };
+  const canSetApproval = $derived(
+    app.phase === "live" && app.caps.includes("slash.approval") && view.status === "live",
+  );
+  const approvalOptions = $derived.by(() => {
+    const base = ["ask", "auto-read", "auto-write"];
+    const cur = view.approvalProfile;
+    const list = cur && !base.includes(cur) ? [cur, ...base] : base;
+    return list.map((v) => ({ value: v, label: APPROVAL_LABELS[v] ?? v }));
+  });
+  function selectApproval(e: Event) {
+    const v = (e.currentTarget as HTMLSelectElement).value;
+    if (v && v !== view.approvalProfile) app.conn?.slash(view.id, `/approval ${v}`);
+  }
+
+  function openSettingsAt(e: MouseEvent) {
+    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    openSettings({ top: r.top, bottom: r.bottom, right: window.innerWidth - r.right });
+  }
+
   // Sessions inside a connected folder get a sync affordance: pull is
   // fast-forward/copy (never destroys local work); push commits everything
   // (git) or copies up (rclone). Disabled while a turn runs so the agent's
@@ -195,7 +225,23 @@ import Meter from "./Meter.svelte";
   {/if}
   {#if view.approvalProfile}
     <span class="sep">│</span>
-    <span class="st-yellow" data-agent-id="status.profile">Approval:{view.approvalProfile}</span>
+    {#if canSetApproval}
+      <label class="ctl appr" title="What dext may do without asking — applies from the next turn">
+        <span class="faint">Approval:</span>
+        <select
+          value={view.approvalProfile}
+          onchange={selectApproval}
+          data-agent-id="status.approval.select"
+          data-state="ready"
+        >
+          {#each approvalOptions as opt (opt.value)}
+            <option value={opt.value}>{opt.label}</option>
+          {/each}
+        </select>
+      </label>
+    {:else}
+      <span class="st-yellow" data-agent-id="status.profile" title="Approval profile — {view.approvalProfile}">Approval:{APPROVAL_LABELS[view.approvalProfile] ?? view.approvalProfile}</span>
+    {/if}
   {/if}
   {#if ticker}
     <span class="sep">│</span>
@@ -266,20 +312,14 @@ import Meter from "./Meter.svelte";
     {/if}
     <button class="act" data-agent-id="finder.open" onclick={() => (app.paletteOpen = true)} title="Finder (⌘K)">⌘k</button>
     <button
-      class="act"
-      data-agent-id="notify.toggle"
-      data-state={app.notify}
-      onclick={toggleNotify}
-      title="Notify while the tab is hidden"
-    >Notify:{app.notify}</button
-    >
-    <button class="act" data-agent-id="theme.toggle" onclick={toggleTheme} title="Cycle theme: dark → dim → light → system">
-      Theme:{app.theme}
-    </button>
-    {#if providersEnabled()}
-      <button class="act" data-agent-id="providers.open" onclick={openProviders} title="Sign in to model providers">Providers</button>
-    {/if}
-    <button class="act" data-agent-id="pair.reset" onclick={rePair} title="Forget the access code on this device">Sign out</button>
+      class="act settings-open"
+      data-agent-id="settings.open"
+      data-state={app.settingsOpen ? "open" : "closed"}
+      aria-haspopup="menu"
+      aria-expanded={app.settingsOpen}
+      onclick={openSettingsAt}
+      title="Settings — theme, notifications, sign out"
+    >⚙</button>
   </span>
 </div>
 
@@ -334,6 +374,17 @@ import Meter from "./Meter.svelte";
   .ctl optgroup {
     background: var(--bg1);
     color: var(--fg);
+  }
+  /* Approval keeps its caution hue as a live control (was a static badge). */
+  .ctl.appr select {
+    color: var(--yellow);
+  }
+  .settings-open {
+    font-size: 1.1em;
+    line-height: 1;
+  }
+  .settings-open[data-state="open"] {
+    color: var(--cyan);
   }
   .truncate {
     overflow: hidden;

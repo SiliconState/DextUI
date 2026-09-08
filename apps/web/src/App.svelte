@@ -11,8 +11,9 @@
     respondGlobal,
     stepSession,
     jumpToOldestPending,
-    toggleNotify,
     requestSessionAction,
+    openSettings,
+    closeSettings,
   } from "./lib/state.svelte";
   import { useSession } from "./lib/useSession.svelte";
   import { useDialog } from "./lib/dialog.svelte";
@@ -33,6 +34,7 @@
   import PackSheet from "./components/PackSheet.svelte";
   import FolderPicker from "./components/FolderPicker.svelte";
   import Providers from "./components/Providers.svelte";
+  import SettingsMenu from "./components/SettingsMenu.svelte";
   import PackCredentials from "./components/PackCredentials.svelte";
   import { packCreds, closePackCredentials } from "./lib/packcreds.svelte";
   import { folders, closeFolderPicker, foldersEnabled, openFolderPicker } from "./lib/folders.svelte";
@@ -59,6 +61,11 @@
   const view = $derived(sess.view);
   const pendingList = $derived(view ? [...view.pending.values()] : []);
   const pendingTotal = $derived(queueTotal());
+
+  function openSettingsAt(e: MouseEvent) {
+    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    openSettings({ top: r.top, bottom: r.bottom, right: window.innerWidth - r.right });
+  }
 
   // Overlay dialogs: focus trap + focus restore for the block inspector and
   // the raw events drawer.
@@ -125,6 +132,7 @@
       dlgCrew.onKey(e);
       if (e.key === "Escape") {
         if (inspect) inspect = null;
+        else if (app.settingsOpen) closeSettings();
         else if (providers.open) closeProviders();
         else if (packCreds.open) closePackCredentials();
         else if (folders.open) closeFolderPicker();
@@ -361,11 +369,13 @@
           <span class="dim">{app.phase}{app.phaseDetail ? ` · ${app.phaseDetail}` : ""}</span>
           <button
             class="act"
-            data-agent-id="notify.toggle"
-            data-state={app.notify}
-            onclick={toggleNotify}
-            title="Notify while the tab is hidden"
-          >Notify:{app.notify}</button
+            data-agent-id="settings.open"
+            data-state={app.settingsOpen ? "open" : "closed"}
+            aria-haspopup="menu"
+            aria-expanded={app.settingsOpen}
+            onclick={openSettingsAt}
+            title="Settings — theme, notifications, sign out"
+          >⚙</button
           >
           <span class="faint sl-min-right">⌘k Finder</span>
         </div>
@@ -426,6 +436,7 @@
 <PackSheet />
 <FolderPicker />
 <Providers />
+<SettingsMenu />
 <PackCredentials />
 <FlowCanvas />
 <Tasks />
