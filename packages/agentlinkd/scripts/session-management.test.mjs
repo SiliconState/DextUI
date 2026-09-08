@@ -67,8 +67,12 @@ async function harness(t, mock = false) {
     const r = await fetch(base + p, { headers: { Authorization: "Bearer session-test" } });
     return { status: r.status, body: await r.json() };
   };
+  const request = (p) => {
+    const token = child.spawnargs.find((arg) => arg.startsWith("--token="))?.slice(8) ?? "";
+    return fetch(base + p, { headers: { Authorization: token } });
+  };
   await start();
-  return { temp, home, state, cwd, client, get, start, stop };
+  return { temp, home, state, cwd, client, request, get, start, stop };
 }
 
 async function open(c) {
@@ -78,6 +82,27 @@ async function open(c) {
   const list = await c.wait((e) => e.event === "session.list" && e.data.sessions.some((s) => !existing.has(s.id) && s.title === "New session"), before);
   return list.data.sessions.find((s) => !existing.has(s.id) && s.title === "New session").id;
 }
+
+test("agentlinkd: session-file headers are valid and non-PDF previews cannot crash the host", { timeout: 30000 }, async (t) => {
+  const h = await harness(t);
+  const c = await h.client();
+  const id = await open(c);
+  fs.writeFileSync(path.join(h.cwd, "notes.txt"), "plain text");
+  fs.writeFileSync(path.join(h.cwd, "report.pdf"), "%PDF-1.4\n");
+  const text = await h.request(`/sessions/${id}/file/notes.txt`);
+  assert.equal(text.status, 200);
+  assert.equal(text.headers.get("content-disposition"), null, "optional header is omitted, never undefined");
+  assert.equal(await text.text(), "plain text");
+
+  const pdf = await h.request(`/sessions/${id}/file/report.pdf`);
+  assert.equal(pdf.status, 200);
+  assert.equal(pdf.headers.get("content-disposition"), "inline");
+  await pdf.arrayBuffer();
+
+  const health = await h.request("/health");
+  assert.equal(health.status, 200, "host survives the non-PDF response");
+  assert.equal((await health.json()).ok, true);
+});
 
 function seedSeat(h, id) {
   const entry = JSON.parse(fs.readFileSync(path.join(h.state, "sessions.json"))).find((s) => s.id === id);

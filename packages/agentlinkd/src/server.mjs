@@ -3282,7 +3282,7 @@ function fileHeaders(mime) {
     "x-content-type-options": "nosniff",
     // PDFs render in the browser's own viewer document (no scripts, opaque to
     // the app); everything else stays under CSP sandbox as before.
-    "content-disposition": pdf ? "inline" : undefined,
+    ...(pdf ? { "content-disposition": "inline" } : {}),
     "content-security-policy": html
       ? "default-src 'none'; style-src 'unsafe-inline'; img-src * data: blob:; script-src 'unsafe-inline'; font-src data:; sandbox allow-scripts"
       : pdf
@@ -3307,7 +3307,7 @@ function serveSessionFile(s, rel, req, res) {
   stream.pipe(res);
 }
 
-const server = http.createServer(async (req, res) => {
+async function handleHttp(req, res) {
   const pathName = new URL(req.url, "http://localhost").pathname;
   if (pathName === "/health") {
     res.writeHead(200, { "content-type": "application/json" });
@@ -3536,6 +3536,21 @@ const server = http.createServer(async (req, res) => {
   }
   res.writeHead(200, { "content-type": MIME[path.extname(file)] ?? "application/octet-stream" });
   res.end(fs.readFileSync(file));
+}
+
+// A bad individual HTTP request must never take down every WebSocket session.
+// Async route failures are otherwise unhandled rejections under modern Node.
+const server = http.createServer((req, res) => {
+  void handleHttp(req, res).catch((err) => {
+    console.error(`agentlinkd: HTTP request failed: ${String(err?.message ?? err)}`);
+    if (res.writableEnded) return;
+    if (res.headersSent) {
+      res.destroy();
+      return;
+    }
+    res.writeHead(500, { "content-type": "application/json", connection: "close" });
+    res.end(JSON.stringify({ error: "internal_error" }));
+  });
 });
 
 // ---------- WS ----------
