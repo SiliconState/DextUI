@@ -14,6 +14,7 @@
     requestSessionAction,
     openSettings,
     closeSettings,
+    closeSessionCtl,
   } from "./lib/state.svelte";
   import { useSession } from "./lib/useSession.svelte";
   import { useDialog } from "./lib/dialog.svelte";
@@ -35,6 +36,8 @@
   import FolderPicker from "./components/FolderPicker.svelte";
   import Providers from "./components/Providers.svelte";
   import SettingsMenu from "./components/SettingsMenu.svelte";
+  import SessionControls from "./components/SessionControls.svelte";
+  import ArtifactSheet from "./components/ArtifactSheet.svelte";
   import PackCredentials from "./components/PackCredentials.svelte";
   import { packCreds, closePackCredentials } from "./lib/packcreds.svelte";
   import { folders, closeFolderPicker, foldersEnabled, openFolderPicker } from "./lib/folders.svelte";
@@ -45,6 +48,7 @@
   import { openTasks } from "./lib/tasks.svelte";
   import { crew, closeRun, crewLive, openRun } from "./lib/crew.svelte";
   import { packSheet, closePackSheet, closePackPanel } from "./lib/packsheet.svelte";
+  import { artifact, closeArtifact } from "./lib/artifact.svelte";
 
   let tokenInput = $state("");
   let inspect: ViewBlock | null = $state(null);
@@ -93,7 +97,9 @@
   });
   $effect(() => {
     void app.hostEpoch;
+    void app.activeId;
     inspect = null; // never retain raw transcript content after purge/clear
+    closeArtifact(); // artifact URLs are scoped to the previous host/session
   });
 
   // Never carry an open off-canvas drawer across the desktop breakpoint.
@@ -131,7 +137,9 @@
       dlgGallery.onKey(e);
       dlgCrew.onKey(e);
       if (e.key === "Escape") {
-        if (inspect) inspect = null;
+        if (artifact.document) closeArtifact();
+        else if (inspect) inspect = null;
+        else if (app.sessionCtlOpen) closeSessionCtl();
         else if (app.settingsOpen) closeSettings();
         else if (providers.open) closeProviders();
         else if (packCreds.open) closePackCredentials();
@@ -175,7 +183,7 @@
       }
       // The run sheet owns its keys (j/k/x/a…) so the global a/s/d and
       // hero-typing handlers below never see them while it is open.
-      if (app.paletteOpen || app.shortcutsOpen || inspect || app.eventsOpen || app.galleryOpen || packSheet.open || crew.openId || folders.open || flows.open || packCreds.open) return;
+      if (app.paletteOpen || app.shortcutsOpen || artifact.document || inspect || app.eventsOpen || app.galleryOpen || packSheet.open || crew.openId || folders.open || flows.open || packCreds.open) return;
       const editing = e.target instanceof HTMLElement && (e.target.matches("input, textarea") || e.target.isContentEditable);
       if (!editing && app.activeId && (e.ctrlKey || e.metaKey) && e.key === "Backspace") {
         e.preventDefault();
@@ -433,10 +441,12 @@
   </div>
 {/if}
 
+<ArtifactSheet />
 <PackSheet />
 <FolderPicker />
 <Providers />
 <SettingsMenu />
+{#if view}<SessionControls {view} />{/if}
 <PackCredentials />
 <FlowCanvas />
 <Tasks />

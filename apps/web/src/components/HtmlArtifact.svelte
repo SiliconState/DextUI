@@ -1,140 +1,81 @@
 <script lang="ts">
-  import { currentResolvedTheme } from "../lib/state.svelte";
+  // Durable chat-side handle for an interactive HTML report. The document does
+  // not compete with the transcript for width/height; it opens in ArtifactSheet
+  // while this launcher remains at the exact point the agent delivered it.
+  import { artifact, openArtifact } from "../lib/artifact.svelte";
 
-  // Sandboxed HTML preview card: model-emitted ```html fences (srcdoc) and
-  // workspace .html files (src) share one surface. The frame is opaque-origin
-  // (sandbox without allow-same-origin), so embedded scripts can run but never
-  // touch the app's DOM, storage, or token. A tiny probe is injected into
-  // srcdoc documents to report their height so the card fits without a
-  // scrollbar; file artifacts get a fixed, user-resizable height.
   let {
     src,
     html,
     name,
     code,
-  }: { src?: string; html?: string; name: string; code?: string } = $props();
+    sessionId = "",
+  }: { src?: string; html?: string; name: string; code?: string; sessionId?: string } = $props();
 
-  let mode = $state<"preview" | "code">("preview");
-  let frame = $state<HTMLIFrameElement | null>(null);
-  let fitH = $state<number | null>(null);
+  const selected = $derived(
+    !!artifact.document &&
+      artifact.document.name === name &&
+      artifact.document.src === src &&
+      artifact.document.html === html,
+  );
 
-  const MIN_H = 120;
-  const MAX_H = 1400;
-
-  // Theme bootstrap: tags the doc with <html data-theme> from the app's
-  // resolved theme. Whitelisted values only — no other input is reflected.
-  // Pairs with the artifact-theming contract (DESIGN.md): theme-aware docs
-  // style :root[data-theme="dark"] and fall back to prefers-color-scheme.
-  const themeBoot = (t: "dark" | "light") =>
-    `<script>try{document.documentElement.dataset.theme="${t}"}catch(e){}<\/script>`;
-
-  // Height probe — posts scrollHeight on load, resize, and DOM mutation.
-  const PROBE = `<script>(function(){var p=parent,l=0;function r(){var h=Math.max(document.documentElement.scrollHeight,document.body?document.body.scrollHeight:0);if(h!==l){l=h;p.postMessage({dextArtifactHeight:h},"*")}}addEventListener("load",r);addEventListener("resize",r);new MutationObserver(r).observe(document.documentElement,{subtree:true,childList:true,attributes:true});setTimeout(r,0);setTimeout(r,300)})()<\/script>`;
-
-  const doc = $derived.by(() => {
-    if (html === undefined) return undefined;
-    const scheme = `<meta name="color-scheme" content="light dark">`;
-    // Read inside the derivation → srcdoc iframes re-render on theme toggle.
-    const boot = themeBoot(currentResolvedTheme());
-    // Full documents keep their own <head>; fragments get a minimal shell so
-    // fonts/colors follow the app rather than the UA defaults.
-    if (/<html[\s>]/i.test(html)) {
-      return /<head[\s>]/i.test(html) ? html.replace(/<head([^>]*)>/i, `<head$1>${scheme}${boot}${PROBE}`) : html.replace(/<html([^>]*)>/i, `<html$1><head>${scheme}${boot}${PROBE}</head>`);
-    }
-    return `<!doctype html><html><head>${scheme}${boot}${PROBE}<style>body{margin:8px;font:13px/1.45 system-ui,sans-serif;color:light-dark(#242830,#c8cfd9);background:light-dark(#f4f2ec,#0b0d10)}</style></head><body>${html}</body></html>`;
-  });
-
-  $effect(() => {
-    const el = frame;
-    if (!el || html === undefined) return;
-    const onMsg = (e: MessageEvent) => {
-      if (e.source !== el.contentWindow) return;
-      const h = (e.data as { dextArtifactHeight?: unknown })?.dextArtifactHeight;
-      if (typeof h === "number" && Number.isFinite(h)) fitH = Math.max(MIN_H, Math.min(MAX_H, Math.ceil(h) + 2));
-    };
-    addEventListener("message", onMsg);
-    return () => removeEventListener("message", onMsg);
-  });
-
-  const codeText = $derived(code ?? html ?? "");
+  function open() {
+    openArtifact({ src, html, name, code, sessionId });
+  }
 </script>
 
-<span class="art" data-agent-id="markdown.artifact" data-state={mode}>
-  <span class="art-head">
-    <span class="st-cyan">▤ artifact</span>
-    <span class="dim art-name">{name}</span>
-    {#if codeText}
-      <button class="act" class:on={mode === "preview"} onclick={() => (mode = "preview")}>Preview</button>
-      <button class="act" class:on={mode === "code"} onclick={() => (mode = "code")}>Code</button>
-    {/if}
-    {#if src}<a class="act" href={src} target="_blank" rel="noopener noreferrer">open ↗</a>{/if}
+<div class="art" data-agent-id="markdown.artifact" data-state={selected ? "open" : "ready"}>
+  <span class="mark" aria-hidden="true">▤</span>
+  <span class="copy">
+    <span class="kind">Interactive report</span>
+    <span class="name" title={name}>{name}</span>
   </span>
-  {#if mode === "code"}
-    <pre class="art-code">{codeText}</pre>
-  {:else if src}
-    <!-- Remount on theme flip: the fresh document re-fetches with the new
-         &theme= and can never sit on pre-contract bits after a deploy. -->
-    {#key currentResolvedTheme()}
-      <iframe sandbox="allow-scripts" loading="lazy" title={name} {src} class="fixed"></iframe>
-    {/key}
-  {:else}
-    <iframe bind:this={frame} sandbox="allow-scripts" title={name} srcdoc={doc} style:height={fitH ? `${fitH}px` : undefined} class:fit={fitH !== null}></iframe>
-  {/if}
-</span>
+  <button class="act open" data-agent-id="markdown.artifact.open" onclick={open}>{selected ? "View report" : "Open report"} →</button>
+  {#if src}<a class="act external" href={src} target="_blank" rel="noopener noreferrer" title="Open in a new tab">↗</a>{/if}
+</div>
 
 <style>
   .art {
     display: flex;
-    flex-direction: column;
-    width: 100%;
-    max-width: 100%;
+    align-items: center;
+    gap: 9px;
+    width: min(100%, 38rem);
+    padding: 7px 9px;
     border: 1px solid var(--line);
+    border-left: 2px solid var(--cyan);
     background: var(--bg1);
   }
-  .art-head {
-    display: flex;
-    gap: 8px;
-    align-items: center;
-    border-bottom: 1px solid var(--line);
-    padding: 3px 8px;
+  .art[data-state="open"] {
+    background: var(--bg2);
   }
-  .art-name {
+  .mark {
+    color: var(--cyan);
+    font-size: 15px;
+  }
+  .copy {
+    min-width: 0;
     flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+  }
+  .kind {
+    color: var(--fg);
+    font-size: 11.5px;
+  }
+  .name {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    font-size: 11.5px;
+    color: var(--faint);
+    font-size: 10.5px;
   }
-  .art-head .act.on {
-    color: var(--fg);
-    text-decoration: underline;
+  .open {
+    flex: none;
+    color: var(--cyan);
   }
-  iframe {
-    display: block;
-    width: 100%;
-    height: 360px;
-    border: 0;
-    /* Embeds track the app two ways: `color-scheme` inherits from <html>, so
-       a page using prefers-color-scheme follows our theme, not just the OS;
-       and file URLs carry &theme= (srcdoc docs get data-theme injected) for
-       param-aware docs — see DESIGN.md's artifact-theming contract. */
-    background: var(--bg);
-    color-scheme: inherit;
-  }
-  iframe.fixed {
-    height: 560px;
-    resize: vertical;
-    overflow: auto;
-    min-height: 120px;
-  }
-  .art-code {
-    margin: 0;
-    padding: 6px 8px;
-    max-height: 420px;
-    overflow: auto;
-    font-size: 11.5px;
-    line-height: 1.4;
-    color: var(--dim);
-    white-space: pre;
+  .external {
+    flex: none;
+    color: var(--faint);
   }
 </style>

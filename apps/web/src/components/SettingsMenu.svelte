@@ -7,6 +7,7 @@
   import type { Theme } from "../lib/state.svelte";
   import { app, setTheme, closeSettings, toggleNotify, rePair } from "../lib/state.svelte";
   import { openProviders, providersEnabled } from "../lib/connectors.svelte";
+  import { popoverPos } from "../lib/popover";
   import { useDialog } from "../lib/dialog.svelte";
 
   const dlg = useDialog(() => app.settingsOpen);
@@ -18,18 +19,9 @@
     { value: "dark", label: "Dark" },
   ];
 
-  // Anchor away from the nearest edge: a bottom bar opens upward, a top bar
-  // downward, both right-aligned to the trigger. No anchor → bottom-right.
-  const posStyle = $derived.by(() => {
-    const a = app.settingsAnchor;
-    const gap = 6;
-    if (!a) return "right:12px;bottom:46px;";
-    const vh = window.innerHeight;
-    const right = Math.max(8, a.right);
-    return a.top > vh / 2
-      ? `right:${right}px;bottom:${vh - a.top + gap}px;`
-      : `right:${right}px;top:${a.bottom + gap}px;`;
-  });
+  // Anchored away from the nearest edge by the shared popover geometry
+  // (menu is 15rem wide); no anchor → bottom-right corner.
+  const posStyle = $derived(popoverPos(app.settingsAnchor, 240));
 
   const notifyLabel = $derived(app.notify === "on" ? "On" : app.notify === "blocked" ? "Blocked" : "Off");
 

@@ -360,6 +360,10 @@ const MD_DEMO = process.env.MOCK_MARKDOWN_FILE ? fs.readFileSync(process.env.MOC
 
 Structured agent output renders as **real HTML**, not wrapped monospace:
 
+\`\`\`html
+<!doctype html><html><body><h2>Interactive report demo</h2><label>Load <input type="range" min="1" max="10" value="4"></label><p>This report runs in the sandboxed artifact sheet.</p></body></html>
+\`\`\`
+
 | Option | Cost | Risk | Verdict |
 |:-------|-----:|:----:|:--------|
 | Literal TUI clone | $0 | high | ✗ tables shred on wrap |

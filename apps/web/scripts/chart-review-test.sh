@@ -65,8 +65,16 @@ SRV=$!
 "${B[@]}" click '[data-agent-id="connect.submit"]' >/dev/null
 "${B[@]}" wait '[data-agent-id="session.new"]' >/dev/null
 "${B[@]}" eval 'document.querySelector(`[data-agent-id="persona.skip"]`)?.click()' >/dev/null
-"${B[@]}" click '[data-agent-id="session.new"]' >/dev/null
-"${B[@]}" wait '[data-agent-id="composer.input"]' >/dev/null
+# session.new can silently no-op right after login/persona teardown (the
+# click lands but no session appears) — the same known gap browser-test.sh
+# retries around; retry until the composer shows.
+n=0
+while true; do
+  "${B[@]}" click '[data-agent-id="session.new"]' >/dev/null 2>&1 || true
+  if "${B[@]}" wait --timeout 3000 '[data-agent-id="composer.input"]' >/dev/null 2>&1; then break; fi
+  n=$((n + 1))
+  [ "$n" -ge 5 ] && { echo 'FAIL: composer after session.new'; exit 1; }
+done
 "${B[@]}" fill '[data-agent-id="composer.input"]' 'markdown demo' >/dev/null
 "${B[@]}" press Enter >/dev/null
 N=${REPORT_CHARTS:-6}

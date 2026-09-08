@@ -92,8 +92,8 @@
       {:else if !sessionId || !canFiles}
         <code class="ic">{tk.href}</code>
       {:else if isHtmlArtifact(tk.href)}
-        <!-- HTML artifact: self-contained dashboard in a sandboxed opaque-origin frame -->
-        <HtmlArtifact src={fileUrl(tk.href, { theme: true })} name={tk.s || prettyPath(tk.href, sessCwd)} />
+        <!-- HTML artifact: compact history launcher; report opens in the shared inspector. -->
+        <HtmlArtifact src={fileUrl(tk.href, { theme: true })} name={tk.s || prettyPath(tk.href, sessCwd)} {sessionId} />
       {:else if isPdfPath(tk.href)}
         <!-- workspace PDF: the browser's own viewer, served inline by the host -->
         <div class="md-chartbox" data-agent-id="markdown.pdf">
@@ -215,9 +215,9 @@
         </div>
       {/if}
     {:else if b.kind === "html"}
-      <!-- inline markup from a ```html/```svg fence: sandboxed srcdoc frame with a code toggle -->
+      <!-- inline markup from a ```html/```svg fence: sandboxed in the artifact inspector -->
       <div class="md-chartbox" data-agent-id="markdown.html">
-        <HtmlArtifact html={b.text} name={b.lang === "svg" ? "inline svg" : "inline html"} />
+        <HtmlArtifact html={b.text} name={b.lang === "svg" ? "inline svg" : "inline html"} {sessionId} />
       </div>
     {:else if b.kind === "chart"}
       <!-- interactive: hover, zoom/pan, drag-to-edit with live stats, sort,

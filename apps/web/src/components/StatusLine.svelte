@@ -4,8 +4,7 @@
 // The context meter is a themed segmented component (Meter.svelte), not font glyphs.
 import Meter from "./Meter.svelte";
   import type { SessionStore } from "@dextui/client";
-  import type { ThinkingEffort } from "@dextui/protocol";
-  import { app, openSettings, toggleSidebar, queueTotal, jumpToOldestPending } from "../lib/state.svelte";
+  import { app, openSettings, openSessionCtl, toggleSidebar, queueTotal, jumpToOldestPending } from "../lib/state.svelte";
   import { connectorFor, connectors, pushConnector, syncConnector } from "../lib/connectors.svelte";
   import { crew, crewLive, crewDur, crewAge, openRun, shortRun } from "../lib/crew.svelte";
   import { selfEdit, cancelRestart } from "../lib/selfedit.svelte";
@@ -78,60 +77,25 @@ import Meter from "./Meter.svelte";
           : "st-faint",
   );
 
-  const modelValue = $derived(view.provider && view.model ? `${view.provider}\u001f${view.model}` : "");
-  const canSelectModel = $derived(
-    app.phase === "live" &&
-      app.caps.includes("model_select") &&
-      view.status === "live" &&
-      !view.working && !view.modelLocked && app.modelCatalog.length > 0,
+  // One chip for the session's runtime controls — model · effort · approval —
+  // which live in a popover (SessionControls), so the bar reads as status,
+  // not a toolbar. The chip stays glanceable: current model, ⌁ when locked;
+  // plain text only when nothing is configurable at all.
+  const hasSessionCtl = $derived(
+    (app.caps.includes("model_select") && app.modelCatalog.length > 0) ||
+      (app.caps.includes("effort_select") && app.effortOptions.length > 0) ||
+      !!view.approvalProfile,
   );
-  // With the bridge (steering.live), /effort is a runtime control dext applies
-  // mid-turn, so the selector stays enabled while working.
-  const liveEffort = $derived(app.caps.includes("steering.live"));
-  const canSelectEffort = $derived(
-    app.phase === "live" &&
-      app.caps.includes("effort_select") &&
-      view.status === "live" &&
-      (liveEffort || !view.working) && app.effortOptions.length > 0,
+  const chipLabel = $derived(
+    [view.model || "Session", view.thinkingEffort].filter(Boolean).join(" · "),
+  );
+  const chipTitle = $derived(
+    `Session — model: ${view.model ?? "—"} · effort: ${view.thinkingEffort ?? "medium"} · approval: ${view.approvalProfile ?? "—"}`,
   );
 
-  function selectModel(e: Event) {
-    const raw = (e.currentTarget as HTMLSelectElement).value;
-    const split = raw.indexOf("\u001f");
-    if (split < 1) return;
-    const provider = raw.slice(0, split);
-    const model = raw.slice(split + 1);
-    app.conn?.configureSession(view.id, { provider, model });
-  }
-
-  function selectEffort(e: Event) {
-    const thinking_effort = (e.currentTarget as HTMLSelectElement).value as ThinkingEffort;
-    app.conn?.configureSession(view.id, { thinking_effort });
-  }
-
-  // Approval: what dext may do without asking. Redefined from a static yellow
-  // badge into a live control consistent with model/effort — the graded
-  // spectrum plus whatever the session actually holds (e.g. always/never). The
-  // host defers /approval during a live turn, so it applies from the next turn.
-  const APPROVAL_LABELS: Record<string, string> = {
-    ask: "Ask each time",
-    "auto-read": "Auto reads",
-    "auto-write": "Auto edits",
-    always: "Approve all",
-    never: "Deny all",
-  };
-  const canSetApproval = $derived(
-    app.phase === "live" && app.caps.includes("slash.approval") && view.status === "live",
-  );
-  const approvalOptions = $derived.by(() => {
-    const base = ["ask", "auto-read", "auto-write"];
-    const cur = view.approvalProfile;
-    const list = cur && !base.includes(cur) ? [cur, ...base] : base;
-    return list.map((v) => ({ value: v, label: APPROVAL_LABELS[v] ?? v }));
-  });
-  function selectApproval(e: Event) {
-    const v = (e.currentTarget as HTMLSelectElement).value;
-    if (v && v !== view.approvalProfile) app.conn?.slash(view.id, `/approval ${v}`);
+  function openSessionCtlAt(e: MouseEvent) {
+    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    openSessionCtl({ top: r.top, bottom: r.bottom, right: window.innerWidth - r.right });
   }
 
   function openSettingsAt(e: MouseEvent) {
@@ -180,68 +144,20 @@ import Meter from "./Meter.svelte";
     <span class="sep">|</span>
     <span class="dim truncate">{view.title}</span>
   {/if}
-  {#if app.caps.includes("model_select") && app.modelCatalog.length > 0}
+  {#if hasSessionCtl}
     <span class="sep">│</span>
-    <label class="ctl" title={view.modelLocked ? "Model is fixed once this session has history. Start a new session to change it." : app.caps.includes("model_switch") ? "Model for the next turn; history is kept" : "Model for this session's first turn"}>
-      <span class="faint">Model:</span>
-      <select
-        value={modelValue}
-        onchange={selectModel}
-        onfocus={() => app.conn?.authStatus()}
-        disabled={!canSelectModel}
-        data-agent-id="status.model.select"
-        data-state={view.modelLocked ? "locked" : canSelectModel ? "ready" : "disabled"}
-      >
-        {#each app.modelCatalog as group (group.provider)}
-          <optgroup label={group.label ? `${group.label} (${group.provider})` : group.provider}>
-            {#each group.models as model (model)}
-              <option value={`${group.provider}\u001f${model}`}>{model}</option>
-            {/each}
-          </optgroup>
-        {/each}
-      </select>
-      {#if view.modelLocked}<span class="faint">⌁</span>{/if}
-    </label>
+    <button
+      class="act ctl-chip"
+      data-agent-id="status.controls"
+      data-state={app.sessionCtlOpen ? "open" : "closed"}
+      aria-haspopup="dialog"
+      aria-expanded={app.sessionCtlOpen}
+      onclick={openSessionCtlAt}
+      title={chipTitle}
+    >{chipLabel}{#if view.modelLocked}<span class="faint lock" title="Model fixed for this session">⌁</span>{/if} <span class="faint" aria-hidden="true">▾</span></button>
   {:else if view.model}
     <span class="sep">│</span>
     <span class="st-cyan" data-agent-id="status.model">{view.model}</span>
-  {/if}
-  {#if app.caps.includes("effort_select") && app.effortOptions.length > 0}
-    <span class="sep">│</span>
-    <label class="ctl" title="Reasoning effort for the next turn">
-      <span class="faint">Effort:</span>
-      <select
-        value={view.thinkingEffort ?? "medium"}
-        onchange={selectEffort}
-        disabled={!canSelectEffort}
-        data-agent-id="status.effort.select"
-        data-state={canSelectEffort ? "ready" : "disabled"}
-      >
-        {#each app.effortOptions as effort (effort)}
-          <option value={effort}>{effort}</option>
-        {/each}
-      </select>
-    </label>
-  {/if}
-  {#if view.approvalProfile}
-    <span class="sep">│</span>
-    {#if canSetApproval}
-      <label class="ctl appr" title="What dext may do without asking — applies from the next turn">
-        <span class="faint">Approval:</span>
-        <select
-          value={view.approvalProfile}
-          onchange={selectApproval}
-          data-agent-id="status.approval.select"
-          data-state="ready"
-        >
-          {#each approvalOptions as opt (opt.value)}
-            <option value={opt.value}>{opt.label}</option>
-          {/each}
-        </select>
-      </label>
-    {:else}
-      <span class="st-yellow" data-agent-id="status.profile" title="Approval profile — {view.approvalProfile}">Approval:{APPROVAL_LABELS[view.approvalProfile] ?? view.approvalProfile}</span>
-    {/if}
   {/if}
   {#if ticker}
     <span class="sep">│</span>
@@ -349,35 +265,19 @@ import Meter from "./Meter.svelte";
     color: var(--faint);
     flex-shrink: 0;
   }
-  .ctl {
-    display: inline-flex;
-    align-items: baseline;
-    gap: 2px;
-    flex-shrink: 0;
-  }
-  .ctl select {
-    appearance: auto;
-    border: 0;
-    background: transparent;
+  .ctl-chip {
     color: var(--cyan);
-    font: inherit;
-    padding: 0;
-    max-width: 20ch;
-    cursor: pointer;
+    max-width: 26ch;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex-shrink: 1;
   }
-  .ctl select:disabled {
-    color: var(--dim);
-    cursor: default;
-    opacity: 1;
+  .ctl-chip .lock {
+    margin-left: 3px;
   }
-  .ctl option,
-  .ctl optgroup {
-    background: var(--bg1);
+  .ctl-chip[data-state="open"] {
     color: var(--fg);
-  }
-  /* Approval keeps its caution hue as a live control (was a static badge). */
-  .ctl.appr select {
-    color: var(--yellow);
   }
   .settings-open {
     font-size: 1.1em;
@@ -438,6 +338,9 @@ import Meter from "./Meter.svelte";
     }
     .truncate {
       max-width: 90px;
+    }
+    .ctl-chip {
+      max-width: 16ch;
     }
   }
   .crew-tick { white-space: nowrap; }

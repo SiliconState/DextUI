@@ -45,9 +45,3 @@ export const isTextPath = (p: string): boolean => /\.(txt|md|csv|json)$/i.test(p
 /** Extensions the host's files_read endpoint serves — previewable/openable. */
 export const servablePath = (p: string): boolean =>
   /\.(png|jpe?g|gif|webp|svg|html?|pdf|txt|md|csv|json)$/i.test(p);
-
-/** First .html/.htm path in a tool summary such as `write_file · /work/x.html (new file)`. */
-export function htmlPathIn(text: string): string | null {
-  const m = /(?:file:\/\/)?(?:\/|~\/|\.{1,2}\/|[\w.-]+\/)[^\s"'`()<>]*\.html?\b/i.exec(text);
-  return m ? m[0] : null;
-}

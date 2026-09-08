@@ -47,6 +47,11 @@ export const app = $state({
   /** Viewport rect of the trigger, so the popover anchors to it and opens
    *  away from the nearest edge; null → default bottom-right corner. */
   settingsAnchor: null as { top: number; bottom: number; right: number } | null,
+  /** Session-controls popover (model · effort · approval): the session's
+   *  runtime controls behind one status-bar chip. Mutually exclusive with the
+   *  settings popover — one status-bar menu at a time. */
+  sessionCtlOpen: false,
+  sessionCtlAnchor: null as { top: number; bottom: number; right: number } | null,
   sidebarCollapsed: false,
   theme: "dark" as Theme,
   /** Resolved (never "system") — drives <html data-theme>. "dim" is a
@@ -364,6 +369,8 @@ export function setTheme(t: Theme): void {
 /** Open the settings popover, anchored to the trigger's viewport rect so it
  *  opens away from the nearest edge; pass nothing to fall back to the corner. */
 export function openSettings(anchor?: { top: number; bottom: number; right: number }): void {
+  app.sessionCtlOpen = false;
+  app.sessionCtlAnchor = null;
   app.settingsAnchor = anchor ?? null;
   app.settingsOpen = true;
 }
@@ -371,6 +378,21 @@ export function openSettings(anchor?: { top: number; bottom: number; right: numb
 export function closeSettings(): void {
   app.settingsOpen = false;
   app.settingsAnchor = null;
+}
+
+/** Open the session-controls popover (model · effort · approval), anchored to
+ *  the chip's viewport rect so it opens away from the nearest edge; pass
+ *  nothing to fall back to the corner (Finder entry). */
+export function openSessionCtl(anchor?: { top: number; bottom: number; right: number }): void {
+  app.settingsOpen = false;
+  app.settingsAnchor = null;
+  app.sessionCtlAnchor = anchor ?? null;
+  app.sessionCtlOpen = true;
+}
+
+export function closeSessionCtl(): void {
+  app.sessionCtlOpen = false;
+  app.sessionCtlAnchor = null;
 }
 
 /** Resolved app theme collapsed to the binary artifact-theming contract

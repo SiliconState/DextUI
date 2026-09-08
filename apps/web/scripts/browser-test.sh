@@ -60,6 +60,19 @@ H2=$(agent-browser eval 'Math.round(parseFloat(document.querySelector(`[data-age
 echo "height after send: $H2"
 [ "$H2" -le 30 ] || { echo "FAIL: height reset after send"; FAIL=1; }
 
+note "session controls are scoped, compact, and mutually exclusive with settings"
+agent-browser click '[data-agent-id="status.controls"]' >/dev/null
+agent-browser wait '[data-agent-id="session.controls.overlay"]' >/dev/null
+wait_js 'document.querySelector(`[data-agent-id="session.controls.overlay"]`)?.textContent.includes("This session") && document.querySelector(`[data-agent-id="session.controls.overlay"]`)?.textContent.includes("Thinking") && document.querySelector(`[data-agent-id="session.controls.overlay"]`)?.textContent.includes("Permissions")' || { echo "FAIL: session controls labels"; FAIL=1; }
+agent-browser click '[data-agent-id="session.controls.scrim"]' >/dev/null
+wait_js '!document.querySelector(`[data-agent-id="session.controls.overlay"]`)' || { echo "FAIL: session controls stayed open"; FAIL=1; }
+agent-browser click '[data-agent-id="settings.open"]' >/dev/null
+agent-browser wait '[data-agent-id="settings.overlay"]' >/dev/null
+agent-browser eval 'document.querySelector(`[data-agent-id="status.controls"]`)?.click()' >/dev/null
+agent-browser wait '[data-agent-id="session.controls.overlay"]' >/dev/null
+wait_js '!document.querySelector(`[data-agent-id="settings.overlay"]`)' || { echo "FAIL: status popovers overlap"; FAIL=1; }
+agent-browser click '[data-agent-id="session.controls.scrim"]' >/dev/null
+
 note "charts render and follow theme via settings menu (echo session — fixture sessions replay canned text)"
 agent-browser click '[data-agent-id="session.new"]' >/dev/null
 agent-browser wait '[data-agent-id="composer.input"]' >/dev/null
@@ -67,6 +80,16 @@ sleep 0.8
 agent-browser fill '[data-agent-id="composer.input"]' 'markdown demo' >/dev/null
 agent-browser press Enter >/dev/null
 wait_js 'document.querySelectorAll(`.chart-wrap`).length >= 3' || { echo "FAIL: charts"; FAIL=1; }
+wait_js '!!document.querySelector(`[data-agent-id="markdown.artifact.open"]`)' || { echo "FAIL: artifact launcher"; FAIL=1; }
+agent-browser click '[data-agent-id="markdown.artifact.open"]' >/dev/null
+agent-browser wait '[data-agent-id="artifact.overlay"]' >/dev/null
+wait_js '!!document.querySelector(`[data-agent-id="artifact.frame"]`) && document.querySelectorAll(`[data-agent-id="markdown.artifact"] iframe`).length === 0' || { echo "FAIL: artifact should render only in inspector"; FAIL=1; }
+agent-browser click '[data-agent-id="artifact.code"]' >/dev/null
+wait_js 'document.querySelector(`[data-agent-id="artifact.source"]`)?.textContent.includes("Interactive report demo")' || { echo "FAIL: artifact source view"; FAIL=1; }
+agent-browser click '[data-agent-id="artifact.report"]' >/dev/null
+wait_js '!!document.querySelector(`[data-agent-id="artifact.frame"]`)' || { echo "FAIL: artifact report view"; FAIL=1; }
+agent-browser press Escape >/dev/null
+wait_js '!document.querySelector(`[data-agent-id="artifact.overlay"]`) && !!document.querySelector(`[data-agent-id="markdown.artifact.open"]`)' || { echo "FAIL: artifact history link/close"; FAIL=1; }
 sleep 1.5
 # Theme is an explicit choice in the settings menu now, not a blind cycle.
 CHART1='getComputedStyle(document.documentElement).getPropertyValue("--chart-1").trim()'

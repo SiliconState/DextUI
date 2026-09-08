@@ -6,6 +6,7 @@
     activate,
     newSession,
     openSettings,
+    openSessionCtl,
     copyText,
     rePair,
     queue,
@@ -167,6 +168,15 @@
       group: "app",
       run: () => openSettings(),
     });
+    if (view) {
+      out.push({
+        slug: "session.controls",
+        label: "Session controls — model, thinking, permissions",
+        hint: view.model,
+        group: "sess",
+        run: () => openSessionCtl(),
+      });
+    }
     out.push({ slug: "pair.reset", label: "Sign out of this device", hint: "Forgets the access code", group: "app", run: rePair });
     if (providersEnabled()) out.push({ slug: "providers.open", label: "Providers — sign in to a model vendor", hint: "API key", group: "app", run: openProviders });
     if (selfEditEnabled()) {
