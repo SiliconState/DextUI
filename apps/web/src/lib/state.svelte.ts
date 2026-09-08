@@ -13,7 +13,7 @@ import { onFlowsControl } from "./flows.svelte";
 import { onTasksControl } from "./tasks.svelte";
 import { packTitle } from "./display";
 
-export type Theme = "dark" | "light" | "system";
+export type Theme = "dark" | "dim" | "light" | "system";
 export type NotifyState = "on" | "off" | "blocked";
 export type SessionAction = { kind: "rename" | "clear" | "delete"; id: string } | { kind: "bulk"; scope: "all" | "cold" };
 
@@ -44,8 +44,9 @@ export const app = $state({
   eventsOpen: false,
   sidebarCollapsed: false,
   theme: "dark" as Theme,
-  /** Resolved (never "system") — artifact URLs and srcdoc bootstrap read it. */
-  resolvedTheme: "dark" as "dark" | "light",
+  /** Resolved (never "system") — drives <html data-theme>. "dim" is a
+   *  dark-family variant; artifact consumers collapse it to "dark". */
+  resolvedTheme: "dark" as "dark" | "dim" | "light",
   toasts: [] as Toast[],
   /** Desktop notifications. "blocked" is derived from the browser permission
    *  state, never persisted. */
@@ -325,7 +326,7 @@ export function dismissToast(id: number): void {
 
 const sysDark = matchMedia("(prefers-color-scheme: dark)");
 
-function resolveTheme(t: Theme): "dark" | "light" {
+function resolveTheme(t: Theme): "dark" | "dim" | "light" {
   if (t === "system") return sysDark.matches ? "dark" : "light";
   return t;
 }
@@ -337,20 +338,21 @@ function applyTheme(t: Theme): void {
   // Keep installed-PWA/browser chrome in sync with the resolved scheme.
   document.querySelector<HTMLMetaElement>('meta[name="theme-color"]')?.setAttribute(
     "content",
-    resolved === "dark" ? "#0b0d10" : "#f4f2ec",
+    resolved === "light" ? "#f4f2ec" : resolved === "dim" ? "#1b1f27" : "#0b0d10",
   );
 }
 
-/** dark → light → system → dark */
+/** dark → dim → light → system → dark */
 export function toggleTheme(): void {
-  app.theme = app.theme === "dark" ? "light" : app.theme === "light" ? "system" : "dark";
+  app.theme = app.theme === "dark" ? "dim" : app.theme === "dim" ? "light" : app.theme === "light" ? "system" : "dark";
   localStorage.setItem("dextui.theme", app.theme);
   applyTheme(app.theme);
 }
 
-/** Resolved app theme (never "system") for artifact URL/srcdoc consumers. */
+/** Resolved app theme collapsed to the binary artifact-theming contract
+ *  (dim → dark) for artifact URL/srcdoc consumers — see DESIGN.md. */
 export function currentResolvedTheme(): "dark" | "light" {
-  return app.resolvedTheme;
+  return app.resolvedTheme === "light" ? "light" : "dark";
 }
 
 export async function copyText(text: string, what = "Copied"): Promise<void> {
@@ -376,7 +378,7 @@ export function ensureStarted(): void {
   if (started) return;
   started = true;
   const stored = localStorage.getItem("dextui.theme");
-  const theme: Theme = stored === "dark" || stored === "light" || stored === "system" ? stored : "system";
+  const theme: Theme = stored === "dark" || stored === "dim" || stored === "light" || stored === "system" ? stored : "system";
   app.theme = theme;
   app.sidebarCollapsed = localStorage.getItem("dextui.sidebarCollapsed") === "1";
   const storedNotify = localStorage.getItem("dextui.notify");

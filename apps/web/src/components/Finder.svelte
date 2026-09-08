@@ -162,7 +162,7 @@
     });
     out.push({
       slug: "theme.toggle",
-      label: `Theme: ${app.theme} → ${app.theme === "dark" ? "light" : app.theme === "light" ? "system" : "dark"}`,
+      label: `Theme: ${app.theme} → ${app.theme === "dark" ? "dim" : app.theme === "dim" ? "light" : app.theme === "light" ? "system" : "dark"}`,
       group: "app",
       run: toggleTheme,
     });

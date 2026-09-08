@@ -60,6 +60,37 @@ html[data-theme="light"] {
   color-scheme: light;
 }
 
+/* "dim" — a dark-family theme for long sessions: the near-black surfaces of
+   the default dark are lifted onto a soft cool slate so the high fg/near-black
+   contrast stops glaring, while the accent identity is kept intact. Same hue
+   family and ramp shape as dark, just a few stops brighter at the floor.
+   For the artifact-theming contract (files.ts &theme=, HtmlArtifact bootstrap)
+   dim collapses to `dark` — that channel stays binary (see DESIGN.md). */
+html[data-theme="dim"] {
+  --bg: #1b1f27;
+  --bg1: #21262f;
+  --bg2: #2a2f3a;
+  --line: #3a4150;
+  --fg: #cdd4de;
+  --dim: #98a1b0;
+  --faint: #656e7d;
+  --green: #6fdd8b;
+  --cyan: #5ccfe6;
+  --magenta: #c678dd;
+  --yellow: #e5c07b;
+  --red: #e06c75;
+  --blue: #61afef;
+  --orange: #d19a66;
+  --bg3: #313745;
+  --chart-1: #6fdd8b;
+  --chart-2: #5ccfe6;
+  --chart-3: #e5c07b;
+  --chart-4: #c678dd;
+  --chart-5: #e06c75;
+  --chart-grid: #343b47;
+  color-scheme: dark;
+}
+
 * {
   box-sizing: border-box;
   margin: 0;

@@ -273,7 +273,7 @@ import Meter from "./Meter.svelte";
       title="Notify while the tab is hidden"
     >Notify:{app.notify}</button
     >
-    <button class="act" data-agent-id="theme.toggle" onclick={toggleTheme} title="Cycle theme: dark → light → system">
+    <button class="act" data-agent-id="theme.toggle" onclick={toggleTheme} title="Cycle theme: dark → dim → light → system">
       Theme:{app.theme}
     </button>
     {#if providersEnabled()}

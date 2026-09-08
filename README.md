@@ -134,7 +134,7 @@ answers `markdown table demo` with a rich-markdown turn.
 - **Responsive working surface**: chat/history stay left-anchored and use the available main pane; the composer keeps its full-window prompt behavior; document height is fixed to the viewport and only scrollback scrolls
 - **Status line** in dext's TUI idiom: `● cwd | title │ model │ effort │ approval │ Ctx [██████░░░░] │ ↑↓ $`
 - **Per-session model + reasoning controls**: native web selectors populated from core's available provider catalog, including Anthropic/Claude. The catalog refreshes on connection/reconnection, model-picker focus and opening Providers; credentials or models added through core appear without restarting the host. With the NDJSON bridge, model/provider changes apply between turns while preserving history; reasoning effort can change mid-turn. Legacy one-shot hosts lock the model after the first turn. Dext remains the only credential holder; no separate Anthropic key or model list is stored in the UI.
-- **Themes**: dark / light / system (follows OS live), persisted
+- **Themes**: dark / dim / light / system (follows OS live), persisted
 - **Capability negotiation**: steer/approve controls appear only when the host
   advertises them (`hello_ok.capabilities`)
 - Interrupt (`^c stop`), block inspector drawer, toasts, mobile drawer layout,
