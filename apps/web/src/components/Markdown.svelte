@@ -4,7 +4,7 @@
   // and session-cwd images included.
   import { parseMarkdown, prettyPath, type Inline, type MdBlock } from "../lib/markdown";
   import { fileUrl as fileUrlFor, isHtmlPath } from "../lib/files";
-  import Chart from "./Chart.svelte";
+  import ChartRow from "./ChartRow.svelte";
   import { fenceFor } from "../ext";
   import HtmlArtifact from "./HtmlArtifact.svelte";
   import { ChartLink } from "../lib/chartlink.svelte";
@@ -26,10 +26,11 @@
     | { kind: "single"; b: MdBlock }
     | { kind: "lone"; card: TCard }
     | { kind: "grid"; cards: TCard[] }
-    // A table run immediately followed by a chart: one 2-column grid — first
-    // (tallest) table left, remaining tables + the chart stacked right, so the
-    // chart fills the column instead of trailing off into whitespace.
-    | { kind: "tape"; cards: TCard[]; charts: MdChart[] };
+    // Tables keep content width; trailing charts are a measured row (ChartRow)
+    // that shares the line when it fits beside them, else wraps below full-width.
+    | { kind: "tape"; cards: TCard[]; charts: MdChart[] }
+    // Charts with no table in front of them still share a row.
+    | { kind: "charts"; charts: MdChart[] };
   const layout = $derived.by(() => {
     const runs: Run[] = [];
     let cards: TCard[] = [];
@@ -41,17 +42,17 @@
     for (let i = 0; i < blocks.length; i++) {
       const b = blocks[i]!;
       const nx = blocks[i + 1];
-      if (b.kind === "chart" && (b.spec.type === "hbar" || b.spec.type === "bar")) {
+      if (b.kind === "chart") {
         const last = runs[runs.length - 1];
         if (cards.length > 0) {
           runs.push({ kind: "tape", cards, charts: [b] });
           cards = [];
-          continue;
-        }
-        if (last?.kind === "tape") {
+        } else if (last?.kind === "tape" || last?.kind === "charts") {
           last.charts.push(b);
-          continue;
+        } else {
+          runs.push({ kind: "charts", charts: [b] });
         }
+        continue;
       }
       if (b.kind === "table") {
         cards.push({ head: null, table: b });
@@ -137,6 +138,12 @@
   </div>
 {/snippet}
 
+{#snippet chartRow(charts: MdChart[])}
+  <!-- measured packer: real px widths from the DOM — charts pair side by side
+       beside (or below) the tables whenever the space allows, else stack -->
+  <ChartRow charts={charts} {link} />
+{/snippet}
+
 {#snippet renderCard(c: TCard)}
   <div class="md-tcard">
     {#if c.head}
@@ -155,19 +162,16 @@
     {:else if run.kind === "lone"}
       {@render renderCard(run.card)}
     {:else if run.kind === "tape"}
+      <!-- flow packer: tables at content width, then the chart cluster fills what is left on the row
+           (two charts side by side when it fits) or wraps to its own full-width row -->
       <div class="md-tape" data-agent-id="markdown.tape">
-        <div class="md-tape__l">{@render renderCard(run.cards[0]!)}</div>
-        <div class="md-tape__r">
-          {#each run.cards.slice(1) as c, ci (ci)}
-            {@render renderCard(c)}
-          {/each}
-          {#each run.charts as ch, ci (ci)}
-            <div class="md-chartbox md-chartbox--fill" data-agent-id="markdown.chart">
-              <Chart spec={ch.spec} {link} compact />
-            </div>
-          {/each}
-        </div>
+        {#each run.cards as c, ci (ci)}
+          {@render renderCard(c)}
+        {/each}
+        {@render chartRow(run.charts)}
       </div>
+    {:else if run.kind === "charts"}
+      <div class="md-tape" data-agent-id="markdown.chartrow">{@render chartRow(run.charts)}</div>
     {:else}
       <div class="md-tgrid" data-agent-id="markdown.tgrid">
         {#each run.cards as c, ci (ci)}
@@ -321,40 +325,22 @@
   .md-chartbox {
     max-width: 720px;
   }
-  .md-chartbox--fill {
-    max-width: none;
-    width: 100%;
-  }
-  /* Tape: tables + a trailing bar chart share one grid with a single gutter. */
-  /* Left column hugs its table (no dead band between table edge and gutter);
-     the right column takes the remainder, charts capped at their native width. */
+  /* Tape: one wrapping row. Tables keep their content width (and scroll inside
+     their card if wider than the pane); the chart cluster grows into whatever
+     is left beside them, else wraps below at full width. */
   .md-tape {
-    display: grid;
-    grid-template-columns: fit-content(55%) minmax(440px, 1fr);
-    gap: 1.5rem;
-    align-items: start;
-  }
-  .md-tape__r .md-chartbox--fill {
-    max-width: 600px;
-    overflow-x: auto;
-  }
-  .md-tape__r .md-chartbox--fill :global(.chart-wrap) {
-    min-width: 500px;
-  }
-  .md-tape__l,
-  .md-tape__r {
-    min-width: 0;
     display: flex;
-    flex-direction: column;
-    gap: 1rem;
+    flex-wrap: wrap;
+    gap: 1rem 1.5rem;
+    align-items: flex-start;
+  }
+  .md-tape > .md-tcard {
+    flex: 0 1 auto;
+    min-width: 0;
+    max-width: 100%;
   }
   .md-tape .md-tcard .md-h {
     margin-top: 0;
-  }
-  @container (max-width: 1000px) {
-    .md-tape {
-      grid-template-columns: minmax(0, 1fr);
-    }
   }
   .md-img {
     display: inline-flex;
