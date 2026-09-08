@@ -42,7 +42,7 @@ const LIST_ITEM = /^(\s*)([-*+]|\d+[.)])\s+(.*)$/;
 export function parseInline(s: string): Inline[] {
   const out: Inline[] = [];
   const re =
-    /`([^`]+)`|\*\*([^*]+)\*\*|!\[([^\]]{0,200})\]\(([^)\s]+)\)|\[([^\]]{1,200})\]\((https?:\/\/[^\s)]+)\)|\*([^*\s][^*]*)\*/g;
+    /`([^`]+)`|\*\*([^*]+)\*\*|!\[([^\]]{0,200})\]\(([^)\s]+)\)|\[([^\]]{1,200})\]\(([^)\s]+)\)|\*([^*\s][^*]*)\*/g;
   let last = 0;
   let m: RegExpExecArray | null;
   while ((m = re.exec(s)) !== null) {

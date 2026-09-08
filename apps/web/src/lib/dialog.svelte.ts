@@ -3,7 +3,7 @@
 // component init (it registers an $effect).
 
 const FOCUSABLE =
-  "a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])";
+  "a[href]:not([tabindex='-1']), button:not([disabled]):not([tabindex='-1']), input:not([disabled]):not([tabindex='-1']), select:not([disabled]):not([tabindex='-1']), textarea:not([disabled]):not([tabindex='-1']), iframe:not([tabindex='-1']), [tabindex]:not([tabindex='-1'])";
 
 export interface DialogHdl {
   /** Svelte action: `use:dlg.ref` on the dialog element. */
@@ -21,7 +21,7 @@ export function useDialog(getOpen: () => boolean): DialogHdl {
       prev = document.activeElement instanceof HTMLElement ? document.activeElement : null;
       requestAnimationFrame(() => {
         if (!node) return;
-        (node.querySelector<HTMLElement>(FOCUSABLE) ?? node).focus();
+        (node.querySelector<HTMLElement>("[data-dialog-initial]") ?? node.querySelector<HTMLElement>(FOCUSABLE) ?? node).focus();
       });
     } else if (prev) {
       prev.focus();

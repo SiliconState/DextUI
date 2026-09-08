@@ -181,12 +181,24 @@ const TYPE_EXT = {
   "image/jpeg": ".jpg",
   "image/gif": ".gif",
   "image/webp": ".webp",
+  "image/avif": ".avif",
+  "image/bmp": ".bmp",
   "image/svg+xml": ".svg",
   "application/pdf": ".pdf",
   "text/html": ".html",
   "application/json": ".json",
   "text/csv": ".csv",
   "text/plain": ".txt",
+  "application/rtf": ".rtf",
+  "application/msword": ".doc",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+  "application/vnd.oasis.opendocument.text": ".odt",
+  "application/vnd.ms-excel": ".xls",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ".xlsx",
+  "application/vnd.oasis.opendocument.spreadsheet": ".ods",
+  "application/vnd.ms-powerpoint": ".ppt",
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation": ".pptx",
+  "application/vnd.oasis.opendocument.presentation": ".odp",
 };
 
 /** Basename from the final URL path, with an extension from content-type when the path has none. */
@@ -298,11 +310,12 @@ export async function fetchToFile(rawUrl, dir, { name } = {}) {
         const why = { too_large: `over ${UPLOAD_MAX_BYTES} bytes`, timeout: "timed out" }[failure] ?? "download failed mid-stream";
         return err(failure, why);
       }
+      const type = res.headers.get("content-type");
       return {
         path: `${UPLOAD_DIR}/${path.basename(dest)}`,
         bytes,
         name: path.basename(dest),
-        type: res.headers.get("content-type") ?? undefined,
+        ...(type ? { type } : {}),
       };
     }
   } finally {

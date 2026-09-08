@@ -1,10 +1,11 @@
 <script lang="ts">
-  // Workspace-file previews markdown can't do with a plain <img>: PDFs ride
-  // the browser's own viewer in a frame (the host serves them inline, no CSP
-  // sandbox — the viewer document carries no scripts), text arrives by fetch
-  // and renders as a bounded <pre>. Both go through the authenticated file
-  // endpoint with ?t=, so no extra surface opens.
-  let { src, name, kind }: { src: string; name: string; kind: "pdf" | "text" } = $props();
+  // Workspace-file previews markdown can't do with a plain <img>. PDFs ride
+  // the browser's viewer, text is fetched into a bounded <pre>, and office/ODF
+  // files get an explicit download surface (the browser has no safe native
+  // renderer; dext inspects the workspace copy with format-aware local tools).
+  import { boundedResponseText } from "../lib/files";
+
+  let { src, name, kind }: { src: string; name: string; kind: "pdf" | "text" | "document" } = $props();
 
   const TEXT_CAP = 256 * 1024;
   let text = $state<string | null>(null);
@@ -18,13 +19,13 @@
     fetch(src, { signal: ctl.signal })
       .then((r) => {
         if (!r.ok) throw new Error(String(r.status));
-        return r.text();
+        return boundedResponseText(r, TEXT_CAP);
       })
       .then((t) => {
-        text = t.length > TEXT_CAP ? `${t.slice(0, TEXT_CAP)}\n… (truncated)` : t;
+        text = t;
       })
       .catch(() => {
-        failed = true;
+        if (!ctl.signal.aborted) failed = true;
       });
     return () => ctl.abort();
   });
@@ -32,7 +33,13 @@
 
 {#if kind === "pdf"}
   <iframe class="fv fv-pdf" src={src} title={name} loading="lazy"></iframe>
-  <a class="fv-open" href={src} target="_blank" rel="noopener noreferrer">open {name} in a tab ↗</a>
+  <a class="fv-open" href={src} target="_blank" rel="noopener noreferrer">Open {name} in a tab ↗</a>
+{:else if kind === "document"}
+  <span class="fv-doc" data-agent-id="markdown.document">
+    <span aria-hidden="true">▤</span>
+    <span class="fv-docname">{name}</span>
+    <a class="fv-open" href={src} download>Download</a>
+  </span>
 {:else if failed}
   <span class="fv-miss">✗ could not load {name} from the session workspace</span>
 {:else}
@@ -59,7 +66,29 @@
     white-space: pre-wrap;
     overflow-wrap: anywhere;
   }
+  .fv-doc {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: min(100%, 38rem);
+    padding: 7px 9px;
+    border: 1px solid var(--line);
+    border-left: 2px solid var(--cyan);
+    background: var(--bg1);
+  }
+  .fv-doc > :first-child {
+    color: var(--cyan);
+  }
+  .fv-docname {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--dim);
+  }
   .fv-open {
+    color: var(--blue);
     font-size: 11px;
   }
   .fv-miss {

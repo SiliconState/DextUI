@@ -45,7 +45,8 @@
   <div
     class="menu"
     style={posStyle}
-    role="menu"
+    role="dialog"
+    aria-modal="true"
     aria-label="Settings"
     tabindex="-1"
     use:dlg.ref

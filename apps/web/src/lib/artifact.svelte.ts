@@ -9,12 +9,15 @@ export interface ArtifactDocument {
   sessionId?: string;
 }
 
-export const artifact = $state<{ document: ArtifactDocument | null }>({ document: null });
+export const artifact = $state<{ document: ArtifactDocument | null; revision: number }>({ document: null, revision: 0 });
 
 export function openArtifact(document: ArtifactDocument): void {
   artifact.document = document;
+  artifact.revision++;
 }
 
 export function closeArtifact(): void {
+  if (!artifact.document) return;
   artifact.document = null;
+  artifact.revision++;
 }

@@ -60,6 +60,14 @@ H2=$(agent-browser eval 'Math.round(parseFloat(document.querySelector(`[data-age
 echo "height after send: $H2"
 [ "$H2" -le 30 ] || { echo "FAIL: height reset after send"; FAIL=1; }
 
+note "attachments accept Office documents and preserve a format-aware handoff"
+agent-browser eval '(()=>{const i=document.querySelector(`[data-agent-id="composer.attach.input"]`);const d=new DataTransfer();d.items.add(new File([`mock-docx`],`brief.DOCX`,{type:`application/vnd.openxmlformats-officedocument.wordprocessingml.document`}));i.files=d.files;i.dispatchEvent(new Event(`change`,{bubbles:true}));return true})()' >/dev/null
+wait_js 'document.querySelector(`[data-agent-id="composer.attachment"]`)?.dataset.state === "done" && document.querySelector(`[data-agent-id="composer.attachment"]`)?.textContent.includes("brief.DOCX")' || { echo "FAIL: Office attachment upload"; FAIL=1; }
+agent-browser fill '[data-agent-id="composer.input"]' 'inspect attachment' >/dev/null
+agent-browser press Enter >/dev/null
+wait_js '[...document.querySelectorAll(`[data-agent-id="block.user"]`)].at(-1)?.textContent.includes("application/vnd.openxmlformats-officedocument.wordprocessingml.document") && [...document.querySelectorAll(`[data-agent-id="block.user"]`)].at(-1)?.textContent.includes("format-aware tools") && !document.querySelector(`[data-agent-id="composer.attachment"]`)' || { echo "FAIL: format-aware attachment handoff"; FAIL=1; }
+wait_js '!document.querySelector(`[data-agent-id="composer.stop"]`)' || { echo "FAIL: attachment turn did not finish"; FAIL=1; }
+
 note "session controls are scoped, compact, and mutually exclusive with settings"
 agent-browser click '[data-agent-id="status.controls"]' >/dev/null
 agent-browser wait '[data-agent-id="session.controls.overlay"]' >/dev/null
@@ -90,6 +98,16 @@ agent-browser click '[data-agent-id="artifact.report"]' >/dev/null
 wait_js '!!document.querySelector(`[data-agent-id="artifact.frame"]`)' || { echo "FAIL: artifact report view"; FAIL=1; }
 agent-browser press Escape >/dev/null
 wait_js '!document.querySelector(`[data-agent-id="artifact.overlay"]`) && !!document.querySelector(`[data-agent-id="markdown.artifact.open"]`)' || { echo "FAIL: artifact history link/close"; FAIL=1; }
+
+note "workspace HTML reports inline local images without exposing the access token"
+agent-browser fill '[data-agent-id="composer.input"]' 'artifact file demo' >/dev/null
+agent-browser press Enter >/dev/null
+wait_js 'document.querySelectorAll(`[data-agent-id="markdown.artifact.open"]`).length >= 2' || { echo "FAIL: file artifact launcher"; FAIL=1; }
+agent-browser eval '[...document.querySelectorAll(`[data-agent-id="markdown.artifact.open"]`)].at(-1)?.click()' >/dev/null
+agent-browser wait '[data-agent-id="artifact.frame"]' >/dev/null
+wait_js '(()=>{const f=document.querySelector(`[data-agent-id="artifact.frame"]`);const src=f?.srcdoc||"";return src.includes("data:image/png;base64,") && !src.includes("?t=")})()' || { echo "FAIL: file artifact image/token isolation"; FAIL=1; }
+wait_js '!!document.querySelector(`[data-agent-id="markdown.document"]`) && document.querySelector(`[data-agent-id="markdown.document"] a`)?.hasAttribute("download")' || { echo "FAIL: office document download"; FAIL=1; }
+agent-browser press Escape >/dev/null
 sleep 1.5
 # Theme is an explicit choice in the settings menu now, not a blind cycle.
 CHART1='getComputedStyle(document.documentElement).getPropertyValue("--chart-1").trim()'

@@ -1,63 +1,182 @@
 <script lang="ts">
-  // Full-height right-side home for interactive HTML reports. The report stays
-  // sandboxed in an opaque origin; chat keeps only its compact launcher.
+  // Full-height right-side home for interactive HTML reports. File reports are
+  // fetched by the trusted parent, then rendered as srcdoc: the sandbox never
+  // receives the bearer query string. Chat keeps only its compact launcher.
+  import { boundedResponseBlob, boundedResponseText } from "../lib/files";
   import { currentResolvedTheme } from "../lib/state.svelte";
   import { artifact, closeArtifact } from "../lib/artifact.svelte";
   import { useDialog } from "../lib/dialog.svelte";
 
   const dlg = useDialog(() => !!artifact.document);
   let mode = $state<"report" | "code">("report");
-  let lastKey = "";
-  let fetchedCode = $state("");
-  let codeFailed = $state(false);
+  let reportHtml = $state("");
+  let reportSource = $state("");
+  let reportLoading = $state(false);
+  let reportFailed = $state(false);
+  let frame = $state<HTMLIFrameElement | null>(null);
 
   const item = $derived(artifact.document);
-  const codeText = $derived(item?.code ?? item?.html ?? fetchedCode);
-  const canShowCode = $derived(!!item && (item.code !== undefined || item.html !== undefined || !!item.src));
-  const key = $derived(`${item?.sessionId ?? ""}\u001f${item?.name ?? ""}\u001f${item?.src ?? ""}`);
+  const source = $derived(item?.html ?? reportHtml);
+  const codeText = $derived(item?.code ?? item?.html ?? reportSource);
 
-  const themedSrc = $derived.by(() => {
-    if (!item?.src) return undefined;
-    const url = new URL(item.src, location.origin);
-    url.searchParams.set("theme", currentResolvedTheme());
-    return `${url.pathname}${url.search}${url.hash}`;
-  });
+  const authHeaders = (): HeadersInit => {
+    const token = localStorage.getItem("dextui.token") ?? "";
+    return token ? { authorization: `Bearer ${token}` } : {};
+  };
 
-  // Inline fences need the same theme bootstrap as file reports receive via
-  // their URL query. No dynamic input besides the whitelisted theme is added.
-  const doc = $derived.by(() => {
-    if (item?.html === undefined) return undefined;
-    const theme = currentResolvedTheme();
-    const head = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data: blob:; script-src 'unsafe-inline'; font-src data:"><meta name="color-scheme" content="light dark"><script>try{document.documentElement.dataset.theme="${theme}"}catch(e){}<\/script>`;
-    if (/<html[\s>]/i.test(item.html)) {
-      return /<head[\s>]/i.test(item.html)
-        ? item.html.replace(/<head([^>]*)>/i, `<head$1>${head}`)
-        : item.html.replace(/<html([^>]*)>/i, `<html$1><head>${head}</head>`);
+  const REPORT_MAX_BYTES = 8 * 1024 * 1024;
+
+  async function responseText(res: Response): Promise<string> {
+    return boundedResponseText(res, REPORT_MAX_BYTES);
+  }
+
+  async function inlineReportImages(html: string, src: string, signal: AbortSignal): Promise<string> {
+    const base = new URL(src, location.origin);
+    const filePrefix = /^\/sessions\/[^/]+\/file\//.exec(base.pathname)?.[0];
+    if (!filePrefix) return html;
+    const token = base.searchParams.get("t");
+    const parsed = new DOMParser().parseFromString(html, "text/html");
+    const refs = new Set<string>();
+    const add = (raw: string | null) => {
+      const value = raw?.trim();
+      if (value && !value.startsWith("#") && !/^(?:data|blob):/i.test(value)) refs.add(value);
+    };
+    for (const el of parsed.querySelectorAll("img[src], input[type='image'][src]")) add(el.getAttribute("src"));
+    for (const el of parsed.querySelectorAll("img[srcset], source[srcset]")) {
+      const raw = el.getAttribute("srcset") ?? "";
+      if (raw.includes("data:")) continue; // commas inside data URLs are not candidate separators
+      for (const part of raw.split(",")) add(/^(\s*)(\S+)/.exec(part)?.[2] ?? null);
     }
-    return `<!doctype html><html><head>${head}<style>body{margin:16px;font:13px/1.45 system-ui,sans-serif;color:light-dark(#242830,#c8cfd9);background:light-dark(#f4f2ec,#0b0d10)}</style></head><body>${item.html}</body></html>`;
+    const css = [...parsed.querySelectorAll<HTMLElement>("[style]")].map((el) => el.getAttribute("style") ?? "")
+      .concat([...parsed.querySelectorAll("style")].map((el) => el.textContent ?? ""));
+    for (const text of css) for (const match of text.matchAll(/url\(\s*["']?([^"')]+)["']?\s*\)/gi)) add(match[1] ?? null);
+
+    const replacements = new Map<string, string>();
+    let total = 0;
+    for (const raw of [...refs].slice(0, 32)) {
+      let url: URL;
+      try { url = new URL(raw, base); } catch { continue; }
+      if (url.origin !== location.origin || !url.pathname.startsWith(filePrefix)) continue;
+      if (token) url.searchParams.set("t", token);
+      try {
+        const res = await fetch(url, { signal, headers: authHeaders() });
+        if (!res.ok || !(res.headers.get("content-type") ?? "").toLowerCase().startsWith("image/")) continue;
+        const blob = await boundedResponseBlob(res, 4 * 1024 * 1024);
+        if (total + blob.size > 12 * 1024 * 1024) continue;
+        total += blob.size;
+        const data = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(String(reader.result));
+          reader.onerror = () => reject(reader.error);
+          reader.readAsDataURL(blob);
+        });
+        replacements.set(raw, data);
+      } catch {
+        if (signal.aborted) throw new DOMException("Aborted", "AbortError");
+      }
+    }
+    const replace = (raw: string): string => replacements.get(raw.trim()) ?? raw;
+    for (const el of parsed.querySelectorAll("img[src], input[type='image'][src]")) {
+      const raw = el.getAttribute("src");
+      if (raw) el.setAttribute("src", replace(raw));
+    }
+    for (const el of parsed.querySelectorAll("img[srcset], source[srcset]")) {
+      const raw = el.getAttribute("srcset");
+      if (raw && !raw.includes("data:")) el.setAttribute("srcset", raw.split(",").map((part) => {
+        const match = /^(\s*)(\S+)(.*)$/.exec(part);
+        return match ? `${match[1]}${replace(match[2] ?? "")}${match[3]}` : part;
+      }).join(","));
+    }
+    const replaceCss = (text: string): string => text.replace(/url\(\s*(["']?)([^"')]+)\1\s*\)/gi, (all, quote: string, raw: string) => {
+      const hit = replacements.get(raw.trim());
+      return hit ? `url(${quote}${hit}${quote})` : all;
+    });
+    for (const el of parsed.querySelectorAll<HTMLElement>("[style]")) el.setAttribute("style", replaceCss(el.getAttribute("style") ?? ""));
+    for (const el of parsed.querySelectorAll("style")) el.textContent = replaceCss(el.textContent ?? "");
+    return `<!doctype html>\n${parsed.documentElement.outerHTML}`;
+  }
+
+  // Fetch workspace reports outside the iframe. Besides giving file reports a
+  // source view, this prevents untrusted report JS from seeing ?t=<token> in
+  // location.href. A revision guards close/reopen and stale response races.
+  $effect(() => {
+    const revision = artifact.revision;
+    const src = item?.src;
+    mode = "report";
+    reportHtml = "";
+    reportSource = "";
+    reportFailed = false;
+    reportLoading = !!src;
+    if (!src) return;
+    const ctl = new AbortController();
+    fetch(src, { signal: ctl.signal, headers: authHeaders() })
+      .then((res) => {
+        if (!res.ok) throw new Error(String(res.status));
+        return responseText(res);
+      })
+      .then(async (text) => {
+        const rendered = await inlineReportImages(text, src, ctl.signal);
+        if (artifact.revision !== revision) return;
+        reportSource = text;
+        reportHtml = rendered;
+        reportLoading = false;
+      })
+      .catch(() => {
+        if (ctl.signal.aborted || artifact.revision !== revision) return;
+        reportFailed = true;
+        reportLoading = false;
+      });
+    return () => ctl.abort();
   });
+
+  // CSP is parsed before any model-authored markup. Inline scripts/styles keep
+  // self-contained reports interactive, while network, navigation, forms and
+  // parent access stay unavailable in the opaque-origin sandbox.
+  const doc = $derived.by(() => {
+    if (!source) return undefined;
+    const theme = currentResolvedTheme();
+    const fullDocument = /<html[\s>]/i.test(source);
+    const shell = fullDocument
+      ? source
+      : `<!doctype html><html><head><style>body{margin:16px;font:13px/1.45 system-ui,sans-serif;color:light-dark(#242830,#c8cfd9);background:light-dark(#f4f2ec,#0b0d10)}</style></head><body>${source}</body></html>`;
+    const parsed = new DOMParser().parseFromString(shell, "text/html");
+    parsed.documentElement.dataset.theme = theme;
+
+    const meta = parsed.createElement("meta");
+    meta.httpEquiv = "Content-Security-Policy";
+    meta.content = "default-src 'none'; style-src 'unsafe-inline'; img-src data: blob:; script-src 'unsafe-inline'; font-src data:; form-action 'none'; base-uri 'none'";
+    const scheme = parsed.createElement("meta");
+    scheme.name = "color-scheme";
+    scheme.content = "light dark";
+    const bridge = parsed.createElement("script");
+    bridge.textContent = 'addEventListener("keydown",function(e){if(e.key==="Escape")parent.postMessage({dextArtifact:"close"},"*")},true)';
+    parsed.head.prepend(meta, scheme, bridge);
+    return `<!doctype html>\n${parsed.documentElement.outerHTML}`;
+  });
+
+  function downloadCopy() {
+    const current = item;
+    if (!current) return;
+    const raw = current.html ?? reportSource;
+    if (!raw) return;
+    const url = URL.createObjectURL(new Blob([raw], { type: "text/html;charset=utf-8" }));
+    const link = document.createElement("a");
+    link.href = url;
+    const base = current.name.split(/[\\/]/).pop() || "report.html";
+    link.download = /\.html?$/i.test(base) ? base : `${base}.html`;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
 
   $effect(() => {
-    if (key !== lastKey) {
-      lastKey = key;
-      mode = "report";
-      fetchedCode = "";
-      codeFailed = false;
-    }
+    const el = frame;
+    if (!el) return;
+    const onMessage = (e: MessageEvent) => {
+      if (e.source === el.contentWindow && e.data?.dextArtifact === "close") closeArtifact();
+    };
+    addEventListener("message", onMessage);
+    return () => removeEventListener("message", onMessage);
   });
-
-  async function showCode() {
-    mode = "code";
-    if (!item?.src || fetchedCode || codeFailed || item.code !== undefined || item.html !== undefined) return;
-    try {
-      const res = await fetch(item.src);
-      if (!res.ok) throw new Error(String(res.status));
-      const text = await res.text();
-      fetchedCode = text.length > 1024 * 1024 ? `${text.slice(0, 1024 * 1024)}\n… (truncated)` : text;
-    } catch {
-      codeFailed = true;
-    }
-  }
 
   function onKey(e: KeyboardEvent) {
     dlg.onKey(e);
@@ -79,30 +198,31 @@
     tabindex="-1"
     use:dlg.ref
     data-agent-id="artifact.overlay"
-    data-state={mode}
+    data-state={reportFailed ? "failed" : reportLoading ? "loading" : mode}
     onkeydown={onKey}
   >
     <header class="insp-head">
       <span class="st-cyan">Interactive report</span>
       <span class="dim title" id="artifact-title" title={item.name}>{item.name}</span>
       <span class="insp-acts">
-        {#if canShowCode}
-          <button class="act" class:on={mode === "report"} data-agent-id="artifact.report" onclick={() => (mode = "report")}>Report</button>
-          <button class="act" class:on={mode === "code"} data-agent-id="artifact.code" onclick={showCode}>Code</button>
-        {/if}
-        {#if item.src}<a class="act" href={item.src} target="_blank" rel="noopener noreferrer">New tab ↗</a>{/if}
-        <button class="act" data-agent-id="artifact.close" onclick={closeArtifact}>esc</button>
+        <button class="act" class:on={mode === "report"} data-agent-id="artifact.report" onclick={() => (mode = "report")}>Report</button>
+        <button class="act" class:on={mode === "code"} data-agent-id="artifact.code" disabled={reportLoading || reportFailed} onclick={() => (mode = "code")}>Code</button>
+        <button class="act" data-agent-id="artifact.download" disabled={reportLoading || reportFailed} onclick={downloadCopy}>Download</button>
+        <button class="act" data-agent-id="artifact.close" data-dialog-initial onclick={closeArtifact}>esc</button>
       </span>
     </header>
     <div class="body">
-      {#if mode === "code"}
-        <pre data-agent-id="artifact.source">{codeFailed ? "Could not load this report's source." : codeText || "Loading source…"}</pre>
-      {:else if item.src}
-        {#key `${key}\u001f${currentResolvedTheme()}`}
-          <iframe sandbox="allow-scripts" title={item.name} src={themedSrc} data-agent-id="artifact.frame"></iframe>
-        {/key}
+      {#if reportLoading}
+        <p class="state dim pulse" data-agent-id="artifact.loading">Loading report…</p>
+      {:else if reportFailed}
+        <p class="state st-red" data-agent-id="artifact.error">Could not load this report from the session workspace.</p>
       {:else}
-        <iframe sandbox="allow-scripts" title={item.name} srcdoc={doc} data-agent-id="artifact.frame"></iframe>
+        <div class="report" class:hidden={mode === "code"}>
+          {#key `${artifact.revision}\u001f${currentResolvedTheme()}`}
+            <iframe bind:this={frame} sandbox="allow-scripts" title={item.name} srcdoc={doc} data-agent-id="artifact.frame"></iframe>
+          {/key}
+        </div>
+        {#if mode === "code"}<pre data-agent-id="artifact.source">{codeText}</pre>{/if}
       {/if}
     </div>
   </div>
@@ -134,6 +254,13 @@
     min-height: 0;
     background: var(--bg);
   }
+  .report {
+    width: 100%;
+    height: 100%;
+  }
+  .report.hidden {
+    display: none;
+  }
   iframe {
     display: block;
     width: 100%;
@@ -141,6 +268,9 @@
     border: 0;
     background: var(--bg);
     color-scheme: inherit;
+  }
+  .state {
+    padding: 16px;
   }
   pre {
     width: 100%;

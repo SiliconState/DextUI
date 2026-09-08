@@ -3,7 +3,7 @@
   // links. Terminal soul stays in the chrome; content gets the web — charts
   // and session-cwd images included.
   import { parseMarkdown, prettyPath, type Inline, type MdBlock } from "../lib/markdown";
-  import { fileUrl as fileUrlFor, isHtmlPath, isPdfPath, isTextPath, servablePath } from "../lib/files";
+  import { fileUrl as fileUrlFor, isDocumentPath, isHtmlPath, isPdfPath, isTextPath, servablePath } from "../lib/files";
   import Chart from "./Chart.svelte";
   import ChartRow from "./ChartRow.svelte";
   import FileView from "./FileView.svelte";
@@ -79,21 +79,36 @@
 
   const sessCwd = $derived(app.sessions.find((s) => s.id === sessionId)?.cwd ?? "");
 
-  const fileUrl = (href: string, opts?: { theme?: boolean }): string => fileUrlFor(sessionId, href, sessCwd, opts);
-  const isHtmlArtifact = isHtmlPath;
+  const fileUrl = (href: string, opts?: { queryToken?: boolean }): string => fileUrlFor(sessionId, href, sessCwd, opts);
+  const webLink = (href: string): boolean => /^(?:https?:\/\/|mailto:)/i.test(href);
+  const workspaceLink = (href: string): boolean => /^file:\/\//i.test(href) || !/^(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(href);
 </script>
 
 {#snippet inline(parts: Inline[])}
   {#each parts as tk, i (i)}
-    {#if tk.t === "code"}<code class="ic">{tk.s}</code>{:else if tk.t === "bold"}<strong>{tk.s}</strong>{:else if tk.t === "italic"}<em>{tk.s}</em>{:else if tk.t === "link"}<a href={!/^https?:\/\//.test(tk.href) && sessionId && canFiles && servablePath(tk.href) ? fileUrl(tk.href) : tk.href} target="_blank" rel="noopener noreferrer">{tk.s}</a>{:else if tk.t === "image"}
-      {#if /^https?:\/\//.test(tk.href)}
+    {#if tk.t === "code"}<code class="ic">{tk.s}</code>{:else if tk.t === "bold"}<strong>{tk.s}</strong>{:else if tk.t === "italic"}<em>{tk.s}</em>{:else if tk.t === "link"}
+      {#if webLink(tk.href)}
+        <a href={tk.href} target="_blank" rel="noopener noreferrer">{tk.s}</a>
+      {:else if workspaceLink(tk.href) && sessionId && canFiles && isHtmlPath(tk.href)}
+        <HtmlArtifact src={fileUrl(tk.href, { queryToken: false })} name={tk.s || prettyPath(tk.href, sessCwd)} {sessionId} />
+      {:else if workspaceLink(tk.href) && sessionId && canFiles && isDocumentPath(tk.href)}
+        <FileView src={fileUrl(tk.href)} name={prettyPath(tk.href, sessCwd)} kind="document" />
+      {:else if workspaceLink(tk.href) && sessionId && canFiles && servablePath(tk.href)}
+        <a href={fileUrl(tk.href)} target="_blank" rel="noopener noreferrer">{tk.s}</a>
+      {:else}
+        <span title={`Blocked or unavailable link: ${tk.href}`}>{tk.s}</span>
+      {/if}
+    {:else if tk.t === "image"}
+      {#if /^https?:\/\//i.test(tk.href)}
         <!-- model-chosen remote URLs stay links: never fetch them silently -->
         <a href={tk.href} target="_blank" rel="noopener noreferrer">{tk.s || tk.href}</a>
+      {:else if !workspaceLink(tk.href)}
+        <span title={`Blocked image source: ${tk.href}`}>{tk.s || tk.href}</span>
       {:else if !sessionId || !canFiles}
         <code class="ic">{tk.href}</code>
-      {:else if isHtmlArtifact(tk.href)}
+      {:else if isHtmlPath(tk.href)}
         <!-- HTML artifact: compact history launcher; report opens in the shared inspector. -->
-        <HtmlArtifact src={fileUrl(tk.href, { theme: true })} name={tk.s || prettyPath(tk.href, sessCwd)} {sessionId} />
+        <HtmlArtifact src={fileUrl(tk.href, { queryToken: false })} name={tk.s || prettyPath(tk.href, sessCwd)} {sessionId} />
       {:else if isPdfPath(tk.href)}
         <!-- workspace PDF: the browser's own viewer, served inline by the host -->
         <div class="md-chartbox" data-agent-id="markdown.pdf">
@@ -104,8 +119,11 @@
         <div class="md-chartbox" data-agent-id="markdown.textfile">
           <FileView src={fileUrl(tk.href)} name={prettyPath(tk.href, sessCwd)} kind="text" />
         </div>
+      {:else if isDocumentPath(tk.href)}
+        <!-- Office/ODF documents stay downloadable; dext reads them from the workspace with format-aware tools. -->
+        <FileView src={fileUrl(tk.href)} name={prettyPath(tk.href, sessCwd)} kind="document" />
       {:else if broken[tk.href]}
-        <span class="md-imgmiss" data-agent-id="markdown.image.missing">✗ image not found under the session workspace: {prettyPath(tk.href, sessCwd)}</span>
+        <span class="md-imgmiss" data-agent-id="markdown.image.missing">✗ could not preview image: {prettyPath(tk.href, sessCwd)} · <a href={fileUrl(tk.href)} target="_blank" rel="noopener noreferrer">open file</a></span>
       {:else}
         <span class="md-img" data-agent-id="markdown.image">
           <img src={fileUrl(tk.href)} alt={tk.s} loading="lazy" onerror={() => (broken[tk.href] = true)} />

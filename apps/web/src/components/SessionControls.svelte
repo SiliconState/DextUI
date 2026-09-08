@@ -1,9 +1,8 @@
 <script lang="ts">
-  // Session controls popover: the status bar's three per-session runtime
-  // controls — model, effort, approval — folded behind one chip so the bar
-  // reads as status, not a toolbar. These follow the session (device-level
-  // things live in the ⚙ settings menu instead). Same anchored-catcher
-  // popover pattern as SettingsMenu; selects keep their stable agent ids.
+  // Session controls popover: model, thinking and permissions folded behind
+  // one status chip so the bar reads as status, not a toolbar. These are
+  // session-level controls; device-level things live in the ⚙ settings menu.
+  // Same anchored-catcher pattern as SettingsMenu; selects keep stable ids.
   import type { SessionState } from "@dextui/client";
   import type { ThinkingEffort } from "@dextui/protocol";
   import { app, closeSessionCtl } from "../lib/state.svelte";
@@ -16,6 +15,7 @@
   const posStyle = $derived(popoverPos(app.sessionCtlAnchor, 304));
 
   const modelValue = $derived(view.provider && view.model ? `${view.provider}\u001f${view.model}` : "");
+  const modelInCatalog = $derived(app.modelCatalog.some((group) => group.provider === view.provider && group.models.includes(view.model ?? "")));
   const canSelectModel = $derived(
     app.phase === "live" &&
       app.caps.includes("model_select") &&
@@ -95,6 +95,7 @@
     <div class="head">
       <span id="session-controls-title">This session</span>
       <span class="summary">Model, thinking, permissions</span>
+      <button class="act close" data-agent-id="session.controls.close" aria-label="Close session controls" onclick={closeSessionCtl}>esc</button>
     </div>
     {#if app.caps.includes("model_select") && app.modelCatalog.length > 0}
       <div class="sec">
@@ -109,6 +110,7 @@
           data-agent-id="status.model.select"
           data-state={view.modelLocked ? "locked" : canSelectModel ? "ready" : "disabled"}
         >
+          {#if modelValue && !modelInCatalog}<option value={modelValue}>{view.model} (current)</option>{/if}
           {#each app.modelCatalog as group (group.provider)}
             <optgroup label={group.label ? `${group.label} (${group.provider})` : group.provider}>
               {#each group.models as model (model)}
@@ -196,8 +198,12 @@
     color: var(--fg);
   }
   .summary {
+    margin-left: auto;
     color: var(--faint);
     font-size: 0.85em;
+  }
+  .close {
+    flex: none;
   }
   .sec {
     display: grid;

@@ -11,6 +11,7 @@ import { onPackCredsControl } from "./packcreds.svelte";
 import { onConnectorsControl } from "./connectors.svelte";
 import { onFlowsControl } from "./flows.svelte";
 import { onTasksControl } from "./tasks.svelte";
+import { clearAttachments } from "./uploads.svelte";
 import { packTitle } from "./display";
 
 export type Theme = "dark" | "dim" | "light" | "system";
@@ -269,6 +270,7 @@ function purgeLocalSession(id: string): void {
   for (const prefix of ["draft", "history", "generation"]) localStorage.removeItem(`dextui.${prefix}.${id}`);
   autoSubscribed.delete(id);
   hydrating.delete(id);
+  clearAttachments(id);
   if (app.activeId === id) {
     app.pendingDraft = "";
     app.eventsOpen = false;

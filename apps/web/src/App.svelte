@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from "svelte";
   import {
     app,
     start,
@@ -45,7 +46,7 @@
   import FlowCanvas from "./components/FlowCanvas.svelte";
   import Tasks from "./components/Tasks.svelte";
   import { flows, openFlows, closeFlows } from "./lib/flows.svelte";
-  import { openTasks } from "./lib/tasks.svelte";
+  import { tasks, openTasks, closeTasks } from "./lib/tasks.svelte";
   import { crew, closeRun, crewLive, openRun } from "./lib/crew.svelte";
   import { packSheet, closePackSheet, closePackPanel } from "./lib/packsheet.svelte";
   import { artifact, closeArtifact } from "./lib/artifact.svelte";
@@ -98,8 +99,10 @@
   $effect(() => {
     void app.hostEpoch;
     void app.activeId;
-    inspect = null; // never retain raw transcript content after purge/clear
-    closeArtifact(); // artifact URLs are scoped to the previous host/session
+    untrack(() => {
+      inspect = null; // never retain raw transcript content after purge/clear
+      closeArtifact(); // artifact URLs are scoped to the previous host/session
+    });
   });
 
   // Never carry an open off-canvas drawer across the desktop breakpoint.
@@ -145,6 +148,7 @@
         else if (packCreds.open) closePackCredentials();
         else if (folders.open) closeFolderPicker();
         else if (flows.open) closeFlows();
+        else if (tasks.open) closeTasks();
         else if (packSheet.panelOpen) closePackPanel();
         else if (packSheet.open) closePackSheet();
         else if (crew.openId) closeRun();
@@ -154,6 +158,9 @@
         else if (indexOpen) indexOpen = false;
         return;
       }
+      // Modal surfaces own the keyboard until closed. In particular, do not let
+      // Ctrl+N/session cycling switch the document underneath a focused report.
+      if (app.paletteOpen || app.shortcutsOpen || artifact.document || inspect || app.eventsOpen || app.galleryOpen || app.settingsOpen || app.sessionCtlOpen || providers.open || packSheet.open || packSheet.panelOpen || crew.openId || folders.open || flows.open || tasks.open || packCreds.open) return;
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "b") {
         e.preventDefault();
         toggleNavigation();
@@ -183,7 +190,6 @@
       }
       // The run sheet owns its keys (j/k/x/a…) so the global a/s/d and
       // hero-typing handlers below never see them while it is open.
-      if (app.paletteOpen || app.shortcutsOpen || artifact.document || inspect || app.eventsOpen || app.galleryOpen || packSheet.open || crew.openId || folders.open || flows.open || packCreds.open) return;
       const editing = e.target instanceof HTMLElement && (e.target.matches("input, textarea") || e.target.isContentEditable);
       if (!editing && app.activeId && (e.ctrlKey || e.metaKey) && e.key === "Backspace") {
         e.preventDefault();
@@ -379,7 +385,7 @@
             class="act"
             data-agent-id="settings.open"
             data-state={app.settingsOpen ? "open" : "closed"}
-            aria-haspopup="menu"
+            aria-haspopup="dialog"
             aria-expanded={app.settingsOpen}
             onclick={openSettingsAt}
             title="Settings — theme, notifications, sign out"

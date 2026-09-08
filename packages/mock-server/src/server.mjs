@@ -300,6 +300,7 @@ function usage(inTok, outTok) {
 }
 
 function echoPlan(text) {
+  if (/\bartifact file demo\b/i.test(text)) return fileArtifactPlan();
   // Rich-rendering demo: prompt mentioning markdown/table/demo returns real
   // structured markdown plus live ```chart fences, so the web client's
   // table/list/link/chart rendering is verifiable end-to-end against a live
@@ -335,6 +336,16 @@ function echoPlan(text) {
       delay: 4,
     },
     { event: "turn_end", data: { usage: usage(12, 24), failed: false }, delay: 4 },
+  ];
+}
+
+function fileArtifactPlan() {
+  const markdown = "![Workspace report](uploads/report.html)\n\n[Download the source brief](uploads/brief.docx)";
+  return [
+    { event: "turn_start", delay: 5 },
+    { event: "text_block_complete", data: markdown, delay: 8 },
+    { event: "usage_update", data: { turn: usage(8, 12), session: usage(8, 12) }, delay: 4 },
+    { event: "turn_end", data: { usage: usage(8, 12), failed: false }, delay: 4 },
   ];
 }
 
@@ -838,6 +849,20 @@ function handleCommand(client, frame) {
       }
       sendAck(client, frame);
       publish(journalData(s, "user_message", { text: frame.text }));
+      if (/\bartifact file demo\b/i.test(frame.text)) {
+        MOCK_UPLOADS.set(`${s.id}/uploads/report.html`, {
+          mime: "text/html; charset=utf-8",
+          buf: Buffer.from('<!doctype html><html><head><title>File artifact demo</title></head><body><h1>Workspace report</h1><img src="pixel.png" alt="pixel"></body></html>'),
+        });
+        MOCK_UPLOADS.set(`${s.id}/uploads/pixel.png`, {
+          mime: "image/png",
+          buf: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64"),
+        });
+        MOCK_UPLOADS.set(`${s.id}/uploads/brief.docx`, {
+          mime: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+          buf: Buffer.from("mock docx"),
+        });
+      }
       if (!s.title || s.title.startsWith("New session") || s.title.startsWith("Fixture:")) {
         s.title = frame.text.slice(0, 60);
       }
@@ -1131,10 +1156,19 @@ function requireAuth(req) {
 const MOCK_UPLOADS = new Map(); // "<session>/<rel>" -> { mime, buf }
 const MOCK_FILE_MIME = {
   ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif",
-  ".webp": "image/webp", ".svg": "image/svg+xml", ".html": "text/html; charset=utf-8",
-  ".htm": "text/html; charset=utf-8", ".pdf": "application/pdf",
+  ".webp": "image/webp", ".avif": "image/avif", ".bmp": "image/bmp", ".tif": "image/tiff", ".tiff": "image/tiff",
+  ".heic": "image/heic", ".heif": "image/heif", ".svg": "image/svg+xml",
+  ".html": "text/html; charset=utf-8", ".htm": "text/html; charset=utf-8", ".pdf": "application/pdf",
   ".txt": "text/plain; charset=utf-8", ".md": "text/plain; charset=utf-8",
-  ".csv": "text/plain; charset=utf-8", ".json": "text/plain; charset=utf-8",
+  ".csv": "text/plain; charset=utf-8", ".json": "text/plain; charset=utf-8", ".log": "text/plain; charset=utf-8",
+  ".xml": "text/plain; charset=utf-8", ".yaml": "text/plain; charset=utf-8", ".yml": "text/plain; charset=utf-8", ".tsv": "text/plain; charset=utf-8",
+  ".rtf": "application/rtf", ".doc": "application/msword",
+  ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  ".odt": "application/vnd.oasis.opendocument.text", ".xls": "application/vnd.ms-excel",
+  ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  ".ods": "application/vnd.oasis.opendocument.spreadsheet", ".ppt": "application/vnd.ms-powerpoint",
+  ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  ".odp": "application/vnd.oasis.opendocument.presentation",
 };
 
 function mockSafeName(raw) {
@@ -1259,7 +1293,14 @@ const server = http.createServer((req, res) => {
         res.end(JSON.stringify({ error: "no_file" }));
         return;
       }
-      res.writeHead(200, { "content-type": hit.mime, "cache-control": "private, no-store" });
+      const download = /^(?:application\/(?:msword|rtf|vnd\.(?:ms-|openxmlformats-|oasis\.opendocument)))/.test(hit.mime);
+      res.writeHead(200, {
+        "content-type": hit.mime,
+        "content-length": hit.buf.length,
+        "cache-control": "private, no-store",
+        "x-content-type-options": "nosniff",
+        ...(hit.mime === "application/pdf" ? { "content-disposition": "inline" } : download ? { "content-disposition": "attachment" } : {}),
+      });
       res.end(hit.buf);
       return;
     }
@@ -1277,10 +1318,10 @@ const server = http.createServer((req, res) => {
           res.end(JSON.stringify({ error: "exists" }));
           return;
         }
-        const mime = MOCK_FILE_MIME[name.slice(name.lastIndexOf("."))] ?? "application/octet-stream";
+        const mime = MOCK_FILE_MIME[name.slice(name.lastIndexOf(".")).toLowerCase()] ?? "application/octet-stream";
         MOCK_UPLOADS.set(`${s.id}/uploads/${name}`, { mime, buf });
         res.writeHead(200, { "content-type": "application/json" });
-        res.end(JSON.stringify({ path: `uploads/${name}`, bytes: buf.length, name }));
+        res.end(JSON.stringify({ path: `uploads/${name}`, bytes: buf.length, name, ...(mime !== "application/octet-stream" ? { type: mime } : {}) }));
       });
       return;
     }

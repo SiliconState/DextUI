@@ -3239,6 +3239,12 @@ const FILE_MIME = {
   ".jpeg": "image/jpeg",
   ".gif": "image/gif",
   ".webp": "image/webp",
+  ".avif": "image/avif",
+  ".bmp": "image/bmp",
+  ".tif": "image/tiff",
+  ".tiff": "image/tiff",
+  ".heic": "image/heic",
+  ".heif": "image/heif",
   ".svg": "image/svg+xml",
   ".html": "text/html; charset=utf-8",
   ".htm": "text/html; charset=utf-8",
@@ -3247,6 +3253,21 @@ const FILE_MIME = {
   ".md": "text/plain; charset=utf-8",
   ".csv": "text/plain; charset=utf-8",
   ".json": "text/plain; charset=utf-8",
+  ".log": "text/plain; charset=utf-8",
+  ".xml": "text/plain; charset=utf-8",
+  ".yaml": "text/plain; charset=utf-8",
+  ".yml": "text/plain; charset=utf-8",
+  ".tsv": "text/plain; charset=utf-8",
+  ".rtf": "application/rtf",
+  ".doc": "application/msword",
+  ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  ".odt": "application/vnd.oasis.opendocument.text",
+  ".xls": "application/vnd.ms-excel",
+  ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  ".ods": "application/vnd.oasis.opendocument.spreadsheet",
+  ".ppt": "application/vnd.ms-powerpoint",
+  ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  ".odp": "application/vnd.oasis.opendocument.presentation",
 };
 
 // Resolve a session-relative path to a servable image. Confined to the
@@ -3264,7 +3285,7 @@ function sessionFile(s, rel) {
     if (!st.isFile() || st.size === 0 || st.size > FILE_MAX_BYTES) return null;
     const mime = FILE_MIME[path.extname(real).toLowerCase()];
     if (!mime) return null;
-    return { real, mime };
+    return { real, mime, size: st.size };
   } catch {
     return null;
   }
@@ -3276,15 +3297,16 @@ function sessionFile(s, rel) {
 function fileHeaders(mime) {
   const html = mime.startsWith("text/html");
   const pdf = mime === "application/pdf";
+  const download = /^(?:application\/(?:msword|rtf|vnd\.(?:ms-|openxmlformats-|oasis\.opendocument)))/.test(mime);
   return {
     "content-type": mime,
     "cache-control": "private, no-store",
     "x-content-type-options": "nosniff",
     // PDFs render in the browser's own viewer document (no scripts, opaque to
     // the app); everything else stays under CSP sandbox as before.
-    ...(pdf ? { "content-disposition": "inline" } : {}),
+    ...(pdf ? { "content-disposition": "inline" } : download ? { "content-disposition": "attachment" } : {}),
     "content-security-policy": html
-      ? "default-src 'none'; style-src 'unsafe-inline'; img-src * data: blob:; script-src 'unsafe-inline'; font-src data:; sandbox allow-scripts"
+      ? "default-src 'none'; style-src 'unsafe-inline'; img-src 'self' data: blob:; script-src 'unsafe-inline'; font-src data:; form-action 'none'; base-uri 'none'; sandbox allow-scripts"
       : pdf
         ? "default-src 'none'; img-src data:; object-src 'none'; base-uri 'none'"
         : "default-src 'none'; style-src 'unsafe-inline'; sandbox",
@@ -3293,18 +3315,55 @@ function fileHeaders(mime) {
 
 // Shared tail for both URL shapes of the file endpoint.
 function serveSessionFile(s, rel, req, res) {
+  if (req.method !== "GET" && req.method !== "HEAD") {
+    res.writeHead(405, { "content-type": "application/json", allow: "GET, HEAD" });
+    res.end(JSON.stringify({ error: "method_not_allowed" }));
+    return;
+  }
   const hit = sessionFile(s, rel);
   if (!hit) {
     res.writeHead(404, { "content-type": "application/json" });
     res.end(JSON.stringify({ error: "no_file" }));
     return;
   }
-  res.writeHead(200, fileHeaders(hit.mime));
+  res.writeHead(200, { ...fileHeaders(hit.mime), ...(req.method === "HEAD" ? { "content-length": hit.size } : {}) });
+  if (req.method === "HEAD") {
+    res.end();
+    return;
+  }
   // A file vanishing between stat and read must not crash the host:
   // pipe() does not forward stream errors, so handle them here.
   const stream = fs.createReadStream(hit.real);
   stream.on("error", () => res.destroy());
   stream.pipe(res);
+}
+
+function failHttp(res, err) {
+  console.error(`agentlinkd: HTTP request failed: ${String(err?.message ?? err)}`);
+  if (res.destroyed || res.writableEnded) return;
+  try {
+    if (res.headersSent) {
+      res.destroy();
+      return;
+    }
+    res.writeHead(500, { "content-type": "application/json", connection: "close" });
+    res.end(JSON.stringify({ error: "internal_error" }));
+  } catch {
+    res.destroy();
+  }
+}
+
+// Event-emitter callbacks run after handleHttp() has returned, so its promise
+// boundary cannot catch them. Wrap each deferred route explicitly as well.
+function safeHttp(res, fn) {
+  return (...args) => {
+    try {
+      const out = fn(...args);
+      if (out && typeof out.then === "function") void out.catch((err) => failHttp(res, err));
+    } catch (err) {
+      failHttp(res, err);
+    }
+  };
 }
 
 async function handleHttp(req, res) {
@@ -3355,7 +3414,7 @@ async function handleHttp(req, res) {
       return;
     }
     req.on("data", () => {}); // body ignored (bounded by socket timeout)
-    req.on("end", () => {
+    req.on("end", safeHttp(res, () => {
       const r = TRIGGERS.webhook(token);
       if (r.error) {
         noteAuthFailure(); // a wrong hook token counts like a wrong bearer
@@ -3365,7 +3424,7 @@ async function handleHttp(req, res) {
       }
       res.writeHead(r.fired ? 202 : 200, { "content-type": "application/json" });
       res.end(JSON.stringify({ ok: true, flow: r.name, fired: r.fired, ...(r.fired ? {} : { note: "cooldown: fired less than a minute ago" }) }));
-    });
+    }));
     return;
   }
   if (pathName === "/__self" || pathName.startsWith("/__self/")) {
@@ -3386,7 +3445,7 @@ async function handleHttp(req, res) {
     if (req.method === "POST" && ["build", "rollback", "restart", "restart_cancel"].includes(verb)) {
       let body = "";
       req.on("data", (d) => { body = (body + d.toString("utf8")).slice(0, 4096); });
-      req.on("end", async () => {
+      req.on("end", safeHttp(res, async () => {
         let opts = {};
         try { opts = body.trim() ? JSON.parse(body) : {}; } catch { /* ignore */ }
         if (!opts || typeof opts !== "object") opts = {};
@@ -3400,7 +3459,7 @@ async function handleHttp(req, res) {
         else out = { ok: true, cancelled: SELF.cancelRestart() };
         res.writeHead(out.ok === false ? (out.error === "busy" ? 409 : 400) : 200, { "content-type": "application/json" });
         res.end(JSON.stringify(out));
-      });
+      }));
       return;
     }
     res.writeHead(405, { "content-type": "application/json" });
@@ -3503,7 +3562,7 @@ async function handleHttp(req, res) {
         size += d.length;
         if (size <= 8192) chunks.push(d);
       });
-      req.on("end", async () => {
+      req.on("end", safeHttp(res, async () => {
         let opts = null;
         try { opts = size > 8192 ? null : JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}"); } catch { /* below */ }
         const dir = uploadDirFor(s.cwd);
@@ -3520,7 +3579,7 @@ async function handleHttp(req, res) {
         }
         res.writeHead(out.error ? (out.error === "too_large" ? 413 : 400) : 200, { "content-type": "application/json" });
         res.end(JSON.stringify(out));
-      });
+      }));
       return;
     }
     res.writeHead(404, { "content-type": "application/json" });
@@ -3541,16 +3600,11 @@ async function handleHttp(req, res) {
 // A bad individual HTTP request must never take down every WebSocket session.
 // Async route failures are otherwise unhandled rejections under modern Node.
 const server = http.createServer((req, res) => {
-  void handleHttp(req, res).catch((err) => {
-    console.error(`agentlinkd: HTTP request failed: ${String(err?.message ?? err)}`);
-    if (res.writableEnded) return;
-    if (res.headersSent) {
-      res.destroy();
-      return;
-    }
-    res.writeHead(500, { "content-type": "application/json", connection: "close" });
-    res.end(JSON.stringify({ error: "internal_error" }));
-  });
+  // Client disconnects and socket write failures are request-local. Always add
+  // listeners: an unhandled EventEmitter "error" would otherwise exit Node.
+  req.on("error", (err) => console.error(`agentlinkd: HTTP request failed: ${String(err?.message ?? err)}`));
+  res.on("error", (err) => console.error(`agentlinkd: HTTP response failed: ${String(err?.message ?? err)}`));
+  void handleHttp(req, res).catch((err) => failHttp(res, err));
 });
 
 // ---------- WS ----------

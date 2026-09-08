@@ -59,6 +59,7 @@ test("fileNameFromResponse: URL basename, decoded, extension from content-type w
   assert.equal(fileNameFromResponse(new URL("https://x.test/a/b/Q1%20report.pdf?v=2"), res()), "Q1 report.pdf");
   assert.equal(fileNameFromResponse(new URL("https://x.test/img/123"), res("image/png; charset=binary")), "123.png");
   assert.equal(fileNameFromResponse(new URL("https://x.test/"), res("application/pdf")), "download.pdf");
+  assert.equal(fileNameFromResponse(new URL("https://x.test/download"), res("application/vnd.openxmlformats-officedocument.wordprocessingml.document")), "download.docx");
   assert.equal(fileNameFromResponse(new URL("https://x.test/%E0%A4%A"), res()), "%E0%A4%A"); // bad escape: raw basename, no throw
 });
 
@@ -79,6 +80,8 @@ test("receiveUpload: streams to uploads/, reports the cwd-relative path", async 
   assert.equal(out.path, `${UPLOAD_DIR}/notes.txt`);
   assert.equal(out.bytes, 11);
   assert.equal(fs.readFileSync(path.join(dir, "notes.txt")).toString(), "hello world");
+  const upper = await receiveUpload(fakeReq(["doc"], 3), dir, "BRIEF.DOCX");
+  assert.equal(upper.path, `${UPLOAD_DIR}/BRIEF.DOCX`);
   fs.rmSync(dir, { recursive: true, force: true });
 });
 

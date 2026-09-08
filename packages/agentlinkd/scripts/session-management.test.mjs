@@ -67,9 +67,10 @@ async function harness(t, mock = false) {
     const r = await fetch(base + p, { headers: { Authorization: "Bearer session-test" } });
     return { status: r.status, body: await r.json() };
   };
-  const request = (p) => {
+  const request = (p, init = {}) => {
     const token = child.spawnargs.find((arg) => arg.startsWith("--token="))?.slice(8) ?? "";
-    return fetch(base + p, { headers: { Authorization: token } });
+    const headers = { ...(init.headers ?? {}), Authorization: token };
+    return fetch(base + p, { ...init, headers });
   };
   await start();
   return { temp, home, state, cwd, client, request, get, start, stop };
@@ -89,6 +90,7 @@ test("agentlinkd: session-file headers are valid and non-PDF previews cannot cra
   const id = await open(c);
   fs.writeFileSync(path.join(h.cwd, "notes.txt"), "plain text");
   fs.writeFileSync(path.join(h.cwd, "report.pdf"), "%PDF-1.4\n");
+  fs.writeFileSync(path.join(h.cwd, "brief.docx"), "fake docx bytes");
   const text = await h.request(`/sessions/${id}/file/notes.txt`);
   assert.equal(text.status, 200);
   assert.equal(text.headers.get("content-disposition"), null, "optional header is omitted, never undefined");
@@ -98,6 +100,17 @@ test("agentlinkd: session-file headers are valid and non-PDF previews cannot cra
   assert.equal(pdf.status, 200);
   assert.equal(pdf.headers.get("content-disposition"), "inline");
   await pdf.arrayBuffer();
+
+  const docx = await h.request(`/sessions/${id}/file/brief.docx`);
+  assert.equal(docx.status, 200);
+  assert.equal(docx.headers.get("content-type"), "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
+  assert.equal(docx.headers.get("content-disposition"), "attachment");
+  await docx.arrayBuffer();
+
+  const head = await h.request(`/sessions/${id}/file/notes.txt`, { method: "HEAD" });
+  assert.equal(head.status, 200);
+  assert.equal(head.headers.get("content-length"), String(Buffer.byteLength("plain text")));
+  assert.equal(await head.text(), "");
 
   const health = await h.request("/health");
   assert.equal(health.status, 200, "host survives the non-PDF response");

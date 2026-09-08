@@ -231,7 +231,7 @@ import Meter from "./Meter.svelte";
       class="act settings-open"
       data-agent-id="settings.open"
       data-state={app.settingsOpen ? "open" : "closed"}
-      aria-haspopup="menu"
+      aria-haspopup="dialog"
       aria-expanded={app.settingsOpen}
       onclick={openSettingsAt}
       title="Settings — theme, notifications, sign out"

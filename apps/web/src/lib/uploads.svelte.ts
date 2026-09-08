@@ -11,11 +11,14 @@ export interface Attachment {
   progress: number; // 0..1, file uploads only
   path?: string; // cwd-relative, once done
   error?: string;
+  type?: string; // browser/host MIME hint; the workspace file remains authoritative
   thumb?: string; // object URL for image chips
 }
 
 const store = $state<Record<string, Attachment[]>>({});
+const transfers = new Map<string, { abort: () => void }>();
 let seq = 0;
+const transferKey = (sid: string, id: number): string => `${sid}\u001f${id}`;
 
 const token = (): string =>
   typeof localStorage !== "undefined" ? (localStorage.getItem("dextui.token") ?? "") : "";
@@ -26,25 +29,35 @@ export function attachmentsFor(sid: string): Attachment[] {
 
 export function removeAttachment(sid: string, id: number): void {
   const hit = (store[sid] ?? []).find((a) => a.id === id);
-  if (hit?.thumb) URL.revokeObjectURL(hit.thumb);
-  store[sid] = (store[sid] ?? []).filter((a) => a.id !== id);
+  if (!hit) return;
+  transfers.get(transferKey(sid, id))?.abort();
+  transfers.delete(transferKey(sid, id));
+  if (hit.thumb) URL.revokeObjectURL(hit.thumb);
+  const next = (store[sid] ?? []).filter((a) => a.id !== id);
+  if (next.length) store[sid] = next;
+  else delete store[sid];
 }
 
 /** Called on send: the paths are already quoted in the prompt. */
 export function clearAttachments(sid: string): void {
-  for (const a of store[sid] ?? []) if (a.thumb) URL.revokeObjectURL(a.thumb);
-  store[sid] = [];
+  for (const a of store[sid] ?? []) {
+    transfers.get(transferKey(sid, a.id))?.abort();
+    transfers.delete(transferKey(sid, a.id));
+    if (a.thumb) URL.revokeObjectURL(a.thumb);
+  }
+  delete store[sid];
 }
 
 export const humanSize = (n: number): string =>
   n < 1024 ? `${n} B` : n < 1024 * 1024 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1024 / 1024).toFixed(1)} MB`;
 
-/** The prompt tail that tells the agent which workspace files to read. */
+/** The prompt tail that tells the agent which workspace files to inspect. Binary
+ * files need format-aware tooling; read_file is intentionally text-only. */
 export function attachmentBlock(list: Attachment[]): string {
   const done = list.filter((a) => a.status === "done" && a.path);
   if (done.length === 0) return "";
-  const lines = done.map((a) => `- ${a.path} (${humanSize(a.size)})`).join("\n");
-  return `Attached file${done.length > 1 ? "s" : ""} in the workspace:\n${lines}`;
+  const lines = done.map((a) => `- ${a.path} (${[a.type, humanSize(a.size)].filter(Boolean).join(", ")})`).join("\n");
+  return `Attached file${done.length > 1 ? "s" : ""} in the workspace. Inspect each with format-aware tools (read_file is text-only):\n${lines}`;
 }
 
 function patch(sid: string, id: number, fields: Partial<Attachment>): void {
@@ -64,10 +77,12 @@ export function attachFiles(sid: string, files: File[]): void {
         size: f.size,
         status: "uploading",
         progress: 0,
+        type: f.type || undefined,
         thumb: f.type.startsWith("image/") && f.size < 8 * 1024 * 1024 ? URL.createObjectURL(f) : undefined,
       },
     ];
     const xhr = new XMLHttpRequest();
+    transfers.set(transferKey(sid, id), xhr);
     xhr.open("POST", `/sessions/${encodeURIComponent(sid)}/upload?name=${encodeURIComponent(f.name || `paste-${id}`)}`);
     xhr.setRequestHeader("authorization", `Bearer ${token()}`);
     xhr.upload.onprogress = (e) => {
@@ -79,6 +94,7 @@ export function attachFiles(sid: string, files: File[]): void {
       if (xhr.status === 200 && body.path) patch(sid, id, { status: "done", path: body.path, name: body.name ?? f.name });
       else patch(sid, id, { status: "error", error: body.message ?? `HTTP ${xhr.status}` });
     };
+    xhr.onloadend = () => transfers.delete(transferKey(sid, id));
     xhr.onerror = () => patch(sid, id, { status: "error", error: "network error" });
     xhr.send(f);
   }
@@ -90,16 +106,22 @@ export function attachUrl(sid: string, url: string, name?: string): void {
   const clean = url.trim();
   if (!clean) return;
   store[sid] = [...(store[sid] ?? []), { id, name: name?.trim() || clean.split("/").filter(Boolean).pop() || "fetched", size: 0, status: "uploading", progress: 0 }];
+  const ctl = new AbortController();
+  transfers.set(transferKey(sid, id), ctl);
   fetch(`/sessions/${encodeURIComponent(sid)}/fetch`, {
     method: "POST",
     headers: { "content-type": "application/json", authorization: `Bearer ${token()}` },
     body: JSON.stringify({ url: clean, name }),
+    signal: ctl.signal,
   })
     .then(async (r) => {
-      let body: { path?: string; name?: string; bytes?: number; error?: string; message?: string } = {};
+      let body: { path?: string; name?: string; bytes?: number; type?: string; error?: string; message?: string } = {};
       try { body = (await r.json()) as typeof body; } catch { /* below */ }
-      if (r.ok && body.path) patch(sid, id, { status: "done", path: body.path, name: body.name, size: body.bytes ?? 0 });
+      if (r.ok && body.path) patch(sid, id, { status: "done", path: body.path, name: body.name, size: body.bytes ?? 0, type: body.type });
       else patch(sid, id, { status: "error", error: body.message ?? body.error ?? `HTTP ${r.status}` });
     })
-    .catch(() => patch(sid, id, { status: "error", error: "network error" }));
+    .catch(() => {
+      if (!ctl.signal.aborted) patch(sid, id, { status: "error", error: "network error" });
+    })
+    .finally(() => transfers.delete(transferKey(sid, id)));
 }

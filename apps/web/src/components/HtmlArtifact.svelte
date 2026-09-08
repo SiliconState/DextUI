@@ -16,7 +16,8 @@
     !!artifact.document &&
       artifact.document.name === name &&
       artifact.document.src === src &&
-      artifact.document.html === html,
+      artifact.document.html === html &&
+      artifact.document.sessionId === sessionId,
   );
 
   function open() {
@@ -24,15 +25,14 @@
   }
 </script>
 
-<div class="art" data-agent-id="markdown.artifact" data-state={selected ? "open" : "ready"}>
+<span class="art" data-agent-id="markdown.artifact" data-state={selected ? "open" : "ready"}>
   <span class="mark" aria-hidden="true">▤</span>
   <span class="copy">
     <span class="kind">Interactive report</span>
     <span class="name" title={name}>{name}</span>
   </span>
   <button class="act open" data-agent-id="markdown.artifact.open" onclick={open}>{selected ? "View report" : "Open report"} →</button>
-  {#if src}<a class="act external" href={src} target="_blank" rel="noopener noreferrer" title="Open in a new tab">↗</a>{/if}
-</div>
+</span>
 
 <style>
   .art {
@@ -73,9 +73,5 @@
   .open {
     flex: none;
     color: var(--cyan);
-  }
-  .external {
-    flex: none;
-    color: var(--faint);
   }
 </style>
