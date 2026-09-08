@@ -74,6 +74,11 @@
   let tip = $state({ x: 0, y: 0, on: false });
   let hostW = $state(560);
   let svgEl = $state<SVGSVGElement | null>(null);
+  // Fluid chart typography: the SVG stretches to the pane (viewBox 0..W), so a
+  // font-size of N viewBox units renders at N * hostW/W css px. Compensate in
+  // the upscale regime only, keeping authored sizes (9-12px) true to the md
+  // type scale at any pane width. Narrow panes keep the authored size.
+  const fs = (base: number) => (hostW > W ? Math.round(base * W / hostW * 100) / 100 : base);
 
   type Gesture =
     | { kind: "drag"; s: number; i: number; ax: "x" | "y"; sc: Scale; dom: [number, number]; order: number[]; moved: number }
@@ -228,14 +233,14 @@
         <!-- svelte-ignore a11y_no_static_element_interactions -->
         <circle cx={cx} cy={cy} r="58" fill="none" stroke-width={iso === r2.i ? 32 : 26} stroke-dasharray="{r2.dash.toFixed(2)} {donut.C.toFixed(2)}" stroke-dashoffset={(-r2.off).toFixed(2)} transform="rotate(-90 {cx} {cy})" style="stroke:{CHART_COLORS[r2.i % 5]}; cursor:pointer; transition: stroke-width .15s ease, opacity .15s ease" opacity={iso < 0 || iso === r2.i ? 1 : 0.15} onclick={() => (iso = iso === r2.i ? -1 : r2.i)} />
       {/each}
-      <text x={cx} y={cy - 4} text-anchor="middle" font-size="12" style="fill:var(--fg,#e6edf3)">{fmt(iso >= 0 ? (vals(0)[iso] ?? 0) : stats.sum)}{unit}</text>
-      <text x={cx} y={cy + 12} text-anchor="middle" font-size="10" style="fill:var(--dim,#8b949e)">{iso >= 0 ? (labels[iso] ?? "").slice(0, 14) : "total"}</text>
+      <text x={cx} y={cy - 4} text-anchor="middle" font-size={fs(12)} style="fill:var(--fg,#e6edf3)">{fmt(iso >= 0 ? (vals(0)[iso] ?? 0) : stats.sum)}{unit}</text>
+      <text x={cx} y={cy + 12} text-anchor="middle" font-size={fs(10)} style="fill:var(--dim,#8b949e)">{iso >= 0 ? (labels[iso] ?? "").slice(0, 14) : "total"}</text>
       {#each donut.rows as r2, p (r2.i)}
         <!-- svelte-ignore a11y_click_events_have_key_events -->
         <!-- svelte-ignore a11y_no_static_element_interactions -->
         <g transform="translate(0,{p * 20})" style="cursor:pointer" onclick={() => (iso = iso === r2.i ? -1 : r2.i)}>
           <rect x="190" y="16" width="10" height="10" rx="2" style="fill:{CHART_COLORS[r2.i % 5]}" opacity={iso < 0 || iso === r2.i ? 1 : 0.3} />
-          <text x="206" y="25" font-size="11" opacity={iso < 0 || iso === r2.i ? 1 : 0.35} style="fill:var(--fg,#e6edf3)">{(labels[r2.i] ?? "").slice(0, 18)} · {r2.pct}% · {fmt(vals(0)[r2.i] ?? 0)}{unit}</text>
+          <text x="206" y="25" font-size={fs(11)} opacity={iso < 0 || iso === r2.i ? 1 : 0.35} style="fill:var(--fg,#e6edf3)">{(labels[r2.i] ?? "").slice(0, 18)} · {r2.pct}% · {fmt(vals(0)[r2.i] ?? 0)}{unit}</text>
         </g>
       {/each}
 
@@ -247,7 +252,7 @@
       {#each hticks as t (t)}
         {@const tx = hbarXAt(t, hdom)}
         <line x1={tx} y1={HBAR.y0 - 4} x2={tx} y2={hEnd} style="stroke:var(--chart-grid,#2a2f37)" opacity={t === 0 ? 0 : 0.6} />
-        <text x={tx} y={HBAR.y0 - 8} text-anchor="middle" font-size="9" style="fill:var(--dim,#8b949e)">{t > 0 && diverging ? "+" : ""}{fmt(t)}{unit}</text>
+        <text x={tx} y={HBAR.y0 - 8} text-anchor="middle" font-size={fs(9)} style="fill:var(--dim,#8b949e)">{t > 0 && diverging ? "+" : ""}{fmt(t)}{unit}</text>
       {/each}
       {#if diverging}
         <line x1={zx} y1={HBAR.y0 - 4} x2={zx} y2={hEnd} style="stroke:var(--dim,#8b949e)" stroke-width="1.5" />
@@ -265,7 +270,7 @@
         <g transform="translate(0,{HBAR.y0 + p * rowH})" style="transition: transform .18s ease">
           <!-- svelte-ignore a11y_click_events_have_key_events -->
           <!-- svelte-ignore a11y_no_static_element_interactions -->
-          <text x="118" y={bh - 2} text-anchor="end" font-size={compact ? 10 : 11} style="fill:var(--dim,#8b949e); cursor:pointer" onclick={cycleSort}>{(labels[i] ?? "").slice(0, 14)}</text>
+          <text x="118" y={bh - 2} text-anchor="end" font-size={fs(compact ? 10 : 11)} style="fill:var(--dim,#8b949e); cursor:pointer" onclick={cycleSort}>{(labels[i] ?? "").slice(0, 14)}</text>
           <rect x={HBAR.x} y="0" width={HBAR.w} height={bh} rx="3" style="fill:var(--chart-grid,#2a2f37)" opacity="0.25" />
           <!-- svelte-ignore a11y_no_static_element_interactions -->
           <rect x={tr.x} y="0" width={tr.w} height={bh} rx="3" style="fill:{barFill(CHART_COLORS, v, i, 0, 1, diverging)}; cursor:ew-resize" opacity={hoverI === i ? 1 : dim(i)} onpointerdown={(e) => startDrag(e, 0, i, "x")} />
@@ -274,7 +279,7 @@
             <rect x={Math.max(HBAR.x, Math.min(HBAR.x + HBAR.w - 4, end - 2))} y="0" width="4" height={bh} fill="transparent" style="cursor:ew-resize" onpointerdown={(e) => startDrag(e, 0, i, "x")} />
           {/if}
           <!-- Keep labels adjacent to bar endpoints, inside the SVG bounds. -->
-          <text x={lx} y={bh - 2} text-anchor={anchor} font-size={compact ? 10 : 11} font-weight={clipped ? "bold" : "normal"} style="fill:{v < 0 ? 'var(--chart-5,#f85149)' : diverging ? 'var(--chart-1,#3fb950)' : 'var(--fg,#e6edf3)'}; pointer-events:none">{txt}</text>
+          <text x={lx} y={bh - 2} text-anchor={anchor} font-size={fs(compact ? 10 : 11)} font-weight={clipped ? "bold" : "normal"} style="fill:{v < 0 ? 'var(--chart-5,#f85149)' : diverging ? 'var(--chart-1,#3fb950)' : 'var(--fg,#e6edf3)'}; pointer-events:none">{txt}</text>
         </g>
       {/each}
 
@@ -283,7 +288,7 @@
         {@const gy = scaleY(scl, t)}
         {#if gy >= PLOT.top - 1 && gy <= PLOT.bottom + 1}
           <line x1={PLOT.l} y1={gy} x2={PLOT.r} y2={gy} style="stroke:var(--chart-grid,#2a2f37)" opacity={t === 0 ? 0 : 0.55} />
-          <text x={PLOT.r + 4} y={gy + 3} font-size="10" style="fill:var(--dim,#8b949e)" font-weight={t === 0 ? "bold" : "normal"}>{t > 0 && scl.lo < 0 ? "+" : ""}{fmt(t)}{unit}</text>
+          <text x={PLOT.r + 4} y={gy + 3} font-size={fs(10)} style="fill:var(--dim,#8b949e)" font-weight={t === 0 ? "bold" : "normal"}>{t > 0 && scl.lo < 0 ? "+" : ""}{fmt(t)}{unit}</text>
         {/if}
       {/each}
       {#if scl.lo < 0 && scl.hi > 0}
@@ -313,12 +318,12 @@
               {/if}
             </g>
             {#if visible.length === 1 || clipped}
-              <text x={bx} y={tr.end + (tr.clipped < 0 || (!clipped && v < 0) ? 11 : -4)} text-anchor="middle" font-size="10" font-weight={clipped ? "bold" : "normal"} style="fill:var(--fg,#e6edf3); pointer-events:none">{clipped ? (tr.clipped > 0 ? "▴" : "▾") : ""}{fmt(v)}{unit}</text>
+              <text x={bx} y={tr.end + (tr.clipped < 0 || (!clipped && v < 0) ? 11 : -4)} text-anchor="middle" font-size={fs(10)} font-weight={clipped ? "bold" : "normal"} style="fill:var(--fg,#e6edf3); pointer-events:none">{clipped ? (tr.clipped > 0 ? "▴" : "▾") : ""}{fmt(v)}{unit}</text>
             {/if}
           {/each}
           <!-- svelte-ignore a11y_click_events_have_key_events -->
           <!-- svelte-ignore a11y_no_static_element_interactions -->
-          <text x={gx} y={PLOT.bottom + 16} text-anchor="middle" font-size="10" style="fill:var(--dim,#8b949e); cursor:pointer" onclick={cycleSort}>{(labels[i] ?? "").slice(0, 10)}</text>
+          <text x={gx} y={PLOT.bottom + 16} text-anchor="middle" font-size={fs(10)} style="fill:var(--dim,#8b949e); cursor:pointer" onclick={cycleSort}>{(labels[i] ?? "").slice(0, 10)}</text>
         {/each}
 
       {:else}
@@ -345,7 +350,7 @@
         {#each [0, 1, 2, 3, 4] as t (t)}
           {@const i = Math.round(scl.i0 + ((scl.i1 - scl.i0) * t) / 4)}
           {#if i >= 0 && i < n}
-            <text x={lineX(scl, i)} y={PLOT.bottom + 16} text-anchor="middle" font-size="10" style="fill:var(--dim,#8b949e)">{(labels[i] ?? "").slice(0, 10)}</text>
+            <text x={lineX(scl, i)} y={PLOT.bottom + 16} text-anchor="middle" font-size={fs(10)} style="fill:var(--dim,#8b949e)">{(labels[i] ?? "").slice(0, 10)}</text>
           {/if}
         {/each}
         {#if showBrush}
@@ -355,11 +360,11 @@
           {#if link.sel && link.sel.ds === ds}
             <rect x={lineX(scl, link.sel.lo)} y={sy} width={Math.max(2, lineX(scl, link.sel.hi) - lineX(scl, link.sel.lo))} height="12" rx="2" style="fill:var(--chart-2,#39c5cf); pointer-events:none" opacity="0.6" />
           {/if}
-          <text x={PLOT.l + 4} y={sy + 9} font-size="8" class="brush-hint" style="fill:var(--dim,#8b949e); pointer-events:none">drag to brush → highlights siblings sharing "{spec.dataset}"</text>
+          <text x={PLOT.l + 4} y={sy + 9} font-size={fs(8)} class="brush-hint" style="fill:var(--dim,#8b949e); pointer-events:none">drag to brush → highlights siblings sharing "{spec.dataset}"</text>
         {/if}
       {/if}
-      {#if spec.y}<text x={W - 4} y="16" text-anchor="end" font-size="9" style="fill:var(--dim,#8b949e)">{spec.y}</text>{/if}
-      {#if spec.x}<text x={W - 4} y={PLOT.bottom + 30} text-anchor="end" font-size="9" style="fill:var(--dim,#8b949e)">{spec.x}</text>{/if}
+      {#if spec.y}<text x={W - 4} y="16" text-anchor="end" font-size={fs(9)} style="fill:var(--dim,#8b949e)">{spec.y}</text>{/if}
+      {#if spec.x}<text x={W - 4} y={PLOT.bottom + 30} text-anchor="end" font-size={fs(9)} style="fill:var(--dim,#8b949e)">{spec.x}</text>{/if}
     {/if}
   </svg>
 
