@@ -59,6 +59,12 @@ export function shortPath(p: string): string {
   return segs.length > 3 ? `${segs[0]}/…/${segs.slice(-2).join("/")}` : t;
 }
 
+/** A section divider (notably bash's `--- stdout ---`) is not a diff. */
+export function looksLikeDiff(text: string): boolean {
+  return /^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@(?:.*)\r?$/m.test(text)
+    || /^--- [^\r\n]+\r?\n\+\+\+ [^\r\n]+/m.test(text);
+}
+
 /** Match only backend advisory markers, never ordinary narration or errors. */
 export function isBashAdvisory(text: string): boolean {
   return /^(?:\[runtime-note\]\s*)?bash advisory:\s*\S/i.test(text.trim());

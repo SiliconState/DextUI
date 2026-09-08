@@ -5,7 +5,7 @@ import ts from "typescript";
 
 const source = fs.readFileSync(new URL("../../../apps/web/src/lib/display.ts", import.meta.url), "utf8");
 const { outputText } = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } });
-const { isBashAdvisory, humanizeTool } = await import(`data:text/javascript;base64,${Buffer.from(outputText).toString("base64")}`);
+const { isBashAdvisory, humanizeTool, looksLikeDiff } = await import(`data:text/javascript;base64,${Buffer.from(outputText).toString("base64")}`);
 
 test("bash advisory disclosure detection stays scoped to backend marker prefixes", () => {
   assert.equal(isBashAdvisory("bash advisory: prefer native rg"), true);
@@ -13,6 +13,24 @@ test("bash advisory disclosure detection stays scoped to backend marker prefixes
   assert.equal(isBashAdvisory("We discussed a bash advisory: earlier"), false);
   assert.equal(isBashAdvisory("runtime guidance: other warning"), false);
   assert.equal(isBashAdvisory("bash advisory:"), false);
+});
+
+test("bash output wrappers and ordinary section headings are not diffs", () => {
+  const output = "exit: 0\n--- stdout ---\n✓ 197 modules transformed.\n✓ built in 1.46s\n--- stderr ---\n";
+  assert.equal(looksLikeDiff(output), false);
+  assert.equal(looksLikeDiff("--- stderr ---\ncommand failed\n"), false);
+  assert.equal(looksLikeDiff("--- Results ---\nall checks passed"), false);
+  assert.equal(looksLikeDiff("+++ Ready\n@@ status\ndiff --git mentioned in prose"), false);
+  const longOutput = `exit: 0\n--- stdout ---\n${Array.from({ length: 20 }, (_, i) => `line ${i}`).join("\n")}\n--- stderr ---\n`;
+  assert.equal(looksLikeDiff(longOutput), false, "long bash output must use the eight-line preview path");
+});
+
+test("unified file headers and genuine hunks retain diff rendering", () => {
+  assert.equal(looksLikeDiff("diff --git a/a.ts b/a.ts\n--- a/a.ts\n+++ b/a.ts\n@@ -1,2 +1,2 @@\n-old\n+new"), true);
+  assert.equal(looksLikeDiff("--- old.txt\n+++ new.txt\n-old\n+new"), true);
+  assert.equal(looksLikeDiff("--- /dev/null\r\n+++ b/new.txt\r\n@@ -0,0 +1 @@\r\n+new"), true);
+  assert.equal(looksLikeDiff("@@ -4 +4 @@ function example\n-old\n+new"), true);
+  assert.equal(looksLikeDiff("@@ -1,2 +1,3 @@\n context\n+new"), true);
 });
 
 test("tool label cleanup leaves commands and distinct tool names intact", () => {
