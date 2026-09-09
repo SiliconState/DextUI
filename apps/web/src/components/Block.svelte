@@ -4,7 +4,7 @@
   // are CSS borders, never literal glyphs — glyph gutters shred when lines wrap.
   import type { ViewBlock as Block } from "@dextui/client";
   import { app, copyText, packOfPrompt, prefillComposer } from "../lib/state.svelte";
-  import { humanizeTool, humanizeLabel, parseRunMeta, isBashAdvisory, looksLikeDiff } from "../lib/display";
+  import { humanizeTool, humanizeLabel, parseRunMeta, isBashAdvisory, looksLikeDiff, toolStatusDisplay } from "../lib/display";
   import { packForAuthMarker, openPackCredentials } from "../lib/packcreds.svelte";
   import Markdown from "./Markdown.svelte";
   import Diff from "./Diff.svelte";
@@ -64,36 +64,6 @@
   // Core's run-status annotations ("[objective: … | checkpoints: …]",
   // "[phase:probe] note") render as quiet meta rows, not raw prose.
   const runMeta = $derived(block.kind === "marker" ? parseRunMeta(block.text) : null);
-
-  const toolLabel: Record<string, string> = {
-    preview: "… planned",
-    running: "● running",
-    ok: "✓ ok",
-    failed: "✗ failed",
-  };
-  const toolClass: Record<string, string> = {
-    preview: "st-yellow",
-    running: "st-cyan pulse",
-    ok: "st-green",
-    failed: "st-red",
-  };
-
-  function toolStatusLabel(b: Block): string {
-    if (b.kind !== "tool") return "";
-    if (b.name !== "read_image") return toolLabel[b.status] ?? b.status;
-    if (b.status === "preview") return "… vision planned";
-    if (b.status === "running") return "● sanitizing";
-    if (b.status === "ok") return "✓ image → context";
-    if (/does not advertise image input/i.test(b.content ?? "")) return "⚠ vision unavailable";
-    if (/unsupported image format|animated (?:png|webp)|source limit|source .*byte limit/i.test(b.content ?? "")) return "⚠ conversion needed";
-    return "✗ failed";
-  }
-
-  function toolStatusClass(b: Block): string {
-    if (b.kind !== "tool") return "st-faint";
-    if (b.name === "read_image" && b.status === "failed" && /does not advertise image input|unsupported image format|animated (?:png|webp)|source limit|source .*byte limit/i.test(b.content ?? "")) return "st-yellow";
-    return toolClass[b.status] ?? "st-faint";
-  }
 
   function tailLines(t: string): string {
     return t.split("\n").slice(-8).join("\n");
@@ -172,13 +142,14 @@
     </details>
   {/if}
 {:else if block.kind === "tool"}
+  {@const status = toolStatusDisplay(block.name, block.status, block.content)}
   <div class="tool" data-agent-id={`tool.${block.call_id}`} data-state={block.status}>
     <div class="tool-head">
       <span class="tool-name">{block.name}</span>
       <span class="faint">·</span>
       <span class="dim tool-summary" class:cmd={isShell(block.name)}>{humanizeTool(block.name, block.summary)}</span>
-      <span class={`tool-status ${toolStatusClass(block)}`} data-agent-id={`tool.${block.call_id}.status`}>
-        {toolStatusLabel(block)}
+      <span class={`tool-status ${status.className}`} data-agent-id={`tool.${block.call_id}.status`}>
+        {status.label}
       </span>
       {#if onInspect}
         <button class="act hover-act" data-agent-id={`tool.${block.call_id}.inspect`} onclick={() => onInspect?.(block)}>Raw</button>

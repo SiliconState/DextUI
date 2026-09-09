@@ -125,8 +125,8 @@
     document.title = n > 0 ? `(${n}) ${base}` : base;
   });
 
-  // Keyboard-first approvals: a/s/d approve the globally oldest pending
-  // request across ALL sessions. Ctrl/Cmd+B rail · N new · [ ] prev/next ·
+  // Keyboard-first approvals: a/s/d act on the globally oldest ordinary
+  // request. Sensitive image reads first open their full disclosure card.
   // C interrupt · ? shortcuts · any printable key starts a session (hero).
   $effect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -235,16 +235,27 @@
         openTasks();
         return;
       }
-      // Approvals: a/s/d act on the globally oldest pending request, whether
-      // or not a session is active. With only count-only rows, jump there
-      // instead of ever responding blind.
+      // Approvals: a/s/d act on the globally oldest pending request. Sensitive
+      // image reads in another session open their disclosure instead of being
+      // answered blind. Count-only rows also only navigate.
       const choice =
         e.key === "a" ? "once" : e.key === "s" ? "always" : e.key === "d" ? "deny" : null;
       if (choice) {
         const target = queue.entries[0];
         if (target) {
-          // Activate first so the full card (diff + note) is visible, then act.
+          // Affirmative pixel disclosure must be reviewed in the full approval
+          // card. Denial can safely resolve from any session.
+          if (
+            target.pending.tool === "read_image"
+            && choice !== "deny"
+            && target.sessionId !== app.activeId
+          ) {
+            e.preventDefault();
+            activate(target.sessionId);
+            return;
+          }
           if (target.sessionId !== app.activeId) activate(target.sessionId);
+          e.preventDefault();
           respondGlobal(target.sessionId, target.pending.request_id, choice);
           return;
         }

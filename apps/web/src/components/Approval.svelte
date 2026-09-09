@@ -9,6 +9,11 @@
 
   let note = $state("");
   const imagePermission = $derived(pending.tool === "read_image");
+  const imagePath = $derived.by(() => {
+    if (!imagePermission || !pending.input || typeof pending.input !== "object") return "";
+    const path = (pending.input as { path?: unknown }).path;
+    return typeof path === "string" ? path : "";
+  });
 
   function respond(choice: "once" | "always" | "deny") {
     connection()?.respond(sessionId, pending.request_id, choice, note.trim() || undefined);
@@ -22,13 +27,14 @@
     <span class="faint">·</span>
     <span class="st-yellow">{pending.tool}</span>
     {#if pending.risk}
-      <span class="faint">· Risk:{pending.risk}</span>
+      <span class="faint">· Risk: {pending.risk}</span>
     {/if}
     <span class="appr-summary dim">{pending.summary}</span>
   </div>
   {#if imagePermission}
     <p class="appr-disclosure" data-agent-id={`approval.${pending.request_id}.disclosure`}>
       Dext will sanitize this workspace image, strip metadata, resize it, and send its pixels to the active model provider for this turn.
+      {#if imagePath}<code data-agent-id={`approval.${pending.request_id}.path`}>{imagePath}</code>{/if}
     </p>
   {/if}
   {#if pending.diff}
@@ -74,6 +80,12 @@
     margin: 0;
     color: var(--dim);
     line-height: 1.45;
+  }
+  .appr-disclosure code {
+    display: block;
+    margin-top: 3px;
+    color: var(--fg);
+    overflow-wrap: anywhere;
   }
   .appr-summary {
     overflow: hidden;

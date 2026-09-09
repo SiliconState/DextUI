@@ -86,8 +86,36 @@ export function humanizeTool(name: string, summary: string): string {
   const m = body.match(/^\/(.+)\/\s+in\s+(\S.*)$/);
   if (m?.[1] !== undefined && m[2] !== undefined) return `${verb ?? "Search"} for ${shortToken(m[1])} in ${shortPath(m[2])}`;
   if (body.startsWith("/") && !body.includes(" ")) return `${verb ?? "Read"} ${shortPath(body)}`;
-  if (verb && !/\s/.test(body)) return `${verb} ${shortPath(body)}`;
+  if (name.toLowerCase() === "read_image") return `Inspect image ${shortPath(body)}`;
   return shortToken(raw, 72);
+}
+
+export interface ToolStatusDisplay {
+  label: string;
+  className: string;
+}
+
+const TOOL_STATUS: Record<string, ToolStatusDisplay> = {
+  preview: { label: "… planned", className: "st-yellow" },
+  running: { label: "● running", className: "st-cyan pulse" },
+  ok: { label: "✓ ok", className: "st-green" },
+  failed: { label: "✗ failed", className: "st-red" },
+};
+
+export function toolStatusDisplay(name: string, status: string, content = ""): ToolStatusDisplay {
+  const fallback = TOOL_STATUS[status] ?? { label: status, className: "st-faint" };
+  if (name !== "read_image") return fallback;
+  if (status === "preview") return { label: "… vision planned", className: fallback.className };
+  if (status === "running") return { label: "● sanitizing", className: fallback.className };
+  if (status === "ok") return { label: "✓ image → context", className: fallback.className };
+  if (/does not advertise image input/i.test(content)) return { label: "⚠ vision unavailable", className: "st-yellow" };
+  if (/at most two successful images/i.test(content)) return { label: "⚠ image turn limit", className: "st-yellow" };
+  if (/source changed since read_image approval/i.test(content)) return { label: "⚠ image changed", className: "st-yellow" };
+  if (/only sends images from the active workspace/i.test(content)) return { label: "⚠ move to workspace", className: "st-yellow" };
+  if (/unsupported image format|animated (?:png|webp)|source .*byte limit|decoded-pixel limit|pixel limit|dimensions must be non-zero|could not (?:read image dimensions|initialize bounded image decoder|decode image|encode sanitized image)|sanitized image still exceeds/i.test(content)) {
+    return { label: "⚠ conversion needed", className: "st-yellow" };
+  }
+  return fallback;
 }
 
 /** Batch labels carry their tool name ("rg: /re/ in /p"); split it off. */

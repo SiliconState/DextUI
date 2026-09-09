@@ -467,6 +467,7 @@
   {#if atts.length > 0}
     <div class="c-atts" data-agent-id="composer.attachments">
       {#each atts as a (a.id)}
+        {@const kind = imageAttachmentKind(a)}
         <span class="c-att" class:err={a.status === "error"} data-agent-id="composer.attachment" data-state={a.status} title={a.error ?? a.path ?? a.name}>
           {#if a.thumb}<img class="c-thumb" src={a.thumb} alt="" />{/if}
           {#if a.status === "done" && a.path}
@@ -478,10 +479,10 @@
             <span class="faint">{a.size > 0 && a.progress > 0 ? `${Math.round(a.progress * 100)}%` : "…"}</span>
           {:else if a.status === "error"}
             <span class="c-attmeta">{a.error}</span>
-          {:else if imageAttachmentKind(a) === "vision"}
-            <span class="c-attmeta vision" data-agent-id="composer.attachment.vision" title="Dext will call read_image; pixel disclosure may require approval">vision ready · approval on use</span>
-          {:else if imageAttachmentKind(a) === "other-image" || imageAttachmentKind(a) === "large-image"}
-            <span class="c-attmeta warn" data-agent-id="composer.attachment.convert" title={imageAttachmentKind(a) === "large-image" ? "read_image accepts source images up to 20 MiB" : "read_image accepts PNG, JPEG, and WebP"}>convert / OCR</span>
+          {:else if kind === "vision"}
+            <span class="c-attmeta vision" data-agent-id="composer.attachment.vision" title="Dext can call read_image; pixel disclosure may require approval">vision compatible · approval on use</span>
+          {:else if kind === "other-image" || kind === "large-image"}
+            <span class="c-attmeta warn" data-agent-id="composer.attachment.convert" title={kind === "large-image" ? "read_image accepts source images up to 20 MiB" : "read_image accepts PNG, JPEG, and WebP"}>convert / OCR</span>
           {:else}
             <span class="faint">{a.path}</span>
           {/if}

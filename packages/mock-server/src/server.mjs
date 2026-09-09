@@ -300,7 +300,7 @@ function usage(inTok, outTok) {
 }
 
 function echoPlan(text) {
-  if (/\bAttached images? ready for native vision\b/i.test(text) && /\bread_image\(path\)/i.test(text)) return imageVisionPlan(text);
+  if (/\bAttached images? candidates? for native read_image\b/i.test(text) && /\bread_image\(path\)/i.test(text)) return imageVisionPlan(text);
   if (/\bartifact file demo\b/i.test(text)) return fileArtifactPlan();
   // Rich-rendering demo: prompt mentioning markdown/table/demo returns real
   // structured markdown plus live ```chart fences, so the web client's
@@ -341,7 +341,14 @@ function echoPlan(text) {
 }
 
 function imageVisionPlan(text) {
-  const imagePath = /^-\s+(\S+\.(?:png|jpe?g|webp))\s+\(/im.exec(text)?.[1] ?? "uploads/image.png";
+  const imagePath = text
+    .split("\n")
+    .map((line) => line.trim().replace(/^-\s*/, ""))
+    .map((line) => {
+      try { return JSON.parse(line); } catch { return null; }
+    })
+    .find((record) => typeof record?.path === "string" && /\.(?:png|jpe?g|webp)$/i.test(record.path))
+    ?.path ?? "uploads/image.png";
   const ref = { call_id: "vision_1", name: "read_image", summary: `read_image: ${imagePath} (pixels will be sent to the model provider)`, input: { path: imagePath } };
   return [
     { event: "turn_start", delay: 5 },
@@ -882,7 +889,7 @@ function handleCommand(client, frame) {
       if (!s.title || s.title.startsWith("New session") || s.title.startsWith("Fixture:")) {
         s.title = frame.text.slice(0, 60);
       }
-      if (/\bAttached images? ready for native vision\b/i.test(frame.text) && /\bread_image\(path\)/i.test(frame.text)) {
+      if (/\bAttached images? candidates? for native read_image\b/i.test(frame.text) && /\bread_image\(path\)/i.test(frame.text)) {
         beginTurn(s, echoPlan(frame.text.trim().slice(0, 4000)));
       } else if (s.fixture) {
         const script = loadFixture(s.fixture);

@@ -5,7 +5,7 @@ import ts from "typescript";
 
 const source = fs.readFileSync(new URL("../../../apps/web/src/lib/display.ts", import.meta.url), "utf8");
 const { outputText } = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } });
-const { isBashAdvisory, humanizeTool, looksLikeDiff } = await import(`data:text/javascript;base64,${Buffer.from(outputText).toString("base64")}`);
+const { isBashAdvisory, humanizeTool, looksLikeDiff, toolStatusDisplay } = await import(`data:text/javascript;base64,${Buffer.from(outputText).toString("base64")}`);
 
 test("bash advisory disclosure detection stays scoped to backend marker prefixes", () => {
   assert.equal(isBashAdvisory("bash advisory: prefer native rg"), true);
@@ -33,6 +33,14 @@ test("unified file headers and genuine hunks retain diff rendering", () => {
   assert.equal(looksLikeDiff("@@ -1,2 +1,3 @@\n context\n+new"), true);
 });
 
+test("image tool statuses distinguish provider, conversion, turn, and stale-file failures", () => {
+  assert.deepEqual(toolStatusDisplay("read_image", "ok", "approved image"), { label: "✓ image → context", className: "st-green" });
+  assert.deepEqual(toolStatusDisplay("read_image", "failed", "the active model 'x' does not advertise image input"), { label: "⚠ vision unavailable", className: "st-yellow" });
+  assert.deepEqual(toolStatusDisplay("read_image", "failed", "read_image allows at most two successful images per user turn"), { label: "⚠ image turn limit", className: "st-yellow" });
+  assert.deepEqual(toolStatusDisplay("read_image", "failed", "source changed since read_image approval"), { label: "⚠ image changed", className: "st-yellow" });
+  assert.deepEqual(toolStatusDisplay("read_image", "failed", "image has 50000000 decoded pixels, exceeding the 40000000 pixel limit"), { label: "⚠ conversion needed", className: "st-yellow" });
+  assert.deepEqual(toolStatusDisplay("bash", "failed", "unsupported image format"), { label: "✗ failed", className: "st-red" });
+});
 test("tool label cleanup leaves commands and distinct tool names intact", () => {
   assert.equal(humanizeTool("read_file", "read_file: read_file: /tmp/example"), "Read /tmp/example");
   assert.equal(humanizeTool("read_image", "read_image: uploads/screen.png (pixels will be sent to the model provider)"), "Inspect image uploads/screen.png");

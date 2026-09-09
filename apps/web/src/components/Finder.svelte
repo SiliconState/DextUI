@@ -50,15 +50,27 @@
     // Approvals first — the global queue, oldest first, across every session.
     for (const e of queue.entries) {
       const short = e.pending.summary ? ` — ${e.pending.summary.slice(0, 40)}` : "";
+      const image = e.pending.tool === "read_image";
       const respond = (choice: "once" | "always" | "deny") =>
         respondGlobal(e.sessionId, e.pending.request_id, choice);
+      const reviewImage = () => activate(e.sessionId);
       out.push({
         slug: `approve.${e.sessionId}.${e.pending.request_id}.once`,
-        label: `Approve once: ${e.pending.tool}${short}`,
+        label: image ? `Review image sharing${short}` : `Approve once: ${e.pending.tool}${short}`,
         hint: e.sessionTitle,
         group: "appr",
-        run: () => respond("once"),
+        run: image ? reviewImage : () => respond("once"),
       });
+      if (image) {
+        out.push({
+          slug: `approve.${e.sessionId}.${e.pending.request_id}.deny`,
+          label: `Deny image sharing${short}`,
+          hint: e.sessionTitle,
+          group: "appr",
+          run: () => respond("deny"),
+        });
+        continue;
+      }
       out.push({
         slug: `approve.${e.sessionId}.${e.pending.request_id}.always`,
         label: `Approve always: ${e.pending.tool}${short}`,

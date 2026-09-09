@@ -176,8 +176,8 @@ function rebuildQueue(): void {
       entries.push({ sessionId: id, sessionTitle: titleOf(id), pending: p });
     }
   }
-  // Oldest first — the same order the global a/s/d keys act on. Count-only
-  // rows cannot be ordered honestly and always sort after real entries.
+  // Oldest first for global approval keys/navigation. Count-only rows cannot be
+  // ordered honestly and always sort after real entries.
   entries.sort((a, b) => a.pending.received_at - b.pending.received_at);
   const withEntries = new Set(entries.map((e) => e.sessionId));
   queue.counts = app.sessions

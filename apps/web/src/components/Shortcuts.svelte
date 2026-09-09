@@ -59,9 +59,7 @@
     {
       name: "approvals",
       rows: [
-        ["a", "approve once"],
-        ["s", "approve always"],
-        ["d", "deny"],
+        ["a / s / d", "approve once / always / deny; image sharing opens its disclosure first"],
       ],
     },
     {

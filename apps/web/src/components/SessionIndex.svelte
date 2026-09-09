@@ -156,7 +156,7 @@
       {/if}
     </div>
   {/if}
-  <div class="idx-foot faint">⌘k Finder · a/s/d approve</div>
+  <div class="idx-foot faint">⌘k Finder · a/s/d approve · image shares open for review</div>
 </div>
 
 <style>
