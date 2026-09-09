@@ -8,9 +8,19 @@ if ! command -v agent-browser >/dev/null 2>&1; then
 fi
 cd "$(dirname "$0")/../../.."
 PORT="${PORT:-8793}"
-node packages/mock-server/src/server.mjs --port=$PORT --token=browsertest >/tmp/dextui-bt-mock.log 2>&1 &
+# Isolation: the gate builds its own copy of the app and serves THAT — the
+# served apps/web/dist is never written by a test run, so a failing gate
+# leaves the served build untouched (the same promise ui-build makes).
+OUT="apps/web/dist.smoke"
+rm -rf "$OUT"
+if ! (cd apps/web && npm exec -- vite build --outDir dist.smoke --emptyOutDir >/tmp/dextui-bt-build.log 2>&1); then
+  echo "FAIL: smoke build"
+  tail -40 /tmp/dextui-bt-build.log
+  exit 1
+fi
+node packages/mock-server/src/server.mjs --port=$PORT --token=browsertest --static="$OUT" >/tmp/dextui-bt-mock.log 2>&1 &
 SRV=$!
-cleanup() { agent-browser close --all >/dev/null 2>&1; kill $SRV 2>/dev/null; }
+cleanup() { agent-browser close --all >/dev/null 2>&1; kill $SRV 2>/dev/null; rm -rf "$OUT"; }
 trap cleanup EXIT
 sleep 1.2
 B="http://127.0.0.1:$PORT"
@@ -59,6 +69,19 @@ wait_js 'document.querySelector(`[data-agent-id="composer.input"]`).value === ""
 H2=$(agent-browser eval 'Math.round(parseFloat(document.querySelector(`[data-agent-id="composer.input"]`).style.height)||0)' | tr -dc '0-9')
 echo "height after send: $H2"
 [ "$H2" -le 30 ] || { echo "FAIL: height reset after send"; FAIL=1; }
+
+note "composer: an unsent draft survives a page reload"
+agent-browser fill '[data-agent-id="composer.input"]' 'unsent reload draft' >/dev/null
+sleep 0.6 # let the 250 ms debounce persist it
+agent-browser open "$B" >/dev/null
+sleep 1
+# The pairing token may or may not be restored — reconnect if the login screen shows.
+agent-browser eval '(()=>{const t=document.querySelector(`[data-agent-id="connect.token"]`);if(!t)return false;t.value="browsertest";document.querySelector(`[data-agent-id="connect.submit"]`).click();return true})()' >/dev/null
+wait_js '!!document.querySelector(`[data-agent-id="session.sess_001.open"]`)' || { echo "FAIL: reload session list"; FAIL=1; }
+agent-browser eval 'document.querySelector(`[data-agent-id="session.sess_001.open"]`)?.click()' >/dev/null
+agent-browser wait '[data-agent-id="composer.input"]' >/dev/null
+wait_js 'document.querySelector(`[data-agent-id="composer.input"]`).value === "unsent reload draft"' || { echo "FAIL: draft lost on reload"; FAIL=1; }
+agent-browser fill '[data-agent-id="composer.input"]' '' >/dev/null
 
 note "active thinking preview shows four lines"
 agent-browser fill '[data-agent-id="composer.input"]' 'thinking preview demo' >/dev/null

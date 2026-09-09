@@ -472,7 +472,7 @@ test("prompt/steer/slash are nonce-tagged; cmd_ack resolves exactly once", (t) =
   assert.equal(conn.pendingCommandCount(), 1);
 
   ws.receive({ v: 1, ts: 2, event: "cmd_ack", data: { nonce: n1, cmd: "prompt.submit", ok: true } });
-  assert.deepEqual(acks, [[n1, true, { cmd: "prompt.submit", duplicate: false, message: undefined }]]);
+  assert.deepEqual(acks, [[n1, true, { cmd: "prompt.submit", duplicate: false, durable: true, message: undefined }]]);
   assert.equal(conn.pendingCommandCount(), 0, "ack clears the pending entry");
 
   // A replayed/duplicate ack must not fire again.
@@ -482,7 +482,13 @@ test("prompt/steer/slash are nonce-tagged; cmd_ack resolves exactly once", (t) =
   // Duplicate flag surfaces for the caller (reconnect replay dedup notice).
   const n2 = conn.slash("s1", "/help");
   ws.receive({ v: 1, ts: 4, event: "cmd_ack", data: { nonce: n2, cmd: "slash", ok: true, duplicate: true } });
-  assert.deepEqual(acks.at(-1), [n2, true, { cmd: "slash", duplicate: true, message: undefined }]);
+  assert.deepEqual(acks.at(-1), [n2, true, { cmd: "slash", duplicate: true, durable: true, message: undefined }]);
+
+  // Journal durability rides the ack: a host whose journal write failed says
+  // so, and the app layer can tell the user the turn may not survive a restart.
+  const n3 = conn.prompt("s1", "durability probe");
+  ws.receive({ v: 1, ts: 5, event: "cmd_ack", data: { nonce: n3, cmd: "prompt.submit", ok: true, durable: false, message: "journal write failed" } });
+  assert.deepEqual(acks.at(-1), [n3, true, { cmd: "prompt.submit", duplicate: false, durable: false, message: "journal write failed" }]);
 });
 
 test("an error envelope resolves the one pending command of its kind as failed", (t) => {

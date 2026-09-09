@@ -513,6 +513,7 @@ export function start(token: string): void {
       if (!e) return; // unknown nonce: already resolved (e.g. error correlation won)
       outgoing.delete(nonce);
       if (!ok) failDelivery(nonce, e, info.message || "the host rejected it");
+      else if (info.durable === false) pushToast("warn", "Delivered, but not saved — the host's journal write failed; it may not survive a restart");
       else if (info.duplicate) pushToast("info", "Already delivered — reconnect replay skipped");
     },
     onHostRestart: () => {

@@ -158,8 +158,10 @@ export function createScheduler({
   }
 
   /** Try to fire. Returns true when a launch was started; a skip is queued or
-   *  backed off, never silently dropped. */
+   *  backed off, never silently dropped. Disabled triggers never fire — a
+   *  queued event from before the disable is dropped at drain time. */
   function fire(entry, reason) {
+    if (!entry?.trigger?.enabled) return false;
     const fk = flowKey(entry.cwd, entry.name);
     const now = Date.now();
     if (inFlight.has(fk)) {
@@ -220,12 +222,14 @@ export function createScheduler({
     return true;
   }
 
-  /** Fire coalesced events whose flow has freed up (cooldown + backoff honored). */
+  /** Fire coalesced events whose flow has freed up (cooldown + backoff honored).
+   *  Pending work for triggers that were disabled or removed meanwhile is
+   *  invalidated, not executed. */
   function drainPending() {
     const now = Date.now();
     for (const [fk, p] of [...pending.entries()]) {
       const entry = live.get(p.key);
-      if (!entry) {
+      if (!entry || !entry.trigger.enabled) {
         pending.delete(fk);
         continue;
       }
@@ -330,7 +334,7 @@ export function createScheduler({
           for (const msg of msgs) {
             for (const k of meshQueue.get(node) ?? []) {
               const entry = live.get(k);
-              if (!entry) continue;
+              if (!entry || !entry.trigger.enabled) continue;
               if (entry.trigger.from && msg.from !== entry.trigger.from) continue;
               fire(entry, `message from ${msg.from ?? "?"}: ${String(msg.body ?? "").slice(0, 80)}`);
             }

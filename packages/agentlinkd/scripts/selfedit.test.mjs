@@ -82,6 +82,31 @@ test("buildUi: fake steps — success swaps, a failing step leaves dist untouche
   assert.equal(nope.error, "not_buildable");
 });
 
+test("buildUi isolation: a live lock refuses a second build, a dead holder's lock is broken, per-run staging swaps cleanly", async (t) => {
+  const repo = fakeRepo(t);
+  const { web, dist } = distPaths(repo);
+  const lock = path.join(web, ".ui-build.lock");
+  fs.writeFileSync(lock, `${process.pid} ${Date.now()}`);
+  const busy = await buildUi({ repoRoot: repo, steps: [["noop", process.execPath, ["-e", "0"], repo]] });
+  assert.equal(busy.ok, false, JSON.stringify(busy));
+  assert.equal(busy.error, "busy");
+  assert.match(busy.message, /already running/);
+  assert.equal(fs.existsSync(lock), true, "the holder's lock survives a refused run");
+  assert.equal(distVersion(dist).id, "v1", "served build untouched by the refused run");
+
+  // A dead holder's lock is stale: the next build breaks it and proceeds,
+  // promoting its own per-run staging directory.
+  fs.writeFileSync(lock, "999999999 1");
+  const run = path.join(web, "dist.staging.1234-abc");
+  writeBuild(run, "v7");
+  const ok = await buildUi({ repoRoot: repo, steps: [["noop", process.execPath, ["-e", "0"], repo]], staging: run });
+  assert.equal(ok.ok, true, JSON.stringify(ok));
+  assert.equal(ok.version.id, "v7");
+  assert.equal(distVersion(dist).id, "v7");
+  assert.equal(fs.existsSync(lock), false, "lock released after the build");
+  assert.equal(fs.existsSync(run), false, "per-run staging consumed by the swap");
+});
+
 test("resolveStaticDir: dist, --safe → lkg, missing dist falls back to lkg, foreign dirs untouched", (t) => {
   const repo = fakeRepo(t);
   const { dist, lkg } = distPaths(repo);

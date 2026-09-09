@@ -1162,7 +1162,7 @@ function handleCommand(client, frame) {
     }
 
     case "x-agentlinkd.flows.list":
-      sendControl(client, "x-agentlinkd.flows.list", { cwd: MOCK_HOME, flows: mockFlowList(), triggers: mockTriggers() });
+      sendControl(client, "x-agentlinkd.flows.list", { cwd: MOCK_HOME, flows: mockFlowList(), triggers: mockTriggers(), executor: "crew" });
       return;
     case "x-agentlinkd.flows.get": {
       const f = MOCK_FLOWS.get(frame.name);

@@ -12,6 +12,7 @@ import { once } from "node:events";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const root = path.resolve("packages/agentlinkd");
+const TOKEN = "testtoken";
 
 async function harness(t) {
   const temp = fs.mkdtempSync(path.join(root, ".bridge-test-"));
@@ -34,7 +35,7 @@ async function harness(t) {
   child = spawn(process.execPath, [
     path.join(root, "src/server.mjs"),
     "--port=0",
-    "--token=testtoken",
+    `--token=${TOKEN}`,
     `--cwd=${cwd}`,
     `--state-dir=${state}`,
     `--dext=${path.join(root, "scripts/fake-dext.mjs")}`,
@@ -65,11 +66,11 @@ async function harness(t) {
       }
       throw new Error(`event timeout after ${JSON.stringify(events.slice(-12).map((e) => `${e.event}:${JSON.stringify(e.data).slice(0, 60)}`))} stderr=${stderr}`);
     };
-    send("hello", { token: "testtoken", protocol: 1 });
+    send("hello", { token: TOKEN, protocol: 1 });
     const hello = await wait((e) => e.event === "hello_ok");
     return { ws, events, send, wait, hello };
   }
-  return { temp, home, state, cwd, client };
+  return { temp, home, state, cwd, client, base, token: TOKEN };
 }
 
 async function open(c) {
@@ -159,11 +160,33 @@ test("bridge: live steering, permission round-trip, capability flags", { timeout
   a.send("prompt.submit", { session: id, text: "APPROVE write" });
   const req = await a.wait((e) => e.session === id && e.event === "permission.request", at);
   assert.equal(req.data.request_id, "perm-1");
+
+  // Global discovery parity: while blocked, the session.list count and the
+  // /__agent digest both surface the pending approval (id, tool, bounded
+  // summary) plus the exact machine-form answer — no journal subscribe needed.
+  const blocked = await a.wait((e) => e.event === "session.list" && e.data.sessions.some((s) => s.id === id && s.pending_permissions === 1), at);
+  assert.ok(blocked, "session.list must report pending_permissions while an approval blocks the turn");
+  const getDigest = async () => JSON.parse(await (await fetch(`${h.base}/__agent`, { headers: { authorization: `Bearer ${h.token}` } })).text());
+  const digest = await getDigest();
+  const ds = digest.sessions.find((s) => s.id === id);
+  assert.equal(ds.pending.length, 1, JSON.stringify(ds));
+  assert.equal(ds.pending[0].request_id, "perm-1");
+  assert.equal(ds.pending[0].tool, "write_file");
+  assert.equal(ds.pending[0].input, undefined, "tool input stays off the digest surface");
+  const act = digest.actions.find((x) => x.cmd === "permission.respond" && x.session === id);
+  assert.equal(act?.request_id, "perm-1", "digest offers the answering command");
+
   a.send("permission.respond", { session: id, request_id: "perm-1", choice: "allow" });
   const res = await a.wait((e) => e.session === id && e.event === "permission.resolved", at);
   assert.equal(res.data.choice, "once");
   assert.ok(res.data.by && res.data.by !== "timeout" && res.data.by !== "core", `by must name the answering client, got '${res.data.by}'`);
   await a.wait((e) => e.session === id && e.event === "turn_end", at);
+
+  // Resolved: every discovery surface clears again.
+  await a.wait((e) => e.event === "session.list" && e.data.sessions.some((s) => s.id === id && s.pending_permissions === 0), at);
+  const digestAfter = await getDigest();
+  assert.equal(digestAfter.sessions.find((s) => s.id === id).pending.length, 0);
+  assert.equal(digestAfter.actions.some((x) => x.cmd === "permission.respond" && x.session === id), false);
 
   // Sensitive image read: core emits an ordinary permission request, and the
   // host labels the pixel disclosure without changing the bridge payload.

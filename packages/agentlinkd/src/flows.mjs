@@ -388,10 +388,24 @@ export function readFlow(cwd, name) {
     const v = JSON.parse(fs.readFileSync(file, "utf8"));
     const check = validateFlow(v);
     if (!check.ok) return { error: `invalid: ${check.error}` };
-    return { ok: true, flow: check.flow };
+    return { ok: true, flow: check.flow, rev: Math.round(st.mtimeMs) };
   } catch (err) {
     if (err?.code === "ENOENT") return { error: "no_flow" };
     return { error: err instanceof SyntaxError ? "invalid_json" : "read_failed" };
+  }
+}
+
+/** The saved flow's revision (mtime ms): run requests carry the revision the
+ *  user SAW, so the host can refuse to execute a stale view. */
+export function flowRev(cwd, name) {
+  if (!FLOW_NAME_RE.test(name)) return null;
+  const dir = flowsDir(cwd);
+  if (!dir) return null;
+  try {
+    const st = fs.statSync(path.join(dir, `${name}.flow.json`));
+    return st.isFile() ? Math.round(st.mtimeMs) : null;
+  } catch {
+    return null;
   }
 }
 
@@ -418,7 +432,13 @@ export function writeFlow(cwd, raw) {
       try { fs.unlinkSync(tmp); } catch { /* gone */ }
       return { error: "write_failed" };
     }
-    return { ok: true, flow: check.flow, bytes: Buffer.byteLength(text) };
+    let rev;
+    try {
+      rev = Math.round(fs.statSync(file).mtimeMs);
+    } catch {
+      rev = Date.now();
+    }
+    return { ok: true, flow: check.flow, bytes: Buffer.byteLength(text), rev };
   } catch {
     return { error: "write_failed" };
   }

@@ -32,14 +32,29 @@ export function encodeFrame(opcode, payload) {
   return Buffer.concat([header, payload]);
 }
 
-/** Incremental frame parser with continuation support. */
+/** Incremental frame parser with continuation support.
+ *
+ * Memory bounds: the per-frame cap limits one frame's declared length, but an
+ * attacker can stream unlimited *fragments* of a message that never completes.
+ * `maxMessage` (default 8 MiB) caps the assembled message — and a single
+ * complete message — by closing the connection with 1009 (message too big). */
 export class FrameParser {
-  constructor({ onMessage, onClose, onPing }) {
+  constructor({ onMessage, onClose, onPing, maxMessage = 8 * 1024 * 1024 }) {
     this.onMessage = onMessage;
     this.onClose = onClose;
     this.onPing = onPing;
+    this.maxMessage = maxMessage;
     this.buf = Buffer.alloc(0);
     this.fragments = [];
+    this.fragmentBytes = 0;
+  }
+
+  protocolError() {
+    // Close code 1009 (message too big), big-endian u16 per RFC 6455 §5.5.1.
+    // Release fragment memory immediately: a closed connection retains nothing.
+    this.fragments = [];
+    this.fragmentBytes = 0;
+    this.onClose?.(Buffer.from([0x03, 0xf1]));
   }
 
   push(chunk) {
@@ -64,16 +79,31 @@ export class FrameParser {
       }
       if (f.opcode === OP_PONG) continue;
       if (f.opcode === OP_TEXT || f.opcode === 0x2) {
+        if (f.payload.length > this.maxMessage) {
+          this.protocolError();
+          return;
+        }
         if (!f.fin) {
           this.fragments.push(f.payload);
+          this.fragmentBytes += f.payload.length;
+          if (this.fragmentBytes > this.maxMessage) {
+            this.protocolError();
+            return;
+          }
           continue;
         }
         this.onMessage(f.payload);
       } else if (f.opcode === 0) {
         this.fragments.push(f.payload);
+        this.fragmentBytes += f.payload.length;
+        if (this.fragmentBytes > this.maxMessage) {
+          this.protocolError();
+          return;
+        }
         if (f.fin) {
           const full = Buffer.concat(this.fragments);
           this.fragments = [];
+          this.fragmentBytes = 0;
           this.onMessage(full);
         }
       }

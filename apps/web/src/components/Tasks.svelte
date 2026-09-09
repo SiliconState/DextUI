@@ -70,7 +70,7 @@
                 <span class="st-{t.status === 'active' ? 'green' : t.status === 'done' ? 'cyan' : t.status === 'blocked' ? 'red' : 'yellow'}">{GLYPH[t.status] ?? "·"}</span>
                 <span class="fname">{t.name}</span>
                 <span class="dim">{t.title}</span>
-                <span class="faint">rev {t.rev}{t.checks_ok > 0 ? ` · ${t.checks_ok} ✓` : ""}{t.updated_by === "agent" ? " · agent" : ""}</span>
+                <span class="faint">rev {t.rev}{t.checks_ok > 0 ? ` · ${t.checks_ok} ✓` : ""}{t.updated_by === "agent" ? " · agent" : ""}{t.unverified_done ? " · unverified done" : ""}</span>
               </button>
               <button class="act del" data-agent-id={`tasks.delete.${t.name}`} onclick={() => deleteTask(t.name)}>
                 {tasks.confirmDelete === t.name ? "sure?" : "×"}
@@ -88,6 +88,9 @@
         {#if draft.stale}
           <p class="warn" data-agent-id="tasks.stale">The record changed on disk (maybe the agent) — your buffer is older than what's saved.</p>
           <button class="act" data-agent-id="tasks.stale.reload" onclick={() => draft.name && openTask(draft.name)}>Reload from disk</button>
+        {/if}
+        {#if draft.unverified_done}
+          <p class="warn" data-agent-id="tasks.unverified">This record claimed done without a passing check — shown as active until evidence lands. Checks are written by the runner, not by hand.</p>
         {/if}
         <div class="meta-row">
           <input class="m-in" value={draft.name} placeholder="task-name" disabled={draft.rev > 0} oninput={(e) => { draft.name = e.currentTarget.value.trim(); markDirty(); }} data-agent-id="tasks.meta.name" />

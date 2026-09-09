@@ -182,6 +182,29 @@
     };
   });
 
+  // Continuous draft protection: the active buffer is persisted (debounced) as
+  // it is typed, so a reload, crash, or OS kill never loses unsent work.
+  // Teardown above still covers deliberate session switches as a backstop.
+  // The timer re-checks the world before writing: a session deleted/cleared
+  // after the debounce started must not have its draft resurrected from a
+  // stale buffer (purgeLocalSession bumps the revision and drops the key).
+  $effect(() => {
+    const sid = app.activeId;
+    if (!sid) return;
+    void text; // track the live buffer
+    const revision = app.draftRevisions[sid] ?? 0;
+    const generation = localStorage.getItem(`dextui.generation.${sid}`);
+    const t = setTimeout(() => {
+      if (app.activeId !== sid) return; // switched away: the next run owns it
+      if ((app.draftRevisions[sid] ?? 0) !== revision) return; // deleted/cleared under us
+      if (localStorage.getItem(`dextui.generation.${sid}`) !== generation) return; // cleared under us
+      if (!app.sessions.some((s) => s.id === sid)) return; // gone from the list
+      if (text) localStorage.setItem(`dextui.draft.${sid}`, text);
+      else localStorage.removeItem(`dextui.draft.${sid}`);
+    }, 250);
+    return () => clearTimeout(t);
+  });
+
   // Gallery / card actions land here. `n` distinguishes repeated identical
   // requests; the effect never re-fires on its own text change because the
   // prefill object is consumed (nulled) synchronously.

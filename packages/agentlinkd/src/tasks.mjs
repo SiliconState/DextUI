@@ -112,6 +112,16 @@ export function tasksDir(cwd, { create = false } = {}) {
   return dir;
 }
 
+/** Verified completion only — the same invariant writeTask enforces. A record
+ *  that claims done without a passing check (hand-edited on disk, or written
+ *  directly by the agent's own file tools, which is by design) is surfaced as
+ *  active with `unverified_done` attached: reading must never launder a
+ *  claim into a fact. Saving the projection persists the honest status. */
+function honestTask(task) {
+  if (task.status !== "done" || task.checks.some((c) => c.ok === true)) return task;
+  return { ...task, status: "active", unverified_done: true };
+}
+
 export function listTasks(cwd) {
   const dir = tasksDir(cwd);
   if (!dir) return [];
@@ -130,10 +140,14 @@ export function listTasks(cwd) {
       if (fs.statSync(file).size > TASK_FILE_CAP) continue;
       const v = JSON.parse(fs.readFileSync(file, "utf8"));
       const checks = Array.isArray(v.checks) ? v.checks : [];
+      const status = TASK_STATUSES.has(v.status) ? v.status : "planned";
+      // Honest label: a done claim without passing evidence reads as active.
+      const unverifiedDone = status === "done" && !checks.some((c) => c && c.ok === true);
       out.push({
         name,
         title: typeof v.title === "string" && v.title.trim() ? v.title.trim().slice(0, CAPS.title) : name,
-        status: TASK_STATUSES.has(v.status) ? v.status : "planned",
+        status: unverifiedDone ? "active" : status,
+        ...(unverifiedDone ? { unverified_done: true } : {}),
         rev: Number.isInteger(v.rev) && v.rev > 0 ? v.rev : 1,
         updated_at: Number.isFinite(v.updated_at) ? Math.round(v.updated_at) : 0,
         updated_by: v.updated_by === "agent" || v.updated_by === "host" ? v.updated_by : "user",
@@ -163,7 +177,7 @@ export function readTask(cwd, name) {
     if (!check.ok) return { error: `invalid: ${check.error}` };
     // The host-assigned rev round-trips through the file.
     check.task.rev = Number.isInteger(v.rev) && v.rev > 0 ? v.rev : 1;
-    return { ok: true, task: check.task };
+    return { ok: true, task: honestTask(check.task) };
   } catch (err) {
     if (err?.code === "ENOENT") return { error: "no_task" };
     return { error: err instanceof SyntaxError ? "invalid_json" : "read_failed" };

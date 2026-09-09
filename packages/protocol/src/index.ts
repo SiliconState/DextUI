@@ -341,6 +341,9 @@ export interface FlowSummary {
 export interface FlowsListReply {
   cwd: string;
   flows: FlowSummary[];
+  /** Executor availability: "crew" when runs can launch on this host, null
+   *  when editing/compiling work but Run is refused. Absent = older host. */
+  executor?: string | null;
   triggers?: TriggerStatus[];
   /** Last launch per flow, newest first (Fix 2: spawn accepted ≠ run succeeded). */
   launches?: FlowLaunch[];
@@ -441,6 +444,9 @@ export interface TaskRecord {
   created_at: number;
   updated_at: number;
   updated_by: "agent" | "user" | "host";
+  /** Read-path annotation: the record claims done with no passing check —
+   *  surfaced as `active` until evidence lands or the honest status is saved. */
+  unverified_done?: boolean;
 }
 
 /** `x-agentlinkd.tasks.list` entry. */
@@ -454,6 +460,8 @@ export interface TaskSummary {
   /** Count of checks with `ok: true`. */
   checks_ok: number;
   blocked_on: string;
+  /** The list mirrors the read path: a done claim without evidence is active. */
+  unverified_done?: boolean;
 }
 
 export interface TasksListReply {

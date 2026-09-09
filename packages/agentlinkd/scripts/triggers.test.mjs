@@ -144,6 +144,74 @@ test("scheduler: arms triggers from flow files, reloads, fires with cooldown, wa
   assert.deepEqual(s.status(cwd), []);
 });
 
+// ---------- lifecycle honesty: outcomes, backoff, queued-work invalidation ----------
+
+test("scheduler: a failed launch is a failure with backoff — never a fire or a slot", { timeout: 15000 }, async (t) => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "trig-fail-"));
+  const state = fs.mkdtempSync(path.join(os.tmpdir(), "trig-state-"));
+  t.after(() => { fs.rmSync(cwd, { recursive: true, force: true }); fs.rmSync(state, { recursive: true, force: true }); });
+  let resolveRun;
+  const runs = [];
+  const events = [];
+  const s = createScheduler({
+    stateDir: state,
+    secret: "p",
+    // startRun now resolves with the LAUNCH outcome (the host wiring awaits
+    // the tracked process): exit 7 must surface here as {error}.
+    startRun: () => new Promise((res) => { runs.push(1); resolveRun = res; }),
+    broadcast: (e, d) => events.push({ e, d }),
+  });
+  t.after(() => s.stop());
+  writeFlow(cwd, FLOW([{ kind: "schedule", every: 15 }]));
+  s.addWorkspace(cwd);
+  s.onTick();
+  assert.equal(runs.length, 1, "fired once");
+  resolveRun({ error: "crew exited with code 7" });
+  await sleep(120);
+  const persisted = JSON.parse(fs.readFileSync(path.join(state, "triggers.json"), "utf8"));
+  const failure = Object.values(persisted.failures ?? {})[0];
+  assert.ok(failure, "failure recorded");
+  assert.match(failure.error, /code 7/);
+  assert.deepEqual(persisted.slots, {}, "a failed run never marks the schedule slot");
+  assert.ok(!Object.keys(persisted.fired).length, "a failed run is not a fire");
+  const failed = events.find((x) => x.e === "x-agentlinkd.flows.trigger" && x.d.phase === "failed");
+  assert.ok(failed, "phase:failed broadcast");
+  assert.ok(failed.d.retry_at > Date.now() - 1000, "failure carries a retry deadline");
+  s.onTick();
+  assert.equal(runs.length, 1, "backoff blocks an immediate refire");
+});
+
+test("scheduler: queued webhook work does not fire after the trigger is disabled", { timeout: 15000 }, async (t) => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "trig-dis-"));
+  const state = fs.mkdtempSync(path.join(os.tmpdir(), "trig-state-"));
+  t.after(() => { fs.rmSync(cwd, { recursive: true, force: true }); fs.rmSync(state, { recursive: true, force: true }); });
+  let resolveRun;
+  const runs = [];
+  const s = createScheduler({
+    stateDir: state,
+    secret: "p",
+    startRun: () => new Promise((res) => { runs.push(1); resolveRun = res; }),
+    broadcast: () => {},
+  });
+  t.after(() => s.stop());
+  writeFlow(cwd, FLOW([{ kind: "webhook" }]));
+  s.addWorkspace(cwd);
+  const token = webhookToken("p", cwd, "nightly");
+  const first = s.webhook(token);
+  assert.equal(first.fired, true, "first webhook fires");
+  // Second webhook while the launch is in flight → coalesced pending work.
+  const second = s.webhook(token);
+  assert.equal(second.fired, false, "second webhook coalesces (busy)");
+  // Disable the trigger while the run is in flight, then let it finish.
+  writeFlow(cwd, FLOW([{ kind: "webhook", enabled: false }]));
+  s.reload(cwd);
+  resolveRun({ ok: true });
+  await sleep(120);
+  s.onTick(); // drain paths also run on ticks
+  await sleep(50);
+  assert.equal(runs.length, 1, "queued work was invalidated by the disable, not executed");
+});
+
 // ---------- host surface ----------
 
 test("host: flows.list carries triggers; POST /hooks/<token> fires, wrong token 404 + rate-limits, GET 405", { timeout: 30000 }, async (t) => {

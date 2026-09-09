@@ -109,9 +109,11 @@ function runStep([label, cmd, args, cwd], onLine) {
 
 /** Promote a verified staging dir: dist → dist.lkg (replacing the old LKG),
  *  staging → dist. Two renames on one filesystem; the served path is never
- *  half-written. Returns the new version, or throws with `dist` untouched. */
-export function swapDist(repoRoot) {
-  const { dist, staging, lkg } = distPaths(repoRoot);
+ *  half-written. Returns the new version, or throws with `dist` untouched.
+ *  `staging` defaults to the shared dist.staging; buildUi passes its per-run
+ *  directory so concurrent builds never promote each other's trees. */
+export function swapDist(repoRoot, staging = distPaths(repoRoot).staging) {
+  const { dist, lkg } = distPaths(repoRoot);
   if (!fs.existsSync(path.join(staging, "index.html"))) throw new Error("staging build has no index.html");
   const hadDist = fs.existsSync(dist);
   if (hadDist) {
@@ -139,27 +141,108 @@ export function rollbackDist(repoRoot) {
   return distVersion(dist);
 }
 
-export async function buildUi({ repoRoot = DEFAULT_REPO, check = true, tests = false, onStep, onLine, steps } = {}) {
+/** One build at a time per checkout: the host command and a workbench
+ *  session can both start one, and interleaved staging writes would corrupt
+ *  each other. The lock names its holder and when it took it: a dead
+ *  holder's lock is stale, and a live-looking holder on an old lock is pid
+ *  reuse (a real build finishes far inside the stale window) — both are
+ *  stolen, so the lock can never wedge a checkout permanently. */
+const BUILD_LOCK = ".ui-build.lock";
+const LOCK_STALE_MS = 2 * 60 * 60_000; // > worst --tests build (5 steps × 10 min cap)
+
+function acquireBuildLock(web) {
+  const lockPath = path.join(web, BUILD_LOCK);
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const fd = fs.openSync(lockPath, "wx");
+      try { fs.writeFileSync(fd, `${process.pid} ${Date.now()}`); } catch { /* best effort */ }
+      return {
+        release() {
+          try { fs.closeSync(fd); } catch { /* gone */ }
+          try { fs.unlinkSync(lockPath); } catch { /* gone */ }
+        },
+      };
+    } catch (err) {
+      if (err.code !== "EEXIST") return { busy: true, reason: String(err?.message ?? err) };
+      let holder = NaN;
+      let takenAt = NaN;
+      try {
+        const [pid, at] = fs.readFileSync(lockPath, "utf8").trim().split(/\s+/);
+        holder = Number.parseInt(pid ?? "", 10);
+        takenAt = Number.parseInt(at ?? "", 10);
+      } catch { /* vanished */ }
+      let live = Number.isInteger(holder) && holder > 0;
+      if (live) { try { process.kill(holder, 0); } catch { live = false; } }
+      const stale = Number.isInteger(takenAt) && takenAt > 0 && Date.now() - takenAt >= LOCK_STALE_MS;
+      if (live && !stale) return { busy: true, holder };
+      try { fs.unlinkSync(lockPath); } catch { /* raced off */ }
+    }
+  }
+  return { busy: true, reason: "lock could not be acquired" };
+}
+
+/** Drop per-run staging dirs abandoned by crashes (never the shared
+ *  dist.staging or the LKG). */
+function sweepStaging(web) {
+  try {
+    for (const name of fs.readdirSync(web)) {
+      if (!/^dist\.staging\.[0-9a-z-]+$/.test(name)) continue;
+      const p = path.join(web, name);
+      try { if (Date.now() - fs.statSync(p).mtimeMs > 3_600_000) fs.rmSync(p, { recursive: true, force: true }); } catch { /* keep */ }
+    }
+  } catch { /* no dir yet */ }
+}
+
+export async function buildUi({ repoRoot = DEFAULT_REPO, check = true, tests = false, onStep, onLine, steps, staging } = {}) {
   const t0 = Date.now();
   if (!buildable(repoRoot)) {
     return { ok: false, error: "not_buildable", message: `${repoRoot} is not a buildable DextUI checkout (package.json name, apps/web/src, node_modules)`, steps: [], duration_ms: 0 };
   }
-  const plan = steps ?? planSteps(repoRoot, { check, tests });
-  const done = [];
-  for (const step of plan) {
-    onStep?.({ phase: "step", label: step[0], index: done.length, total: plan.length });
-    const r = await runStep(step, onLine);
-    done.push(r);
-    if (!r.ok) {
-      fs.rmSync(distPaths(repoRoot).staging, { recursive: true, force: true });
-      return { ok: false, error: "step_failed", failed: r.label, steps: done, tail: r.tail, duration_ms: Date.now() - t0 };
-    }
+  const { web } = distPaths(repoRoot);
+  const lock = acquireBuildLock(web);
+  if (lock.busy) {
+    const message = lock.holder ? `another UI build is already running (pid ${lock.holder})` : `build lock unavailable: ${lock.reason ?? "held"}`;
+    return { ok: false, error: "busy", message, steps: [], duration_ms: Date.now() - t0 };
   }
   try {
-    const version = swapDist(repoRoot);
-    return { ok: true, version, steps: done, duration_ms: Date.now() - t0 };
-  } catch (err) {
-    return { ok: false, error: "swap_failed", message: String(err?.message ?? err), steps: done, duration_ms: Date.now() - t0 };
+    // Staging isolation: the real plan builds into a per-run directory so a
+    // second run's --emptyOutDir can never clobber (or half-promote) another
+    // build's tree. Substitute plans (tests, custom drivers) keep the fixed
+    // dist.staging they were written against unless told otherwise.
+    let runStaging = staging;
+    let plan;
+    if (steps) {
+      plan = steps;
+      runStaging ??= distPaths(repoRoot).staging;
+    } else {
+      plan = planSteps(repoRoot, { check, tests });
+      if (!runStaging) {
+        const run = `${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
+        runStaging = path.join(web, `dist.staging.${run}`);
+        const vite = plan.find((s) => s[0] === "vite");
+        const i = vite ? vite[2].indexOf("dist.staging") : -1;
+        if (i !== -1) vite[2][i] = `dist.staging.${run}`;
+        sweepStaging(web);
+      }
+    }
+    const done = [];
+    for (const step of plan) {
+      onStep?.({ phase: "step", label: step[0], index: done.length, total: plan.length });
+      const r = await runStep(step, onLine);
+      done.push(r);
+      if (!r.ok) {
+        fs.rmSync(runStaging, { recursive: true, force: true });
+        return { ok: false, error: "step_failed", failed: r.label, steps: done, tail: r.tail, duration_ms: Date.now() - t0 };
+      }
+    }
+    try {
+      const version = swapDist(repoRoot, runStaging);
+      return { ok: true, version, steps: done, duration_ms: Date.now() - t0 };
+    } catch (err) {
+      return { ok: false, error: "swap_failed", message: String(err?.message ?? err), steps: done, duration_ms: Date.now() - t0 };
+    }
+  } finally {
+    lock.release();
   }
 }
 

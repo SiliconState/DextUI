@@ -20,16 +20,19 @@ self.addEventListener("activate", (event) => {
   );
 });
 
-// Live host surfaces are never cached: authenticated JSON that must not be
-// replayed offline as if it were fresh. Only the app shell and assets go
-// through the cache.
-const HOST_API = (p) => p === "/ws" || p === "/health" || p === "/__agent" || p === "/sessions" || p.startsWith("/sessions/");
+// Cache allowlist: only the versioned app shell. Everything else — live
+// host surfaces, session files (including ?t=<token> subresource loads),
+// pack panel payloads, or whatever a future host release adds — goes
+// straight to the network and is never cached: an offline replay of
+// authenticated or transient content must be impossible by construction,
+// not by enumeration.
+const CACHEABLE = (p) => p === "/" || p === "/index.html" || p === "/manifest.webmanifest" || p === "/icon.svg" || p.startsWith("/assets/");
 
 self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") return;
   const url = new URL(event.request.url);
   if (url.origin !== self.location.origin) return;
-  if (event.request.cache === "no-store" || HOST_API(url.pathname)) return;
+  if (event.request.cache === "no-store" || !CACHEABLE(url.pathname)) return;
   event.respondWith(
     (async () => {
       const cache = await caches.open(CACHE);

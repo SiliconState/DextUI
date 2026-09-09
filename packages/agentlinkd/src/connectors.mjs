@@ -175,6 +175,15 @@ export function createConnectors({ home, root, allowLocal = false, exec = run, b
     fs.writeFileSync(tmp, JSON.stringify({ v: 1, items }, null, 2), { mode: 0o600 });
     fs.renameSync(tmp, file);
   }
+  // Registry mutations are serialized: `add` and `remove` await tool calls
+  // between their read and their write, and two interleaved mutations would
+  // silently drop one registration (stranding its folder on disk).
+  let mutations = Promise.resolve();
+  function serialize(fn) {
+    const run = mutations.then(fn, fn);
+    mutations = run.then(() => {}, () => {});
+    return run;
+  }
   function publicView(c) {
     const rt = runtime.get(c.id);
     const { secret: _s, ...rest } = c;
@@ -280,7 +289,7 @@ export function createConnectors({ home, root, allowLocal = false, exec = run, b
     if (!fs.existsSync(local)) return { error: "local folder missing — sync first" };
     if (!tools.rclone) return { error: "rclone not found on the host — install rclone to connect Drive or Dropbox" };
     // Never ship DextUI's own per-folder state (flows, run logs) to the user's drive.
-    const r = await exec(tools.rclone, rcloneArgs(["copy", "--exclude", ".dext/**", local, `${rcloneRemote(c)}:${c.remote}`]), { timeout: COPY_TIMEOUT_MS });
+    const r = await exec(tools.rclone, rcloneArgs(["copy", "--exclude", ".dext/**", "--exclude", ".crew/**", local, `${rcloneRemote(c)}:${c.remote}`]), { timeout: COPY_TIMEOUT_MS });
     return r.ok ? {} : { error: failLine(r) };
   }
 
@@ -307,6 +316,17 @@ export function createConnectors({ home, root, allowLocal = false, exec = run, b
       if (l.error) {
         setRuntime(id, "error", `local folder refused: ${l.error}`);
         return { error: "bad_path" };
+      }
+      // Re-validate before any recursive tool touches the folder: a path
+      // swapped for a symlink must never become a copy source or target.
+      let real = null;
+      try { real = fs.realpathSync(l.abs); } catch { /* not created yet */ }
+      if (real) {
+        const base = fs.realpathSync(path.join(root, CONNECTED_DIR));
+        if (real !== base && !real.startsWith(base + path.sep)) {
+          setRuntime(id, "error", "folder is not inside Connected — refusing to touch it");
+          return { error: "bad_path" };
+        }
       }
       const out = await fn(c, l.abs);
       if (out.error) setRuntime(id, "error", out.error);
@@ -412,7 +432,10 @@ export function createConnectors({ home, root, allowLocal = false, exec = run, b
 
     /** Validate, register, then materialise. Resolves with the listing (+ `added`) or `{error}`.
      *  Drive kinds take either a `ticket` from `authorize` or a pasted `secret`. */
-    async add({ kind, label, remote, secret, ticket }) {
+    add(args) {
+      return serialize(async () => {
+        const { kind, label, remote, ticket } = args;
+        let { secret } = args; // the rclone paths normalise/reassign it
       if (!CONNECTOR_KINDS.includes(kind)) return { error: "bad_kind" };
       if (typeof label !== "string" || !DIR_NAME_RE.test(label)) return { error: "bad_label" };
       const n = normaliseRemote(kind, remote, { allowLocal });
@@ -465,10 +488,13 @@ export function createConnectors({ home, root, allowLocal = false, exec = run, b
         // the user can fix the credential; nothing half-cloned is left behind.
         try { fs.rmSync(l.abs, { recursive: true, force: true }); } catch { /* ignore */ }
       }
-      return listing({ added: c.id });
+        return listing({ added: c.id });
+      });
     },
 
-    async remove({ id, purge = false }) {
+    remove(args) {
+      return serialize(async () => {
+        const { id, purge = false } = args;
       if (typeof id !== "string" || !ID_RE.test(id)) return { error: "bad_request" };
       if (busy.has(id)) return { error: "busy" };
       const items = load();
@@ -484,7 +510,8 @@ export function createConnectors({ home, root, allowLocal = false, exec = run, b
       save(items.filter((x) => x.id !== id));
       runtime.delete(id);
       notify();
-      return listing({ removed: id });
+        return listing({ removed: id });
+      });
     },
 
     /** Pull remote → local. git: fast-forward only (never rewrites local work),
@@ -522,7 +549,9 @@ export function createConnectors({ home, root, allowLocal = false, exec = run, b
         if (!fs.existsSync(local)) return { error: "local folder missing — sync first" };
         const env = await withGhToken(cc, gitEnv(cc));
         const identity = ["-c", "user.name=DextUI", "-c", "user.email=dextui@localhost"];
-        let r = await exec(tools.git, ["-C", local, "add", "-A"], { env });
+        // Stage everything except DextUI's own per-folder state: `.dext/` and
+        // `.crew/` must not ride a user-visible commit.
+        let r = await exec(tools.git, ["-C", local, "add", "-A", "--", ".", ":(exclude).dext", ":(exclude).crew"], { env });
         if (!r.ok) return { error: failLine(r) };
         r = await exec(tools.git, ["-C", local, ...identity, "commit", "-q", "-m", msg], { env });
         if (!r.ok && !/nothing to commit/i.test(r.stdout + r.stderr)) return { error: failLine(r) };

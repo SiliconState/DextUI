@@ -21,10 +21,14 @@
   let zoom = $state(1);
   let selected = $state<string | null>(null); // node id or "edge:from:to"
   let showPreview = $state(false);
+  let view = $state<"canvas" | "list">("canvas");
   let svgEl: SVGSVGElement | undefined = $state();
   let drag = $state<{ kind: "node" | "pan" | "edge"; id?: string; dx: number; dy: number; px: number; py: number; mx: number; my: number } | null>(null);
 
   const draft = $derived(flows.draft);
+  /** Can this host execute flows at all? Editing and compiling are local;
+   *  running needs the crew engine (the host reports availability). */
+  const canRun = $derived(flows.executor === "crew");
   const types = $derived(flowNodeTypes());
   const nodeById = $derived(new Map((draft?.nodes ?? []).map((n) => [n.id, n])));
 
@@ -35,6 +39,48 @@
     return m;
   }
   const pos = $derived(layout(draft?.nodes ?? []));
+
+  /** The sequential chain — the order steps actually run — for the list view. */
+  const isLinked = (id: string) => (draft?.edges ?? []).some(([a, b]) => a === id || b === id);
+  const chainNodes = $derived.by(() => {
+    const nodes = draft?.nodes ?? [];
+    const edges = draft?.edges ?? [];
+    const nextOf = new Map(edges.map(([a, b]) => [a, b] as const));
+    const seen = new Set<string>();
+    const order: FlowNode[] = [];
+    const walk = (start: string) => {
+      let id: string | undefined = start;
+      while (id && !seen.has(id)) {
+        seen.add(id);
+        const n = nodes.find((x) => x.id === id);
+        if (n) order.push(n);
+        id = nextOf.get(id);
+      }
+    };
+    for (const n of nodes) if (!edges.some(([, b]) => b === n.id)) walk(n.id);
+    for (const n of nodes) walk(n.id); // cycles/free nodes still get a row
+    return order.filter((n) => isLinked(n.id));
+  });
+  const freeNodes = $derived((draft?.nodes ?? []).filter((n) => !isLinked(n.id)));
+
+  /** List-view reorder: swap neighbors and rewrite the chain's edges — the
+   *  only wiring a sequential flow has. Free (unconnected) steps never move
+   *  here; they are linked in the map view. */
+  function moveStep(id: string, dir: -1 | 1) {
+    if (!draft) return;
+    const order = chainNodes.map((n) => n.id);
+    const i = order.indexOf(id);
+    const j = i + dir;
+    if (i < 0 || j < 0 || j >= order.length) return;
+    const a = order[i] ?? "";
+    const b = order[j] ?? "";
+    order[i] = b;
+    order[j] = a;
+    const moved = order.map((nid) => draft.nodes.find((n) => n.id === nid)).filter((n): n is FlowNode => !!n);
+    draft.edges = order.slice(0, -1).map((a, k) => [a, order[k + 1]] as [string, string]);
+    draft.nodes = [...moved, ...freeNodes];
+    markDirty();
+  }
 
   function toWorld(e: PointerEvent | WheelEvent): { x: number; y: number } {
     const r = svgEl!.getBoundingClientRect();
@@ -71,6 +117,11 @@
     if (type === "message") { node.to = ""; node.text = ""; }
     if (type === "condition") node.expr = "";
     draft.nodes = [...draft.nodes, node];
+    if (view === "list") {
+      // In the list view, "added" means "runs last": join the chain's tail.
+      const tail = chainNodes.at(-1);
+      if (tail) draft.edges = [...draft.edges, [tail.id, id]];
+    }
     selected = id;
     markDirty();
   }
@@ -205,10 +256,12 @@
       <span class="dim">{draft ? (draft.title || draft.name) : "Workflows in this folder"}</span>
       <span class="insp-acts">
         {#if draft}
-          <button class="act" data-agent-id="flows.back" onclick={() => { flows.draft = null; flows.preview = ""; }}>← Flows</button>
-          <button class="act" data-agent-id="flows.save" onclick={saveFlow}>{draft.dirty ? "[⌃s] Save*" : "Saved"}</button>
-          <button class="act" data-agent-id="flows.compile" onclick={() => { showPreview = !showPreview; if (!flows.preview) compileFlow_(); }}>Spec</button>
-          <button class="act accent" data-agent-id="flows.run" onclick={runFlow}>▶ Run</button>
+          <button class="act" data-agent-id="flows.back" onclick={() => { flows.draft = null; flows.preview = ""; }} aria-label="Back to the flow list">← Flows</button>
+          <button class="act" data-agent-id="flows.save" onclick={saveFlow} title="Save (Ctrl+S)">{draft.dirty ? "[⌃s] Save*" : "Saved"}</button>
+          <button class="act" data-agent-id="flows.compile" onclick={() => { showPreview = !showPreview; if (!flows.preview) compileFlow_(); }} title="Show the crew spec this flow compiles to (works without the crew engine)">Spec</button>
+          <button class="act accent" data-agent-id="flows.run" onclick={runFlow} disabled={!canRun}
+            title={canRun ? "Run this flow with the crew engine" : "This host has no crew engine — edit and Spec still work; Run is off"}>▶ Run</button>
+          {#if !canRun}<span class="faint" data-agent-id="flows.executor.off">no crew engine — Run is off, editing and Spec still work</span>{/if}
         {/if}
         <button class="act" data-agent-id="flows.close" onclick={closeFlows}>esc</button>
       </span>
@@ -253,10 +306,13 @@
           {#each types as t (t.type)}
             <button class="chip" title={t.desc} data-agent-id={`flows.add.${t.type}`} onclick={() => addNode(t.type as FlowNodeType)}>+ {GYPH[t.type] ?? "·"} {t.label}</button>
           {/each}
-          <span class="faint ph">Drag nodes · drag ○→ to connect · click to edit · Del removes</span>
+          <span class="faint ph">{view === "canvas" ? "Drag nodes · drag ○→ to connect · click to edit · Del removes · or switch to List" : "Steps run top to bottom · select to edit · ↑↓ reorders"}</span>
+          <button class="chip" class:on={view === "canvas"} aria-pressed={view === "canvas"} data-agent-id="flows.view.canvas" onclick={() => { view = "canvas"; }} title="Map view — drag steps and connections">Map</button>
+          <button class="chip" class:on={view === "list"} aria-pressed={view === "list"} data-agent-id="flows.view.list" onclick={() => { view = "list"; }} title="List view — keyboard-first step list">List</button>
         </div>
 
         <div class="work">
+          {#if view === "canvas"}
           <!-- svelte-ignore a11y_no_static_element_interactions -->
           <svg bind:this={svgEl} class="canvas" data-agent-id="flows.canvas"
             onpointerdown={onCanvasDown} onpointermove={onMove} onpointerup={onUp} onwheel={onWheel}
@@ -289,6 +345,41 @@
               {/each}
             </g>
           </svg>
+          {:else}
+          <div class="steps" data-agent-id="flows.steps">
+            <p class="dim steps-hint">Steps run top to bottom — one after another. Select a step to edit it on the right.</p>
+            <ol class="step-list">
+              {#each chainNodes as n, i (n.id)}
+                <li class="step-row" class:sel={selected === n.id} data-agent-id={`flows.step.${i}`} data-state={selected === n.id ? "selected" : ""}>
+                  <button class="fmain step-main" data-agent-id={`flows.step.${i}.select`} onclick={() => { selected = n.id; }}
+                    aria-label={`Edit step ${i + 1}: ${n.label || n.id}`} aria-current={selected === n.id ? "true" : undefined}>
+                    <span class="st-cyan">{i + 1}. {GYPH[n.type] ?? "·"} {n.label || n.id}</span>
+                    <span class="faint">{n.type}{n.type === "pack" && n.pack ? `: ${n.pack}` : ""}</span>
+                  </button>
+                  <button class="act" data-agent-id={`flows.step.${i}.up`} onclick={() => moveStep(n.id, -1)} disabled={i === 0}
+                    aria-label={`Move step ${i + 1} up`} title="Move earlier">↑</button>
+                  <button class="act" data-agent-id={`flows.step.${i}.down`} onclick={() => moveStep(n.id, 1)} disabled={i === chainNodes.length - 1}
+                    aria-label={`Move step ${i + 1} down`} title="Move later">↓</button>
+                </li>
+              {/each}
+              {#if chainNodes.length === 0}<li class="faint steps-hint">No connected steps yet — add one from the palette; it joins the chain's end.</li>{/if}
+            </ol>
+            {#if freeNodes.length}
+              <p class="faint steps-hint">Not connected yet (won't run — link them in Map view):</p>
+              <ul class="step-list free">
+                {#each freeNodes as n (n.id)}
+                  <li class="step-row" class:sel={selected === n.id}>
+                    <button class="fmain step-main" onclick={() => { selected = n.id; }} aria-label={`Edit unconnected step ${n.label || n.id}`}>
+                      <span class="st-yellow">{GYPH[n.type] ?? "·"} {n.label || n.id}</span>
+                      <span class="faint">{n.type}</span>
+                    </button>
+                    <button class="act del" onclick={() => { selected = n.id; removeSelected(); }} aria-label={`Delete unconnected step ${n.label || n.id}`}>Delete</button>
+                  </li>
+                {/each}
+              </ul>
+            {/if}
+          </div>
+          {/if}
 
           {#if selNode && selSpec}
             <aside class="form" data-agent-id="flows.form">
@@ -307,6 +398,9 @@
                   <label>{key} <input value={(selNode as unknown as Record<string, string>)[key] ?? ""} oninput={(e) => setField(key, e.currentTarget.value)} data-agent-id={`flows.field.${key}`} /></label>
                 {/if}
               {/each}
+              {#if selNode.type === "condition" || selNode.type === "gate"}
+                <p class="faint form-note">This step guides the worker's model — it is not a hard program branch. The worker decides using it.</p>
+              {/if}
               <button class="act del" data-agent-id="flows.node.delete" onclick={removeSelected}>Delete node</button>
             </aside>
           {:else if selected?.startsWith("edge:")}
@@ -322,7 +416,7 @@
         <section class="trig" data-agent-id="flows.triggers">
           <div class="trig-head">
             <span class="st-magenta">Starts when</span>
-            <span class="faint">Manual (▶) always works ·</span>
+            <span class="faint" data-agent-id="flows.triggers.note">{canRun ? "Manual (▶) always works ·" : "No crew engine: triggers stay armed but cannot fire until one is installed ·"}</span>
             <button class="chip" data-agent-id="flows.trigger.add.schedule" onclick={() => addTrigger("schedule")}>+ On a schedule</button>
             <button class="chip" data-agent-id="flows.trigger.add.watch" onclick={() => addTrigger("watch")}>+ Files change</button>
             <button class="chip" data-agent-id="flows.trigger.add.mesh" onclick={() => addTrigger("mesh")}>+ Message arrives</button>
@@ -409,4 +503,14 @@
   .trig-row input[type="number"] { width: 6em; }
   .on { display: flex; gap: 4px; align-items: center; color: var(--cyan); }
   .hook { user-select: all; font-size: 11px; color: var(--fg); }
+  .steps { flex: 1; min-height: 340px; border: 1px solid var(--line); background: var(--bg0, var(--bg1)); padding: 10px 12px; overflow-y: auto; }
+  .steps-hint { margin: 2px 0 8px; }
+  .step-list { list-style: none; display: grid; gap: 4px; padding: 0; margin: 0 0 10px; }
+  .step-row { display: flex; gap: 6px; align-items: center; }
+  .step-row.sel .step-main { border-color: var(--cyan); }
+  .step-main { grid-template-columns: 16em 1fr; }
+  .step-row .act:disabled { opacity: 0.35; cursor: default; }
+  .act:disabled { opacity: 0.5; cursor: not-allowed; }
+  .chip.on { border-color: var(--cyan); color: var(--cyan); }
+  .form-note { font-size: 11px; }
 </style>

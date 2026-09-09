@@ -49,8 +49,10 @@ export interface ConnectionOpts {
   onControlError?: (code: string, message: string, data?: Record<string, unknown>) => void;
   /** Delivery outcome for a command sent with a nonce (prompt/steer/slash).
    *  `ok: false` covers host rejection and outbox expiry; `duplicate: true`
-   *  means the host had already run this nonce (reconnect replay). */
-  onCmdAck?: (nonce: string, ok: boolean, info: { cmd: string; duplicate?: boolean; message?: string }) => void;
+   *  means the host had already run this nonce (reconnect replay);
+   *  `durable: false` means the host accepted the turn but its journal
+   *  append failed (persistence degraded, not delivery). */
+  onCmdAck?: (nonce: string, ok: boolean, info: { cmd: string; duplicate?: boolean; durable?: boolean; message?: string }) => void;
   onSeqGap?: (sessionId: string, expected: number, got: number) => void;
   /** The host process changed between connections; all session stores were reset. */
   onHostRestart?: (instance: string) => void;
@@ -61,6 +63,9 @@ export interface ConnectionOpts {
 const RECONNECT_BASE_MS = 500;
 const RECONNECT_MAX_MS = 15_000;
 const PING_INTERVAL_MS = 25_000;
+/** No pong for three intervals = half-dead socket (NAT timeout, vanished
+ *  peer): close it and let the ordinary onclose path reconnect + replay. */
+const PONG_DEADLINE_MS = 3 * PING_INTERVAL_MS;
 /** Queued sends and unacked nonces older than this are reported failed. */
 const OUTBOX_TTL_MS = 120_000;
 const OUTBOX_MAX = 32;
@@ -96,6 +101,8 @@ export class Connection {
   private attempt = 0;
   private closedByUser = false;
   private pingTimer?: ReturnType<typeof setInterval>;
+  /** Last pong (or heartbeat start): silence past PONG_DEADLINE_MS kills the socket. */
+  private lastPongAt = 0;
   private reconnectTimer?: ReturnType<typeof setTimeout>;
   private resyncPending = new Set<string>();
   private controlListeners = new Set<(e: Envelope) => void>();
@@ -410,8 +417,8 @@ export class Connection {
     this.sendRaw(cmd(`${FLOWS_EXT}.compile`, { name, ...(cwd ? { cwd } : {}) }));
   }
 
-  flowsRun(name: string, cwd?: string): void {
-    this.sendRaw(cmd(`${FLOWS_EXT}.run`, { name, ...(cwd ? { cwd } : {}) }));
+  flowsRun(name: string, cwd?: string, rev?: number): void {
+    this.sendRaw(cmd(`${FLOWS_EXT}.run`, { name, ...(cwd ? { cwd } : {}), ...(typeof rev === "number" ? { rev } : {}) }));
   }
 
   // ---------- shared tasks (host-prefixed until promoted) ----------
@@ -681,6 +688,7 @@ export class Connection {
         break;
       }
       case "pong":
+        this.lastPongAt = Date.now();
         return;
       case `${CREW_EXT}.changed`: {
         const d = env.data as CrewsPayload | undefined;
@@ -697,7 +705,7 @@ export class Connection {
         break;
       }
       case "cmd_ack": {
-        const d = env.data as { nonce?: string; ok?: boolean; duplicate?: boolean; message?: string } | undefined;
+        const d = env.data as { nonce?: string; ok?: boolean; duplicate?: boolean; durable?: boolean; message?: string } | undefined;
         const nonce = typeof d?.nonce === "string" ? d.nonce : "";
         const pending = nonce ? this.pendingAcks.get(nonce) : undefined;
         // Unknown nonce = already resolved or cancelled: report delivery once,
@@ -707,6 +715,7 @@ export class Connection {
         this.opts.onCmdAck?.(nonce, d?.ok !== false, {
           cmd: pending?.cmd ?? "",
           duplicate: d?.duplicate === true,
+          durable: d?.durable !== false,
           message: d?.message,
         });
         break;
@@ -739,7 +748,15 @@ export class Connection {
 
   private startPing(): void {
     this.clearPing();
+    this.lastPongAt = Date.now();
     this.pingTimer = setInterval(() => {
+      // Heartbeat deadline: a socket that stops answering pings is half-dead.
+      // Closing it runs the normal reconnect path (backoff, outbox replay) —
+      // silence must never read as health.
+      if (Date.now() - this.lastPongAt > PONG_DEADLINE_MS) {
+        try { this.ws?.close(); } catch { /* already closed */ }
+        return;
+      }
       this.sendRaw(cmd("ping"));
       // Safety net: sent-but-unacked nonces expire after the outbox TTL (the
       // app layer reports sooner). Frames still queued are flushOutbox's job.

@@ -222,6 +222,33 @@ test("host: flows capability; list/put/get/compile/delete round-trip; errors are
   assert.deepEqual(after.data.flows.map((f) => f.name), ["month-end-close"]);
 });
 
+test("host: revision-bound run — a stale revision is refused before launch", { timeout: 30000 }, async (t) => {
+  const c = await host(t);
+  const flow = { version: 1, name: "stale-check", title: "Stale", nodes: [{ id: "a", type: "gate", question: "ok?" }], edges: [] };
+  let mark = c.events.length;
+  c.send("x-agentlinkd.flows.put", { flow });
+  const put = await c.wait((e) => e.event === "x-agentlinkd.flows.put", mark);
+  assert.equal(typeof put.data.rev, "number", "put carries the saved revision");
+  c.send("x-agentlinkd.flows.get", { name: "stale-check" });
+  const got = await c.wait((e) => e.event === "x-agentlinkd.flows.get", mark);
+  assert.equal(got.data.rev, put.data.rev, "get reports the same revision");
+
+  // Run with a revision that predates the file on disk: refused before launch.
+  mark = c.events.length;
+  c.send("x-agentlinkd.flows.run", { name: "stale-check", rev: put.data.rev - 5000 });
+  const stale = await c.wait((e) => e.event === "error", mark);
+  assert.equal(stale.data.code, "stale_rev");
+  assert.equal(stale.data.cmd, "x-agentlinkd.flows.run");
+  assert.match(stale.data.message, /changed on disk/);
+
+  // The CURRENT revision passes the gate (this host has no crew binary, so the
+  // run is then refused with `unsupported` — proving the rev check ran first).
+  mark = c.events.length;
+  c.send("x-agentlinkd.flows.run", { name: "stale-check", rev: put.data.rev });
+  const pass = await c.wait((e) => e.event === "error", mark);
+  assert.equal(pass.data.code, "unsupported", "current revision proceeds to launch");
+});
+
 test("validateFlow: caps hold (names, counts, text lengths)", () => {
   const many = { version: 1, name: "many", nodes: Array.from({ length: 65 }, (_, i) => ({ id: `n${i}`, type: "gate", question: "q" })), edges: [] };
   assert.match(validateFlow(many).error, /at most 64 nodes/);

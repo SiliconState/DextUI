@@ -39,7 +39,7 @@ import { createSelfEdit, resolveStaticDir } from "./selfedit.mjs";
 import { confine, createDir, listDirs } from "./dirs.mjs";
 import { applyCredentialPatch, mergedPackCredentialEnv, packCredentialStatus, readPackCredentials, writePackCredentials } from "./pack-credentials.mjs";
 import { createConnectors } from "./connectors.mjs";
-import { compileFlow, deleteFlow, listFlows, readFlow, writeFlow } from "./flows.mjs";
+import { compileFlow, deleteFlow, flowRev, listFlows, readFlow, writeFlow } from "./flows.mjs";
 import { createScheduler } from "./triggers.mjs";
 import { TASK_STATUSES, createTasksAdapter } from "./tasks.mjs";
 import { fetchToFile, receiveUpload, uploadDirFor } from "./uploads.mjs";
@@ -604,7 +604,22 @@ let TRIGGERS = null;
 TRIGGERS = createScheduler({
   stateDir: STATE_DIR,
   secret: TOKEN,
-  startRun: (cwd, name, opts) => startFlowRun(cwd, name, opts),
+  // Trigger success is judged by the LAUNCH outcome, not spawn acceptance:
+  // startFlowRun returns when crew forks; this wrapper waits for the tracked
+  // process to exit (see waitLaunch) so inFlight, backoff, and schedule-slot
+  // idempotency reflect what actually ran.
+  startRun: (cwd, name, opts) =>
+    new Promise((resolve) => {
+      const r = startFlowRun(cwd, name, opts);
+      if (r?.error) {
+        resolve(r);
+        return;
+      }
+      waitLaunch(r.launch.id, (final) => {
+        if (final.state === "failed") resolve({ error: final.error || `crew exited with code ${final.exit_code}` });
+        else resolve({});
+      });
+    }),
   meshBin: (() => { const p = PACKS.find((x) => x.name === "mesh"); const b = p?.path ? path.join(p.path, "bin", "mesh") : null; return b && fs.existsSync(b) ? b : "mesh"; })(),
   log: (m) => console.error(`agentlinkd: ${m}`),
   broadcast: (event, data) => broadcastControl(event, data),
@@ -856,13 +871,18 @@ function journalFile(s) {
 }
 
 function appendJournalLine(s, env) {
-  if (s.deleted) return; // a purged journal must never be recreated by a late child
+  if (s.deleted) return false; // a purged journal must never be recreated by a late child
   try {
     lstatChecked(journalFile(s), "journal file");
     fs.appendFileSync(journalFile(s), `${JSON.stringify(env)}\n`, { mode: 0o600 });
+    s.lastAppendFailed = null;
+    return true;
   } catch (err) {
-    // The live stream stays authoritative; durability degrades loudly, not silently.
+    // The live stream stays authoritative; durability degrades loudly, not
+    // silently — the flag surfaces as durable:false on the next cmd_ack.
+    s.lastAppendFailed = err.message;
     console.error(`agentlinkd: journal append failed for ${s.id}: ${err.message}`);
+    return false;
   }
 }
 
@@ -957,6 +977,13 @@ function restoreJournal(s) {
       continue; // skip malformed lines
     }
     if (!env || typeof env !== "object" || typeof env.event !== "string" || !Number.isInteger(env.seq)) continue;
+    // Rebuild accepted-nonce state from journaled prompts: a client that
+    // replays after a host restart must still be told "duplicate", never
+    // run twice. Only recent (in-TTL) nonces matter.
+    const nd = env.event === "user_message" && env.data && typeof env.data === "object" ? env.data.nonce : undefined;
+    if (typeof nd === "string" && NONCE_RE.test(nd) && !seenNonces.has(nd) && typeof env.ts === "number" && Date.now() - env.ts <= NONCE_TTL_MS) {
+      nonceRecord(nd, { ts: env.ts, status: "accepted" });
+    }
     s.journal.push(env);
     if (env.seq > s.seq) s.seq = env.seq;
   }
@@ -1079,7 +1106,9 @@ function metaOf(s) {
     updated_at: s.journal.length > 0 ? s.journal[s.journal.length - 1].ts : s.createdAt,
     last_seq: s.seq,
     unread: 0,
-    pending_permissions: 0,
+    // A blocked bridge approval is discoverable from the list alone: clients
+    // (and auto-resubscribe logic) must not need the journal to see it.
+    pending_permissions: s.pendingPermission ? 1 : 0,
   };
 }
 
@@ -1789,9 +1818,14 @@ function sendControl(client, event, data) {
 }
 
 // `cmd`, when known, tags the error with the request that caused it so clients
-// can scope error handling to their own in-flight requests.
-function sendError(client, code, message, cmd) {
-  sendControl(client, "error", cmd ? { code, message, cmd } : { code, message });
+// can scope error handling to their own in-flight requests. `cmd` may be the
+// full command frame: an ACKABLE frame's nonce is then marked REJECTED so a
+// reconnect replay receives this same error instead of an ok-ack.
+function sendError(client, code, message, cmd, data) {
+  const frame = cmd && typeof cmd === "object" ? cmd : null;
+  const name = frame?.cmd ?? (typeof cmd === "string" ? cmd : undefined);
+  if (frame?.nonce && ACKABLE_CMDS.has(frame.cmd)) noteRejected(frame, code, message);
+  sendControl(client, "error", { code, message, ...(name ? { cmd: name } : {}), ...(data ? { data } : {}) });
 }
 
 const HOST_HELP = [
@@ -2010,9 +2044,9 @@ function notePackResolution(s, run) {
  *  rewritten in place to the catalog name and noted on `run.resolvedFrom`;
  *  an ambiguous one fails with `data.candidates` + `data.retry` so the
  *  client can offer the fix as one click. */
-function guardPackRun(client, s, run) {
+function guardPackRun(client, s, run, frame = null) {
   if (!run.name) {
-    sendError(client, "bad_request", "/pack run needs <name> <task>; see /pack list");
+    sendError(client, "bad_request", "/pack run needs <name> <task>; see /pack list", frame);
     return "bad_request";
   }
   let pack = packByName(run.name);
@@ -2023,32 +2057,26 @@ function guardPackRun(client, s, run) {
       run.name = fix.name;
       pack = packByName(fix.name);
     } else {
-      sendControl(client, "error", {
-        code: "no_pack",
-        message: unknownPackMessage(run.name),
-        ...(fix ? { data: { pack: run.name, candidates: fix.candidates, session: s.id, retry: `/pack run ${fix.candidates[0]} ${run.task}`.trim() } } : {}),
-      });
+      sendError(client, "no_pack", unknownPackMessage(run.name), frame, fix ? { pack: run.name, candidates: fix.candidates, session: s.id, retry: `/pack run ${fix.candidates[0]} ${run.task}`.trim() } : undefined);
       return "no_pack";
     }
   }
   if (!run.task) {
-    sendError(client, "bad_request", `/pack run ${pack.name} needs a task`);
+    sendError(client, "bad_request", `/pack run ${pack.name} needs a task`, frame);
     return "bad_request";
   }
   const unmet = unmetRequirements(pack.ui.requires, { approval: s.approval });
   const profile = unmet.find((u) => u.startsWith("approval:"));
   if (profile) {
     const required = profile.slice("approval:".length);
-    sendControl(client, "error", {
-      code: "pack_requires_profile",
-      message: `${pack.name} needs approval profile ${required}; this session is ${s.approval}. Headless dext would deny its writes silently.`,
+    sendError(client, "pack_requires_profile", `${pack.name} needs approval profile ${required}; this session is ${s.approval}. Headless dext would deny its writes silently.`, frame, {
       // `retry` lets the client re-offer the exact command after the switch.
-      data: { pack: pack.name, required, current: s.approval, session: s.id, retry: `/pack run ${pack.name} ${run.task}` },
+      pack: pack.name, required, current: s.approval, session: s.id, retry: `/pack run ${pack.name} ${run.task}`,
     });
     return "pack_requires_profile";
   }
   if (unmet.length > 0) {
-    sendError(client, "pack_requires", `${pack.name} needs ${unmet.join(", ")} which this host does not have`);
+    sendError(client, "pack_requires", `${pack.name} needs ${unmet.join(", ")} which this host does not have`, frame);
     return "pack_requires";
   }
   return null;
@@ -2109,8 +2137,11 @@ async function handlePackSlash(client, s, cmd) {
   }
 }
 
-/** Journal + start a turn. Callers have validated text and busy state. */
-function submitPrompt(s, incoming) {
+/** Journal + start a turn. Callers have validated text and busy state. The
+ *  sender's nonce (when present) is journaled with the user_message so nonce
+ *  dedup is restart-durable: a replay after a host restart is still a
+ *  duplicate, never a second run. */
+function submitPrompt(s, incoming, nonce) {
   let text = incoming;
   if (s.steeringQueue.length > 0) {
     // Queued steering that missed its boundary (interrupt/crash/restart)
@@ -2123,7 +2154,7 @@ function submitPrompt(s, incoming) {
     persistIndex();
   }
   if (s.status === "cold") wakeSession(s);
-  publish(journalData(s, "user_message", { text }));
+  publish(journalData(s, "user_message", { text, ...(typeof nonce === "string" && nonce ? { nonce } : {}) }));
   if (s.title === "New session") {
     s.title = text.slice(0, 60);
     persistIndex();
@@ -2133,33 +2164,54 @@ function submitPrompt(s, incoming) {
 
 // ---------- delivery dedup (nonce) ----------
 
-// Clients tag prompt.submit / steering.inject / slash with a nonce; the host
-// remembers it for an hour, so a reconnect replay can never double-run work.
-// Rejections flow back through the normal cmd-tagged `error` envelope (the
-// client correlates those), so acks here are positive-only: `ok` means
-// durably accepted (journaled or queued), `duplicate` means already run.
+// Clients tag prompt.submit / steering.inject / slash with a nonce. The host
+// records identity TOGETHER WITH outcome, so a reconnect replay can never
+// double-run work and can never be told "ok" for a command that was rejected:
+//   * accepted → journaled (or queued); a replay is acked {ok, duplicate}
+//   * rejected → validation failed; a replay receives the same error again
+// Accepted prompt nonces are journaled with the user_message event, so this
+// dedup is restart-durable for the highest-stakes command. `durable:false` on
+// an ack means the journal append failed — the turn runs, persistence is not.
 const NONCE_RE = /^[A-Za-z0-9_-]{6,64}$/;
 const ACKABLE_CMDS = new Set(["prompt.submit", "steering.inject", "slash"]);
-const seenNonces = new Map(); // nonce -> first-seen ts
+const seenNonces = new Map(); // nonce -> { ts, status?: "accepted"|"rejected", code?, message? }
 const NONCE_TTL_MS = 60 * 60 * 1000;
 const NONCE_CAP = 4096;
+function nonceRecord(n, rec) {
+  const now = Date.now();
+  if (seenNonces.size >= NONCE_CAP) {
+    for (const [k, r] of seenNonces) if (now - r.ts > NONCE_TTL_MS) seenNonces.delete(k);
+    if (seenNonces.size >= NONCE_CAP) seenNonces.delete(seenNonces.keys().next().value);
+  }
+  seenNonces.set(n, rec);
+}
 function nonceClaim(frame) {
   const n = frame?.nonce;
   if (typeof n !== "string" || !NONCE_RE.test(n) || !ACKABLE_CMDS.has(frame.cmd)) return null;
-  if (seenNonces.has(n)) return { nonce: n, duplicate: true };
-  const now = Date.now();
-  if (seenNonces.size >= NONCE_CAP) {
-    for (const [k, t] of seenNonces) if (now - t > NONCE_TTL_MS) seenNonces.delete(k);
-    if (seenNonces.size >= NONCE_CAP) seenNonces.delete(seenNonces.keys().next().value);
-  }
-  seenNonces.set(n, now);
+  if (seenNonces.has(n)) return { nonce: n, duplicate: true, prior: seenNonces.get(n) ?? {} };
+  nonceRecord(n, { ts: Date.now() });
   return { nonce: n, duplicate: false };
+}
+/** Record a rejection so a replayed nonce cannot later be acked ok. */
+function noteRejected(frame, code, message) {
+  const n = frame?.nonce;
+  if (typeof n !== "string" || !seenNonces.has(n)) return;
+  seenNonces.set(n, { ...(seenNonces.get(n) ?? {}), ts: Date.now(), status: "rejected", code: String(code), message: String(message).slice(0, 300) });
 }
 function ackOk(client, frame, duplicate = false) {
   const n = frame?.nonce;
-  if (typeof n === "string" && ACKABLE_CMDS.has(frame.cmd)) {
-    sendControl(client, "cmd_ack", { nonce: n, cmd: frame.cmd, ok: true, ...(duplicate ? { duplicate: true } : {}) });
-  }
+  if (typeof n !== "string" || !ACKABLE_CMDS.has(frame.cmd)) return;
+  if (seenNonces.has(n)) seenNonces.set(n, { ...(seenNonces.get(n) ?? {}), ts: Date.now(), status: "accepted" });
+  // `durable` reports whether THIS command's journal append actually landed.
+  const s = sessions.get(frame.session);
+  const degraded = !duplicate && s?.lastAppendFailed;
+  sendControl(client, "cmd_ack", {
+    nonce: n,
+    cmd: frame.cmd,
+    ok: true,
+    ...(duplicate ? { duplicate: true } : {}),
+    ...(degraded ? { durable: false, message: "journal append failed — this turn is not durably saved" } : {}),
+  });
 }
 
 async function handleCommand(client, frame) {
@@ -2211,9 +2263,22 @@ async function handleCommand(client, frame) {
     return;
   }
 
-  // Delivery dedup: a replayed nonce is acked as duplicate and never re-run.
+  // Delivery dedup: identity + outcome. A replayed ACCEPTED nonce is acked as
+  // duplicate and never re-run; a replayed REJECTED nonce gets its error again
+  // — an ack must never claim a command ran when it was refused.
   const claim = nonceClaim(frame);
   if (claim?.duplicate) {
+    const prior = claim.prior;
+    if (prior?.status === "rejected") {
+      sendControl(client, "error", {
+        code: prior.code ?? "rejected",
+        message: prior.message ?? "command was rejected",
+        cmd: frame.cmd,
+        nonce: claim.nonce,
+        duplicate: true,
+      });
+      return;
+    }
     ackOk(client, frame, true);
     return;
   }
@@ -2431,19 +2496,19 @@ async function handleCommand(client, frame) {
     case "prompt.submit": {
       const s = sessions.get(frame.session);
       if (!s) {
-        sendError(client, "no_session", `unknown session ${frame.session}`);
+        sendError(client, "no_session", `unknown session ${frame.session}`, frame);
         return;
       }
       if (typeof frame.text !== "string" || !frame.text.trim()) {
-        sendError(client, "bad_request", "text required");
+        sendError(client, "bad_request", "text required", frame);
         return;
       }
       if (frame.text.length > MAX_PROMPT_CHARS) {
-        sendError(client, "bad_request", `text exceeds ${MAX_PROMPT_CHARS} characters`);
+        sendError(client, "bad_request", `text exceeds ${MAX_PROMPT_CHARS} characters`, frame);
         return;
       }
       if (s.compacting || s.compactRequested) {
-        sendError(client, "busy", "context compaction is in progress — wait for it to finish", frame.cmd);
+        sendError(client, "busy", "context compaction is in progress — wait for it to finish", frame);
         return;
       }
       // `/pack …` may arrive as a prompt too (agents driving /__agent). Management
@@ -2455,21 +2520,21 @@ async function handleCommand(client, frame) {
         ackOk(client, frame);
         return;
       }
-      if (packCmd && guardPackRun(client, s, packCmd)) return;
+      if (packCmd && guardPackRun(client, s, packCmd, frame)) return;
       // The guard may have resolved a near-miss name: the journaled prompt and
       // the `--pack` invocation both need the catalog name, not the typo.
       if (packCmd?.resolvedFrom) frame.text = `/pack run ${packCmd.name} ${packCmd.task}`;
       if (s.working) {
         // A prompt sent mid-turn is steering: queue it for the turn boundary.
         if (!queueSteering(s, frame.text)) {
-          sendError(client, "busy", "steering queue is full (10 messages / 100k chars); interrupt or wait");
+          sendError(client, "busy", "steering queue is full (10 messages / 100k chars); interrupt or wait", frame);
           return;
         }
         ackOk(client, frame);
         notePackResolution(s, packCmd);
         return;
       }
-      submitPrompt(s, frame.text);
+      submitPrompt(s, frame.text, frame.nonce);
       ackOk(client, frame);
       notePackResolution(s, packCmd);
       return;
@@ -2478,23 +2543,23 @@ async function handleCommand(client, frame) {
     case "steering.inject": {
       const s = sessions.get(frame.session);
       if (!s) {
-        sendError(client, "no_session", `unknown session ${frame.session}`);
+        sendError(client, "no_session", `unknown session ${frame.session}`, frame);
         return;
       }
       if (typeof frame.text !== "string" || !frame.text.trim()) {
-        sendError(client, "bad_request", "text required");
+        sendError(client, "bad_request", "text required", frame);
         return;
       }
       if (frame.text.length > MAX_PROMPT_CHARS) {
-        sendError(client, "bad_request", `text exceeds ${MAX_PROMPT_CHARS} characters`);
+        sendError(client, "bad_request", `text exceeds ${MAX_PROMPT_CHARS} characters`, frame);
         return;
       }
       if (!s.working && s.steeringQueue.length === 0) {
-        sendError(client, "not_working", "no turn in flight; send a prompt instead");
+        sendError(client, "not_working", "no turn in flight; send a prompt instead", frame);
         return;
       }
       if (!queueSteering(s, frame.text.trim())) {
-        sendError(client, "busy", "steering queue is full (10 messages / 100k chars); interrupt or wait");
+        sendError(client, "busy", "steering queue is full (10 messages / 100k chars); interrupt or wait", frame);
         return;
       }
       ackOk(client, frame);
@@ -2803,9 +2868,12 @@ function compileOrError(client, frame, flow) {
  *  flow, tracked from spawn to process exit. Spawn-accepted is not
  *  run-succeeded: crew's exit status and output tail are recorded, persisted
  *  under --state-dir, and broadcast, so a run that dies at startup is a
- *  visible failure instead of a silent "started". */
+ *  visible failure instead of a silent "started". Each launch has a durable
+ *  identity (id) other subsystems — the trigger scheduler — can await. */
 const LAUNCHES_FILE = path.join(STATE_DIR, "flow-launches.json");
 let LAUNCHES = {}; // `${cwd}\u0000${name}` -> last launch record
+const LAUNCH_BY_ID = new Map(); // launch.id -> live launch record
+const launchWaiters = new Map(); // launch.id -> Set<callback(final)>
 try {
   LAUNCHES = JSON.parse(fs.readFileSync(LAUNCHES_FILE, "utf8")) || {};
 } catch {
@@ -2818,6 +2886,29 @@ function persistLaunches() {
     fs.writeFileSync(LAUNCHES_FILE, JSON.stringify(LAUNCHES));
   } catch (err) {
     console.error(`agentlinkd: cannot persist flow launches: ${err.message}`);
+  }
+}
+/** Await a launch's authoritative terminal state. `cb` runs exactly once:
+ *  immediately for an already-finished launch, or when its process exits. */
+function waitLaunch(id, cb) {
+  const launch = LAUNCH_BY_ID.get(id);
+  if (!launch || launch.state === "failed" || launch.state === "started") {
+    cb(launch ?? { id, state: "failed", error: "launch not found" });
+    return;
+  }
+  if (!launchWaiters.has(id)) launchWaiters.set(id, new Set());
+  launchWaiters.get(id).add(cb);
+}
+function notifyLaunchWaiters(launch) {
+  const waiters = launchWaiters.get(launch.id);
+  if (!waiters) return;
+  launchWaiters.delete(launch.id);
+  for (const cb of waiters) {
+    try {
+      cb(launch);
+    } catch (err) {
+      console.error(`agentlinkd: launch waiter failed: ${err.message}`);
+    }
   }
 }
 function launchSummaries(cwd) {
@@ -2859,6 +2950,7 @@ function startFlowRun(cwd, name, { by = "host", reason = "" } = {}) {
   if (CREW) CREW.addRoot(path.join(cwd, ".crew", "runs"));
 
   const launch = {
+    id: `fl_${Date.now().toString(36)}_${crypto.randomUUID().slice(0, 8)}`,
     cwd,
     name: r.flow.name,
     spec_path: specPath,
@@ -2870,6 +2962,7 @@ function startFlowRun(cwd, name, { by = "host", reason = "" } = {}) {
     error: "",
   };
   LAUNCHES[`${cwd}\u0000${launch.name}`] = launch;
+  LAUNCH_BY_ID.set(launch.id, launch);
   persistLaunches();
 
   let child;
@@ -2901,6 +2994,7 @@ function startFlowRun(cwd, name, { by = "host", reason = "" } = {}) {
     if (failed) launch.error = String(error || `crew exited with code ${code}`).slice(0, 2000);
     persistLaunches();
     broadcastControl("x-agentlinkd.flows.run", { cwd, name: launch.name, failed, launch });
+    notifyLaunchWaiters(launch);
     SELF?.tick();
   };
   child.on("error", (err) => finish(true, null, `crew failed to start: ${err.message}`));
@@ -2918,19 +3012,19 @@ function handleFlowsCommand(client, frame) {
   TRIGGERS.addWorkspace(cwd);
   switch (frame.cmd) {
     case "x-agentlinkd.flows.list":
-      sendControl(client, "x-agentlinkd.flows.list", { cwd, flows: listFlows(cwd), triggers: TRIGGERS.status(cwd), launches: launchSummaries(cwd) });
+      sendControl(client, "x-agentlinkd.flows.list", { cwd, flows: listFlows(cwd), triggers: TRIGGERS.status(cwd), launches: launchSummaries(cwd), executor: CREW_BIN ? "crew" : null });
       return;
     case "x-agentlinkd.flows.get": {
       const r = readFlow(cwd, frame.name);
       if (r.error) flowErr(client, frame.cmd, r, frame.name);
-      else sendControl(client, "x-agentlinkd.flows.get", { cwd, flow: r.flow });
+      else sendControl(client, "x-agentlinkd.flows.get", { cwd, flow: r.flow, rev: r.rev });
       return;
     }
     case "x-agentlinkd.flows.put": {
       const r = writeFlow(cwd, frame.flow);
       if (r.error) sendError(client, "bad_request", `flow not saved: ${r.error}`, frame.cmd);
       else {
-        sendControl(client, "x-agentlinkd.flows.put", { cwd, flow: r.flow, bytes: r.bytes });
+        sendControl(client, "x-agentlinkd.flows.put", { cwd, flow: r.flow, bytes: r.bytes, rev: r.rev });
         TRIGGERS.reload(cwd);
         broadcastControl("x-agentlinkd.flows.changed", { cwd, flows: listFlows(cwd), triggers: TRIGGERS.status(cwd) });
       }
@@ -2953,6 +3047,16 @@ function handleFlowsCommand(client, frame) {
       return;
     }
     case "x-agentlinkd.flows.run": {
+      // Revision-bound execution: a run may only launch the revision the user
+      // SAW (and saved). A run carrying a stale revision is refused — running
+      // instructions the user cannot see is the dangerous failure mode.
+      if (typeof frame.rev === "number") {
+        const cur = flowRev(cwd, frame.name);
+        if (cur !== null && cur !== frame.rev) {
+          sendError(client, "stale_rev", `flow '${frame.name}' changed on disk since your view — save it, then run again`, frame.cmd);
+          return;
+        }
+      }
       const r = startFlowRun(cwd, frame.name, { by: `client:${client.id}` });
       if (r.error) sendError(client, r.code, r.error, frame.cmd);
       else sendControl(client, "x-agentlinkd.flows.run", { cwd, name: r.name, spec_path: r.spec_path, started: true, launch: r.launch });
@@ -3202,7 +3306,13 @@ function agentDigest() {
         cwd: s.cwd,
         last_seq: s.seq,
         last_event_age_ms: s.journal.length > 0 ? now - s.journal[s.journal.length - 1].ts : undefined,
-        pending: [], // approvals live in dext's --approval policy, not the host
+        // Bridge approvals ARE host-visible (permission.respond answers them):
+        // surface the blocked request — id, tool, bounded summary — so an
+        // agent reading this digest can discover and answer it. `input` stays
+        // off this surface; the WS permission.request event carries it.
+        pending: s.pendingPermission
+          ? [{ request_id: s.pendingPermission.request_id, tool: s.pendingPermission.tool, summary: String(s.pendingPermission.summary ?? "").slice(0, 120) }]
+          : [],
       })),
       actions: [
         ...list.flatMap((s) => {
@@ -3217,6 +3327,15 @@ function agentDigest() {
             });
           }
           if (s.working) acts.push({ cmd: "interrupt", session: s.id });
+          if (s.pendingPermission) {
+            acts.push({
+              cmd: "permission.respond",
+              session: s.id,
+              request_id: s.pendingPermission.request_id,
+              choice: "allow|allow_always|deny",
+              note: "session is blocked until this approval is answered",
+            });
+          }
           if (s.status === "cold") acts.push({ cmd: "session.open", session: s.id });
           else if (s.status === "live") acts.push({ cmd: "session.close", session: s.id });
           if (s.seq > 0) acts.push({ cmd: "session.clear", session: s.id, note: "empty transcript, fresh context" });
@@ -3735,13 +3854,35 @@ const server = http.createServer((req, res) => {
 
 // ---------- WS ----------
 
+// Per-socket containment, mirroring the HTTP error boundary above: a malformed
+// upgrade (e.g. an unparsable request target) must destroy only that socket.
+const MAX_WS_CLIENTS = Number(process.env.AGENTLINKD_WS_MAX_CLIENTS ?? 64);
+const WS_AUTH_DEADLINE_MS = Number(process.env.AGENTLINKD_WS_AUTH_DEADLINE_MS ?? 15_000); // upgraded sockets must complete hello promptly
+const WS_SEND_BUFFER_LIMIT = 2 * 1024 * 1024; // slow consumers are dropped to resync
 server.on("upgrade", (req, socket, head) => {
-  const pathName = new URL(req.url, "http://localhost").pathname;
-  const key = req.headers["sec-websocket-key"];
-  const upgradeOk = /^websocket$/i.test(req.headers.upgrade ?? "") && /upgrade/i.test(req.headers.connection ?? "");
-  if (pathName !== "/ws" || !upgradeOk || typeof key !== "string") {
+  // Attach before any write: an unhandled socket "error" would exit Node.
+  socket.on("error", () => { socket.destroy(); });
+  const reject = () => {
     socket.write("HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n");
     socket.destroy();
+  };
+  if (clients.size >= MAX_WS_CLIENTS) {
+    socket.write("HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n");
+    socket.destroy();
+    return;
+  }
+  let pathName;
+  let key;
+  try {
+    pathName = new URL(req.url, "http://localhost").pathname;
+    key = req.headers["sec-websocket-key"];
+  } catch {
+    reject();
+    return;
+  }
+  const upgradeOk = /^websocket$/i.test(req.headers.upgrade ?? "") && /upgrade/i.test(req.headers.connection ?? "");
+  if (pathName !== "/ws" || !upgradeOk || typeof key !== "string") {
+    reject();
     return;
   }
   socket.write(
@@ -3750,6 +3891,24 @@ server.on("upgrade", (req, socket, head) => {
       "Connection: Upgrade\r\n" +
       `Sec-WebSocket-Accept: ${acceptKey(key)}\r\n\r\n`,
   );
+  const dropClient = () => {
+    clearTimeout(authTimer);
+    client.crewLogClose?.();
+    clients.delete(client);
+    // end() lets the queued close frame flush; destroy() is only a reaper so a
+    // stuck peer cannot hold the socket open.
+    socket.end();
+    const reaper = setTimeout(() => socket.destroy(), 1000);
+    reaper.unref?.();
+  };
+  let authTimer = setTimeout(() => {
+    // Authentication deadline: an upgraded socket that never completes hello is
+    // a resource leak (and an unauthenticated peer); close it with 4001.
+    if (client.phase === "authing") {
+      try { client.close(4001); } catch { /* already gone */ }
+      dropClient();
+    }
+  }, WS_AUTH_DEADLINE_MS);
   const client = {
     id: `c${++clientCounter}`,
     phase: "authing",
@@ -3758,7 +3917,18 @@ server.on("upgrade", (req, socket, head) => {
     crewLogClose: null,
     crewLogRun: null,
     writable: () => !socket.destroyed && socket.writableLength < 256 * 1024,
-    send: (text) => socket.write(encodeFrame(OP_TEXT, Buffer.from(text, "utf8"))),
+    send: (text) => {
+      const buf = Buffer.from(text, "utf8");
+      if (socket.destroyed) return;
+      // Slow-consumer policy: rather than buffering without bound, drop the
+      // client (code 1013). It reconnects and resyncs from a journal snapshot.
+      if (socket.writableLength + buf.length > WS_SEND_BUFFER_LIMIT) {
+        try { client.close(1013); } catch { /* already gone */ }
+        dropClient();
+        return;
+      }
+      socket.write(encodeFrame(OP_TEXT, buf));
+    },
     close: (code) => {
       try {
         socket.end(encodeFrame(0x8, Buffer.from([(code >> 8) & 0xff, code & 0xff])));
@@ -3793,6 +3963,7 @@ server.on("upgrade", (req, socket, head) => {
   socket.on("data", (chunk) => parser.push(chunk));
   socket.on("close", () => { client.crewLogClose?.(); clients.delete(client); });
   socket.on("error", () => { client.crewLogClose?.(); clients.delete(client); });
+  socket.on("close", () => clearTimeout(authTimer));
 });
 
 let shuttingDown = false;

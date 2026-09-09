@@ -174,3 +174,44 @@ test("adapter: put creates the tasks directory on first write", (t) => {
   assert.equal(r.ok, true);
   assert.ok(fs.existsSync(path.join(deep, ".dext", "tasks", "first.task.json")));
 });
+
+test("read path never launders a done claim: no passing check → active + unverified_done in list and get; a passing check makes it true", (t) => {
+  const cwd = ws(t);
+  const dir = tasksDir(cwd, { create: true });
+  assert.ok(dir);
+  const file = path.join(dir, `${GOOD.name}.task.json`);
+  const disk = (over) => fs.writeFileSync(file, JSON.stringify({ ...GOOD, created_at: 1, updated_at: 2, updated_by: "agent", rev: 3, ...over }));
+
+  // Hand-edited (or agent-written) done with zero evidence.
+  disk({ status: "done", checks: [], summary: "trust me" });
+  const [sum] = listTasks(cwd);
+  assert.equal(sum.status, "active", JSON.stringify(sum));
+  assert.equal(sum.unverified_done, true);
+  assert.equal(sum.checks_ok, 0);
+  const got = readTask(cwd, GOOD.name);
+  assert.equal(got.ok, true);
+  assert.equal(got.task.status, "active");
+  assert.equal(got.task.unverified_done, true);
+
+  // A failing check is not evidence either.
+  disk({ status: "done", checks: [{ name: "reconcile", ok: false, at: 1, by: "agent" }] });
+  assert.equal(readTask(cwd, GOOD.name).task.status, "active");
+
+  // A passing check makes the same claim true on every surface.
+  disk({ status: "done", checks: [{ name: "reconcile", ok: true, at: 1, by: "agent" }] });
+  const done = readTask(cwd, GOOD.name);
+  assert.equal(done.task.status, "done");
+  assert.equal(done.task.unverified_done, undefined);
+  assert.equal(listTasks(cwd)[0].status, "done");
+  assert.equal(listTasks(cwd)[0].unverified_done, undefined);
+
+  // Self-heal: saving the honest projection persists it through the host path.
+  disk({ status: "done", checks: [] });
+  const honest = readTask(cwd, GOOD.name);
+  assert.equal(honest.task.status, "active");
+  const saved = writeTask(cwd, honest.task, { actor: "user", expectedRev: honest.task.rev });
+  assert.equal(saved.ok, true, JSON.stringify(saved));
+  assert.equal(saved.task.status, "active");
+  const after = JSON.parse(fs.readFileSync(file, "utf8"));
+  assert.equal(after.status, "active", "the dishonest claim is gone from disk");
+});

@@ -7,9 +7,17 @@ if ! command -v agent-browser >/dev/null 2>&1; then
 fi
 TMP=$(mktemp -d)
 PORT=${PORT:-8794}
+# Same isolation as browser-test.sh: build a private copy; never touch apps/web/dist.
+OUT="apps/web/dist.smoke"
+rm -rf "$OUT"
+if ! (cd apps/web && npm exec -- vite build --outDir dist.smoke --emptyOutDir >"$TMP/build.log" 2>&1); then
+  echo 'FAIL: smoke build'
+  tail -40 "$TMP/build.log"
+  exit 1
+fi
 B=(agent-browser --session dext-chart-review)
 SRV=''
-cleanup() { "${B[@]}" close >/dev/null 2>&1 || true; [ -z "$SRV" ] || kill "$SRV" 2>/dev/null || true; rm -rf "$TMP"; }
+cleanup() { "${B[@]}" close >/dev/null 2>&1 || true; [ -z "$SRV" ] || kill "$SRV" 2>/dev/null || true; rm -rf "$TMP"; rm -rf "$OUT"; }
 trap cleanup EXIT
 cat >"$TMP/chart.md" <<'EOF'
 ## Chart regression
@@ -56,7 +64,7 @@ cat >"$TMP/chart.md" <<'EOF'
 {"type":"hbar","title":"Outliers","values":[-3000,3000,0],"labels":["low","high","zero"],"domain":[-3,3],"unit":"%"}
 ```
 EOF
-MOCK_MARKDOWN_FILE="${REPORT_FILE:-$TMP/chart.md}" node packages/mock-server/src/server.mjs --port="$PORT" >"$TMP/mock.log" 2>&1 &
+MOCK_MARKDOWN_FILE="${REPORT_FILE:-$TMP/chart.md}" node packages/mock-server/src/server.mjs --port="$PORT" --static="$OUT" >"$TMP/mock.log" 2>&1 &
 SRV=$!
 "${B[@]}" set viewport 1440 1000 >/dev/null
 "${B[@]}" open "http://127.0.0.1:$PORT" >/dev/null

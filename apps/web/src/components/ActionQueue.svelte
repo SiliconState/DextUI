@@ -56,11 +56,13 @@
     class="queue"
     data-agent-id="queue.rail"
     data-state={open ? "expanded" : "collapsed"}
-    aria-label="Approval queue"
+    aria-label="Needs you — decisions pending"
   >
-    <button class="queue-head" data-agent-id="queue.toggle" aria-expanded={open} onclick={toggle}>
+    <button class="queue-head" data-agent-id="queue.toggle" aria-expanded={open}
+      aria-label={`Needs you: ${total} ${total === 1 ? "decision" : "decisions"} pending`}
+      onclick={toggle}>
       <span class="faint">{open ? "▾" : "▸"}</span>
-      <span class="st-yellow">Queue</span>
+      <span class="st-yellow">Needs you</span>
       <span class="st-yellow">({total})</span>
     </button>
     {#if open}
@@ -145,6 +147,11 @@
     {/if}
   </section>
 {/if}
+<!-- Decisions-first: announce count changes to assistive tech even when the
+     rail is collapsed or the user is elsewhere in the document. -->
+<p class="sr-only" role="status" aria-live="polite" data-agent-id="queue.announce">
+  {total === 0 ? "No decisions pending" : `${total} ${total === 1 ? "decision" : "decisions"} need${total === 1 ? "s" : ""} you`}
+</p>
 
 <style>
   .queue {

@@ -277,6 +277,65 @@ test("failure: a bad remote leaves a visible error and no half-clone; drive kind
   assert.equal((await conn.add({ kind: "gdrive", label: "Drive", remote: "", secret: '{"access_token":"x","token_type":"Bearer"}' })).error, "no_rclone");
 });
 
+test("registry: concurrent adds are serialized — no registration is lost", { timeout: 30000 }, async (t) => {
+  const r = bareRepo(t);
+  // A deliberately slow exec widens the read→write window in `add` (the
+  // rclone config-create await) that used to let two registrations clobber
+  // each other: both loaded the empty registry, then each saved one entry.
+  const exec = () => new Promise((resolve) => setTimeout(() => resolve({ ok: true, code: 0, stdout: "", stderr: "" }), 25));
+  const conn = createConnectors({ home: r.home, root: r.picker, bins: { git: "git", rclone: "/bin/true", gh: null }, exec });
+  const tok = '{"access_token":"ya29.stub","token_type":"Bearer","refresh_token":"1//r","expiry":"2030-01-01T00:00:00Z"}';
+  const [a, b] = await Promise.all([
+    conn.add({ kind: "gdrive", label: "One", remote: "Projects", secret: tok }),
+    conn.add({ kind: "gdrive", label: "Two", remote: "Photos", secret: tok }),
+  ]);
+  assert.ok(a.added && b.added, JSON.stringify([a, b]));
+  assert.deepEqual(conn.list().connectors.map((c) => c.label).sort(), ["One", "Two"], "both registrations survive the race window");
+  await conn.drain();
+  // Concurrent removals take the same serialized turn.
+  const ids = conn.list().connectors.map((c) => c.id);
+  await Promise.all(ids.map((id) => conn.remove({ id })));
+  assert.equal(conn.list().connectors.length, 0);
+});
+
+test("guard: a folder swapped for a symlink is refused, its target is never touched", { timeout: 60000 }, async (t) => {
+  const r = bareRepo(t);
+  const conn = createConnectors({ home: r.home, root: r.picker, allowLocal: true, bins: { git: "git", rclone: null, gh: null } });
+  const added = await conn.add({ kind: "git", label: "Site", remote: r.bare });
+  assert.ok(added.added, JSON.stringify(added));
+  const [c] = added.connectors;
+  const local = path.join(r.picker, CONNECTED_DIR, "Site");
+  const outside = path.join(r.base, "outside");
+  fs.mkdirSync(outside);
+  fs.writeFileSync(path.join(outside, "keep.txt"), "mine\n");
+  fs.rmSync(local, { recursive: true, force: true });
+  fs.symlinkSync(outside, local);
+  assert.equal((await conn.sync({ id: c.id })).error, "bad_path", "sync refuses the swapped path");
+  assert.deepEqual(fs.readdirSync(outside), ["keep.txt"], "nothing was pulled into or written through the link");
+  assert.equal(conn.list().connectors.find((x) => x.id === c.id).status, "error");
+  fs.rmSync(local); // the link itself, never the target
+  await conn.remove({ id: c.id, purge: true });
+  assert.ok(fs.existsSync(path.join(outside, "keep.txt")), "purge removed the link only");
+});
+
+test("push: .dext and .crew state never ride a user-visible commit", { timeout: 60000 }, async (t) => {
+  const r = bareRepo(t);
+  const conn = createConnectors({ home: r.home, root: r.picker, allowLocal: true, bins: { git: "git", rclone: null, gh: null } });
+  const added = await conn.add({ kind: "git", label: "Site", remote: r.bare });
+  assert.ok(added.added, JSON.stringify(added));
+  const local = path.join(r.picker, CONNECTED_DIR, "Site");
+  fs.mkdirSync(path.join(local, ".dext", "flows"), { recursive: true });
+  fs.writeFileSync(path.join(local, ".dext", "flows", "x.flow.json"), "{}");
+  fs.mkdirSync(path.join(local, ".crew"), { recursive: true });
+  fs.writeFileSync(path.join(local, ".crew", "run.log"), "noise");
+  fs.writeFileSync(path.join(local, "real.txt"), "user work\n");
+  const pushed = await conn.push({ id: added.added });
+  assert.equal(pushed.pushed, added.added, JSON.stringify(pushed));
+  const files = git(["ls-tree", "-r", "--name-only", "main"], r.bare).trim().split("\n");
+  assert.ok(files.includes("real.txt"), "user work is committed");
+  assert.ok(!files.some((f) => f.startsWith(".dext/") || f.startsWith(".crew/")), `host state leaked: ${JSON.stringify(files)}`);
+});
+
 // ---------- host surface ----------
 
 async function host(t, dirsRoot, dextHome) {

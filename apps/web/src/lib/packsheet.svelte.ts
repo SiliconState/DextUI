@@ -29,12 +29,32 @@ export function packEditEnabled(): boolean {
   return app.caps.includes("pack_edit");
 }
 
-// The text exactly as sent, so a write reply never marks keystrokes typed
-// during the in-flight save as already saved.
+// The text (and file) exactly as sent, so a write reply can only mark the
+// bytes it actually wrote as saved — never a different file's buffer, and
+// never keystrokes typed during the in-flight save.
 let pendingSave = "";
+let pendingSavePath = "";
 
 export function packSheetDirty(): boolean {
   return packSheet.open && packSheet.text !== packSheet.savedText;
+}
+
+/** Ask before destroying unsaved edits (all close/select paths are user acts). */
+function confirmDiscard(): boolean {
+  return !packSheetDirty() || window.confirm("Discard unsaved changes to this file?");
+}
+
+/** CSP is parsed before any pack-authored markup: the sandbox attribute
+ *  already removes scripts and the origin; this also pins "no network" in
+ *  content — inline styles, data:/blob: images, nothing else loads or
+ *  navigates (packs cannot beacon, track, or pull remote code). */
+function panelDoc(html: string): string {
+  const parsed = new DOMParser().parseFromString(html, "text/html");
+  const meta = parsed.createElement("meta");
+  meta.httpEquiv = "Content-Security-Policy";
+  meta.content = "default-src 'none'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; form-action 'none'; base-uri 'none'";
+  parsed.head.prepend(meta);
+  return `<!doctype html>\n${parsed.documentElement.outerHTML}`;
 }
 
 export function openPackSheet(name: string): void {
@@ -71,6 +91,7 @@ export function openPackPanel(name: string): void {
 
 export function closePackSheet(): void {
   if (packSheet.saving) return; // never drop a save in flight mid-rename
+  if (!confirmDiscard()) return; // unsaved edits are a user decision, not a default
   packSheet.open = false;
   packSheet.pack = "";
   packSheet.files = [];
@@ -92,6 +113,8 @@ export function selectFile(path: string): void {
   const c = app.conn;
   const entry = packSheet.files.find((f) => f.path === path);
   if (!c || !packSheet.open || path === packSheet.sel || !entry || entry.kind !== "file" || !entry.editable) return;
+  // Switching files replaces the buffer: a dirty editor is the user's call.
+  if (!confirmDiscard()) return;
   packSheet.sel = path;
   packSheet.text = "";
   packSheet.savedText = "";
@@ -106,6 +129,7 @@ export function savePackFile(): void {
   packSheet.saving = true;
   packSheet.error = "";
   pendingSave = packSheet.text;
+  pendingSavePath = packSheet.sel;
   c.packWrite(packSheet.pack, packSheet.sel, packSheet.text);
 }
 
@@ -138,7 +162,7 @@ export function onPackControl(env: Envelope): void {
       if (!d || d.pack !== packSheet.pack) return;
       if (packSheet.panelOpen && d.path === packSheet.panelFile) {
         packSheet.panelLoading = false;
-        packSheet.panelHtml = d.text;
+        packSheet.panelHtml = panelDoc(d.text);
         return;
       }
       if (d.path !== packSheet.sel) return;
@@ -151,7 +175,13 @@ export function onPackControl(env: Envelope): void {
       const d = env.data as PackWriteReply | undefined;
       if (!d || d.pack !== packSheet.pack) return;
       packSheet.saving = false;
-      packSheet.savedText = pendingSave;
+      // Identity correlation: only the file this save targeted may set the
+      // saved baseline. A reply for file A while file B is open must never
+      // mark B's buffer clean.
+      if (d.path === packSheet.sel && d.path === pendingSavePath) {
+        packSheet.savedText = pendingSave;
+      }
+      pendingSavePath = "";
       pushToast("ok", `saved ${d.pack}/${d.path} (${d.bytes}B)`);
       const c = app.conn;
       if (c) {

@@ -12,6 +12,7 @@
 // and never go back over the wire; only names do.
 import fs from "node:fs";
 import path from "node:path";
+import crypto from "node:crypto";
 import { checkedPath } from "./session-files.mjs";
 
 export const MAX_VALUE_BYTES = 8 * 1024;
@@ -74,21 +75,49 @@ export function readPackCredentials(home, pack) {
   }
 }
 
-/** Write (or remove when empty) the pack's file: dir 0700, file 0600, atomic. */
+/** Validate write targets: every existing ancestor must be symlink-free (a
+ *  missing final file is allowed — first-time saves create it), and an existing
+ *  final component must be a regular file, never a symlink. */
+function checkedFileForWrite(file) {
+  if (!checkedPath(path.dirname(file))) throw new Error(`credentials path refused: ${path.dirname(file)}`);
+  let st;
+  try {
+    st = fs.lstatSync(file);
+  } catch (err) {
+    if (err.code === "ENOENT") return; // first-time save: the file may not exist yet
+    throw err;
+  }
+  if (st.isSymbolicLink()) throw new Error(`symlink refused: ${file}`);
+}
+
+/** Write (or remove when empty) the pack's file: dir 0700, file 0600, atomic.
+ *  The temp file gets an unpredictable name and O_EXCL creation, so a planted
+ *  `<file>.tmp` symlink can never be followed; rename replaces the target
+ *  directory entry without following symlinks. */
 export function writePackCredentials(home, pack, values) {
   const dir = credentialsDir(home);
   const file = credentialsFile(home, pack);
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   try { fs.chmodSync(dir, 0o700); } catch { /* best effort */ }
-  if (!checkedPath(file)) throw new Error("credentials path refused");
+  checkedFileForWrite(file);
   if (Object.keys(values).length === 0) {
     try { fs.unlinkSync(file); } catch { /* absent */ }
     return;
   }
-  const tmp = `${file}.tmp`;
-  fs.writeFileSync(tmp, formatEnvFile(values), { mode: 0o600 });
-  fs.chmodSync(tmp, 0o600);
-  fs.renameSync(tmp, file);
+  const tmp = `${file}.${crypto.randomBytes(12).toString("hex")}.tmp`;
+  const fd = fs.openSync(tmp, "wx", 0o600);
+  try {
+    fs.writeFileSync(fd, formatEnvFile(values));
+    fs.fsyncSync(fd);
+  } finally {
+    fs.closeSync(fd);
+  }
+  try {
+    fs.renameSync(tmp, file);
+  } catch (err) {
+    try { fs.unlinkSync(tmp); } catch { /* best effort */ }
+    throw err;
+  }
 }
 
 /** Names-only status: which declared names have a stored value. */

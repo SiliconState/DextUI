@@ -12,12 +12,14 @@ const host = path.join(here, "..", "src", "server.mjs");
 const fake = path.join(here, "fake-dext.mjs");
 const cwd = path.join(process.env.HOME, "dextui-workspace");
 const stateDir = path.join(cwd, `state-${process.pid}`);
+const dextHome = path.join(cwd, `dext-home-${process.pid}`);
 const port = 8992;
 const token = "smoke-token";
 const base = `http://127.0.0.1:${port}`;
 const wsUrl = `ws://127.0.0.1:${port}/ws`;
 fs.mkdirSync(cwd, { recursive: true, mode: 0o755 });
 fs.rmSync(stateDir, { recursive: true, force: true });
+fs.rmSync(dextHome, { recursive: true, force: true });
 
 const results = [];
 const ok = (name, cond, detail = "") => {
@@ -78,6 +80,9 @@ async function badHello(tok) {
 function spawnHost() {
   return spawn(process.execPath, [host, `--port=${port}`, `--token=${token}`, `--dext=${fake}`, `--cwd=${cwd}`, `--state-dir=${stateDir}`], {
     stdio: ["ignore", "ignore", "inherit"],
+    // Isolated dext state root: the todos check plants a seat-scoped session
+    // dir here — the host's real ~/.dext is never touched by the smoke.
+    env: { ...process.env, DEXT_HOME: dextHome },
   });
 }
 
@@ -263,9 +268,19 @@ try {
   );
   ok("__agent body capped under 4096 bytes", Buffer.byteLength(digestText) <= 4096, `${Buffer.byteLength(digestText)} bytes`);
 
-  const todoPath = path.join(cwd, "DEXT.todo.json");
+  // Todos are seat-scoped: planted in the dext state dir whose header seat
+  // matches this session. The project-level file must be IGNORED (anti-bleed).
+  // The seat never rides the wire — read it from the host's persisted session
+  // index inside the state dir this smoke owns.
+  const indexEntries = JSON.parse(fs.readFileSync(path.join(stateDir, "sessions.json"), "utf8"));
+  const seat = indexEntries.find((x) => x.id === sid)?.seat ?? "";
+  const dextSessDir = path.join(dextHome, "projects", "smoke", "sessions", "1700000000-1-smoke");
+  fs.mkdirSync(dextSessDir, { recursive: true });
+  fs.writeFileSync(path.join(dextSessDir, "_latest.jsonl"), `${JSON.stringify({ version: 4, seat: { id: seat } })}\n`);
+  const projectTodo = path.join(cwd, "DEXT.todo.json");
+  fs.writeFileSync(projectTodo, JSON.stringify([{ text: "stale project item", status: "completed" }])); // must never be read
   fs.writeFileSync(
-    todoPath,
+    path.join(dextSessDir, "DEXT.todo.json"),
     JSON.stringify([
       { text: "  write smoke checks  ", status: "in_progress" },
       { text: "", status: "completed" }, // dropped: empty text
@@ -274,19 +289,21 @@ try {
   );
   let todos = await (await fetch(`${base}/sessions/${sid}/todos`, { headers: H })).json();
   ok(
-    "todos read from the project file, parsed like dext",
+    "todos read from the seat's session file, parsed like dext (project file ignored)",
     todos.session === sid &&
-      todos.source === "project" &&
-      todos.path === todoPath &&
+      todos.source === "session" &&
+      todos.path === path.join(dextSessDir, "DEXT.todo.json") &&
       todos.items.length === 2 &&
       todos.items[0].text === "write smoke checks" &&
       todos.items[0].status === "in_progress" &&
       todos.items[1].text === "clean the state dir" &&
       todos.items[1].status === "pending",
   );
-  fs.rmSync(todoPath);
+  fs.rmSync(path.join(dextSessDir, "DEXT.todo.json"));
   todos = await (await fetch(`${base}/sessions/${sid}/todos`, { headers: H })).json();
-  ok("todos fall back to none after delete", todos.source === "none" && todos.items.length === 0);
+  ok("todos read as none once the session file is gone (no project bleed)", todos.source === "none" && todos.items.length === 0);
+  fs.rmSync(projectTodo);
+  fs.rmSync(dextSessDir, { recursive: true, force: true }); // later resume-target logic sees the pristine state again
 
   // ---------- session files: images a turn wrote, cwd-confined ----------
 
@@ -320,7 +337,16 @@ try {
     `${base}/sessions/${sid}/file?p=${encodeURIComponent(`${path.basename(fileDir)}/notes.txt`)}`,
     { headers: H },
   );
-  ok("non-image MIME rejected", mimeRes.status === 404);
+  ok(
+    "text file served inline as text/plain",
+    mimeRes.status === 200 && mimeRes.headers.get("content-type") === "text/plain; charset=utf-8",
+  );
+  fs.writeFileSync(path.join(fileDir, "payload.bin"), "MZ");
+  const badRes = await fetch(
+    `${base}/sessions/${sid}/file?p=${encodeURIComponent(`${path.basename(fileDir)}/payload.bin`)}`,
+    { headers: H },
+  );
+  ok("non-allowlisted file type rejected", badRes.status === 404);
   const travRes = await fetch(`${base}/sessions/${sid}/file?p=${encodeURIComponent("../../../etc/passwd")}`, { headers: H });
   ok("path traversal rejected", travRes.status === 404);
 
