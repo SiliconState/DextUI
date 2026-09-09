@@ -33,6 +33,7 @@ const VERBS: Record<string, string> = {
   find: "Find",
   read: "Read",
   read_file: "Read",
+  read_image: "Inspect image",
   cat: "Read",
   ls: "List",
   list_dir: "List",
@@ -85,6 +86,7 @@ export function humanizeTool(name: string, summary: string): string {
   const m = body.match(/^\/(.+)\/\s+in\s+(\S.*)$/);
   if (m?.[1] !== undefined && m[2] !== undefined) return `${verb ?? "Search"} for ${shortToken(m[1])} in ${shortPath(m[2])}`;
   if (body.startsWith("/") && !body.includes(" ")) return `${verb ?? "Read"} ${shortPath(body)}`;
+  if (verb && !/\s/.test(body)) return `${verb} ${shortPath(body)}`;
   return shortToken(raw, 72);
 }
 

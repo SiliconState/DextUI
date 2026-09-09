@@ -35,6 +35,7 @@ test("unified file headers and genuine hunks retain diff rendering", () => {
 
 test("tool label cleanup leaves commands and distinct tool names intact", () => {
   assert.equal(humanizeTool("read_file", "read_file: read_file: /tmp/example"), "Read /tmp/example");
+  assert.equal(humanizeTool("read_image", "read_image: uploads/screen.png (pixels will be sent to the model provider)"), "Inspect image uploads/screen.png");
   assert.equal(humanizeTool("bash", "printf 'read_file: x'"), "printf 'read_file: x'");
   assert.equal(humanizeTool("read_file", "read_file_extra: x"), "read_file_extra: x");
 });

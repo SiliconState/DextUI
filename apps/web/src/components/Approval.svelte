@@ -8,6 +8,7 @@
   let { pending, sessionId }: { pending: PendingPermission; sessionId: string } = $props();
 
   let note = $state("");
+  const imagePermission = $derived(pending.tool === "read_image");
 
   function respond(choice: "once" | "always" | "deny") {
     connection()?.respond(sessionId, pending.request_id, choice, note.trim() || undefined);
@@ -17,7 +18,7 @@
 
 <div class="appr" data-state="awaiting_approval" data-agent-id={`approval.${pending.request_id}`}>
   <div class="appr-head">
-    <span class="st-yellow bold">Approval</span>
+    <span class="st-yellow">{imagePermission ? "Share image pixels" : "Approval"}</span>
     <span class="faint">·</span>
     <span class="st-yellow">{pending.tool}</span>
     {#if pending.risk}
@@ -25,6 +26,11 @@
     {/if}
     <span class="appr-summary dim">{pending.summary}</span>
   </div>
+  {#if imagePermission}
+    <p class="appr-disclosure" data-agent-id={`approval.${pending.request_id}.disclosure`}>
+      Dext will sanitize this workspace image, strip metadata, resize it, and send its pixels to the active model provider for this turn.
+    </p>
+  {/if}
   {#if pending.diff}
     <Diff text={pending.diff} />
   {:else if pending.input !== undefined}
@@ -34,8 +40,8 @@
     </details>
   {/if}
   <div class="appr-actions">
-    <button class="act ok" data-agent-id={`approval.${pending.request_id}.once`} onclick={() => respond("once")}>[a] Once</button>
-    <button class="act accent" data-agent-id={`approval.${pending.request_id}.always`} onclick={() => respond("always")}>[s] Always</button>
+    <button class="act ok" data-agent-id={`approval.${pending.request_id}.once`} onclick={() => respond("once")}>[a] {imagePermission ? "Share once" : "Once"}</button>
+    <button class="act accent" data-agent-id={`approval.${pending.request_id}.always`} title={imagePermission ? "Allow future read_image calls in this session without another prompt" : undefined} onclick={() => respond("always")}>[s] {imagePermission ? "Always share" : "Always"}</button>
     <button class="act err" data-agent-id={`approval.${pending.request_id}.deny`} onclick={() => respond("deny")}>[d] Deny</button>
     <input
       bind:value={note}
@@ -64,8 +70,10 @@
     align-items: baseline;
     min-width: 0;
   }
-  .bold {
-    font-weight: bold;
+  .appr-disclosure {
+    margin: 0;
+    color: var(--dim);
+    line-height: 1.45;
   }
   .appr-summary {
     overflow: hidden;

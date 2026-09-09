@@ -60,6 +60,17 @@ H2=$(agent-browser eval 'Math.round(parseFloat(document.querySelector(`[data-age
 echo "height after send: $H2"
 [ "$H2" -le 30 ] || { echo "FAIL: height reset after send"; FAIL=1; }
 
+note "attachments route native images through read_image consent and preserve document handoff"
+agent-browser eval '(()=>{const i=document.querySelector(`[data-agent-id="composer.attach.input"]`);const d=new DataTransfer();d.items.add(new File([Uint8Array.from(atob(`iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=`),c=>c.charCodeAt(0))],`screen.png`,{type:`image/png`}));i.files=d.files;i.dispatchEvent(new Event(`change`,{bubbles:true}));return true})()' >/dev/null
+wait_js 'document.querySelector(`[data-agent-id="composer.attachment"]`)?.dataset.state === "done" && !!document.querySelector(`[data-agent-id="composer.attachment.vision"]`)' || { echo "FAIL: native vision attachment state"; FAIL=1; }
+agent-browser fill '[data-agent-id="composer.input"]' 'inspect image' >/dev/null
+agent-browser press Enter >/dev/null
+wait_js '[...document.querySelectorAll(`[data-agent-id="block.user"]`)].at(-1)?.textContent.includes("call read_image(path)") && [...document.querySelectorAll(`[data-agent-id="block.user"]`)].at(-1)?.textContent.includes("request approval before sanitized pixels are sent")' || { echo "FAIL: read_image attachment handoff"; FAIL=1; }
+wait_js '!!document.querySelector(`[data-agent-id^="approval.req_"][data-state="awaiting_approval"]`) && document.querySelector(`[data-agent-id$=".disclosure"]`)?.textContent.includes("send its pixels to the active model provider")' || { echo "FAIL: image disclosure approval"; FAIL=1; }
+agent-browser eval 'document.querySelector(`[data-agent-id$=".once"]`)?.click()' >/dev/null
+wait_js '[...document.querySelectorAll(`[data-agent-id^="tool.vision_1.status"]`)].at(-1)?.textContent.includes("image → context")' || { echo "FAIL: image context status"; FAIL=1; }
+wait_js '!document.querySelector(`[data-agent-id="composer.stop"]`)' || { echo "FAIL: image attachment turn did not finish"; FAIL=1; }
+
 note "attachments accept Office documents and preserve a format-aware handoff"
 agent-browser eval '(()=>{const i=document.querySelector(`[data-agent-id="composer.attach.input"]`);const d=new DataTransfer();d.items.add(new File([`mock-docx`],`brief.DOCX`,{type:`application/vnd.openxmlformats-officedocument.wordprocessingml.document`}));i.files=d.files;i.dispatchEvent(new Event(`change`,{bubbles:true}));return true})()' >/dev/null
 wait_js 'document.querySelector(`[data-agent-id="composer.attachment"]`)?.dataset.state === "done" && document.querySelector(`[data-agent-id="composer.attachment"]`)?.textContent.includes("brief.DOCX")' || { echo "FAIL: Office attachment upload"; FAIL=1; }

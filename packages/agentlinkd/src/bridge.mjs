@@ -178,11 +178,13 @@ export function signal(child, sig) {
 
 /** Map a core `permission_request` to the AgentLink `permission.request` shape. */
 export function toPermissionRequest(d) {
+  const tool = String(d.tool ?? "");
   return {
     request_id: String(d.id),
-    tool: String(d.tool ?? ""),
+    tool,
     summary: typeof d.summary === "string" ? d.summary : "",
     input: d.input,
+    ...(tool === "read_image" ? { risk: "sensitive read" } : {}),
   };
 }
 

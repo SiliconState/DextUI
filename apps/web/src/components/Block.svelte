@@ -78,6 +78,23 @@
     failed: "st-red",
   };
 
+  function toolStatusLabel(b: Block): string {
+    if (b.kind !== "tool") return "";
+    if (b.name !== "read_image") return toolLabel[b.status] ?? b.status;
+    if (b.status === "preview") return "… vision planned";
+    if (b.status === "running") return "● sanitizing";
+    if (b.status === "ok") return "✓ image → context";
+    if (/does not advertise image input/i.test(b.content ?? "")) return "⚠ vision unavailable";
+    if (/unsupported image format|animated (?:png|webp)|source limit|source .*byte limit/i.test(b.content ?? "")) return "⚠ conversion needed";
+    return "✗ failed";
+  }
+
+  function toolStatusClass(b: Block): string {
+    if (b.kind !== "tool") return "st-faint";
+    if (b.name === "read_image" && b.status === "failed" && /does not advertise image input|unsupported image format|animated (?:png|webp)|source limit|source .*byte limit/i.test(b.content ?? "")) return "st-yellow";
+    return toolClass[b.status] ?? "st-faint";
+  }
+
   function tailLines(t: string): string {
     return t.split("\n").slice(-8).join("\n");
   }
@@ -160,8 +177,8 @@
       <span class="tool-name">{block.name}</span>
       <span class="faint">·</span>
       <span class="dim tool-summary" class:cmd={isShell(block.name)}>{humanizeTool(block.name, block.summary)}</span>
-      <span class={`tool-status ${toolClass[block.status] ?? "st-faint"}`} data-agent-id={`tool.${block.call_id}.status`}>
-        {toolLabel[block.status] ?? block.status}
+      <span class={`tool-status ${toolStatusClass(block)}`} data-agent-id={`tool.${block.call_id}.status`}>
+        {toolStatusLabel(block)}
       </span>
       {#if onInspect}
         <button class="act hover-act" data-agent-id={`tool.${block.call_id}.inspect`} onclick={() => onInspect?.(block)}>Raw</button>

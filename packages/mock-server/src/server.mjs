@@ -300,6 +300,7 @@ function usage(inTok, outTok) {
 }
 
 function echoPlan(text) {
+  if (/\bAttached images? ready for native vision\b/i.test(text) && /\bread_image\(path\)/i.test(text)) return imageVisionPlan(text);
   if (/\bartifact file demo\b/i.test(text)) return fileArtifactPlan();
   // Rich-rendering demo: prompt mentioning markdown/table/demo returns real
   // structured markdown plus live ```chart fences, so the web client's
@@ -336,6 +337,20 @@ function echoPlan(text) {
       delay: 4,
     },
     { event: "turn_end", data: { usage: usage(12, 24), failed: false }, delay: 4 },
+  ];
+}
+
+function imageVisionPlan(text) {
+  const imagePath = /^-\s+(\S+\.(?:png|jpe?g|webp))\s+\(/im.exec(text)?.[1] ?? "uploads/image.png";
+  const ref = { call_id: "vision_1", name: "read_image", summary: `read_image: ${imagePath} (pixels will be sent to the model provider)`, input: { path: imagePath } };
+  return [
+    { event: "turn_start", delay: 5 },
+    { event: "tool_call_start", data: ref, delay: 5 },
+    { pause: "approval" },
+    { event: "tool_call_result", data: { ...ref, ok: true, preview: ref.summary, content: `approved image ${imagePath} (1x1, sanitized as image/jpeg); pixels are available to the model only in this turn` }, delay: 5 },
+    { event: "text_block_complete", data: "I inspected the attached image with native vision.", delay: 5 },
+    { event: "usage_update", data: { turn: usage(18, 12), session: usage(18, 12) }, delay: 4 },
+    { event: "turn_end", data: { usage: usage(18, 12), failed: false }, delay: 4 },
   ];
 }
 
@@ -501,13 +516,14 @@ function stepReplay(s) {
 
 function openApproval(s, ref) {
   const request_id = `req_${s.id}_${++s.approvalCounter}`;
+  const image = ref.name === "read_image";
   const p = {
     request_id,
     call_id: ref.call_id,
     tool: ref.name,
     summary: ref.summary,
-    input: { note: "synthetic approval request (mock host)" },
-    risk: "write",
+    input: image ? ref.input : { note: "synthetic approval request (mock host)" },
+    risk: image ? "sensitive read" : "write",
   };
   s.pending.set(request_id, p);
   publish(journalData(s, "permission.request", p));
@@ -866,7 +882,9 @@ function handleCommand(client, frame) {
       if (!s.title || s.title.startsWith("New session") || s.title.startsWith("Fixture:")) {
         s.title = frame.text.slice(0, 60);
       }
-      if (s.fixture) {
+      if (/\bAttached images? ready for native vision\b/i.test(frame.text) && /\bread_image\(path\)/i.test(frame.text)) {
+        beginTurn(s, echoPlan(frame.text.trim().slice(0, 4000)));
+      } else if (s.fixture) {
         const script = loadFixture(s.fixture);
         beginTurn(s, s.approvalFlow ? withApprovalPause(script) : script);
       } else {

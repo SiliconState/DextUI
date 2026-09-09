@@ -137,6 +137,21 @@ test("bridge: live steering, permission round-trip, capability flags", { timeout
   assert.equal(res.data.choice, "once");
   assert.ok(res.data.by && res.data.by !== "timeout" && res.data.by !== "core", `by must name the answering client, got '${res.data.by}'`);
   await a.wait((e) => e.session === id && e.event === "turn_end", at);
+
+  // Sensitive image read: core emits an ordinary permission request, and the
+  // host labels the pixel disclosure without changing the bridge payload.
+  at = a.events.length;
+  a.send("prompt.submit", { session: id, text: "IMAGE_APPROVE uploads/shot.png" });
+  const imageReq = await a.wait((e) => e.session === id && e.event === "permission.request", at);
+  assert.equal(imageReq.data.request_id, "image-perm-1");
+  assert.equal(imageReq.data.tool, "read_image");
+  assert.equal(imageReq.data.risk, "sensitive read");
+  assert.deepEqual(imageReq.data.input, { path: "uploads/shot.png" });
+  a.send("permission.respond", { session: id, request_id: imageReq.data.request_id, choice: "once" });
+  const imageResult = await a.wait((e) => e.session === id && e.event === "tool_call_result" && e.data.name === "read_image", at);
+  assert.equal(imageResult.data.ok, true);
+  assert.match(imageResult.data.content, /pixels are available to the model only in this turn/);
+  await a.wait((e) => e.session === id && e.event === "turn_end", at);
 });
 
 test("bridge: warm child across idle interrupt, /approval recycle, queued-steer drain", { timeout: 60000 }, async (t) => {

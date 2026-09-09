@@ -7,7 +7,7 @@
   import { useSession } from "../lib/useSession.svelte";
   import { runSlash as runExtSlash, slashCommands as extSlashCommands } from "../ext";
   import { fileUrl } from "../lib/files";
-  import { attachFiles, attachUrl, attachmentBlock, attachmentsFor, clearAttachments, removeAttachment } from "../lib/uploads.svelte";
+  import { attachFiles, attachUrl, attachmentBlock, attachmentsFor, clearAttachments, imageAttachmentKind, removeAttachment } from "../lib/uploads.svelte";
 
   let { store }: { store: SessionStore } = $props();
 
@@ -478,6 +478,10 @@
             <span class="faint">{a.size > 0 && a.progress > 0 ? `${Math.round(a.progress * 100)}%` : "…"}</span>
           {:else if a.status === "error"}
             <span class="c-attmeta">{a.error}</span>
+          {:else if imageAttachmentKind(a) === "vision"}
+            <span class="c-attmeta vision" data-agent-id="composer.attachment.vision" title="Dext will call read_image; pixel disclosure may require approval">vision ready · approval on use</span>
+          {:else if imageAttachmentKind(a) === "other-image" || imageAttachmentKind(a) === "large-image"}
+            <span class="c-attmeta warn" data-agent-id="composer.attachment.convert" title={imageAttachmentKind(a) === "large-image" ? "read_image accepts source images up to 20 MiB" : "read_image accepts PNG, JPEG, and WebP"}>convert / OCR</span>
           {:else}
             <span class="faint">{a.path}</span>
           {/if}
@@ -596,6 +600,12 @@
   .c-att.err {
     border-color: color-mix(in srgb, var(--red, #f85149) 45%, var(--line));
     color: var(--red, #f85149);
+  }
+  .c-attmeta.vision {
+    color: var(--cyan);
+  }
+  .c-attmeta.warn {
+    color: var(--yellow);
   }
   .c-thumb {
     width: 20px;

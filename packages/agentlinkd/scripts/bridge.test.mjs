@@ -63,6 +63,10 @@ test("choice + permission mapping", () => {
   assert.equal(toBridgeChoice("deny"), "deny");
   assert.equal(toBridgeChoice("maybe"), null);
   assert.deepEqual(toPermissionRequest({ id: 7, tool: "bash", summary: "s", input: { a: 1 } }), { request_id: "7", tool: "bash", summary: "s", input: { a: 1 } });
+  assert.deepEqual(
+    toPermissionRequest({ id: "img-1", tool: "read_image", summary: "{\"path\":\"uploads/shot.png\"}", input: { path: "uploads/shot.png" } }),
+    { request_id: "img-1", tool: "read_image", summary: "{\"path\":\"uploads/shot.png\"}", input: { path: "uploads/shot.png" }, risk: "sensitive read" },
+  );
 });
 
 test("spawnBridge: ready, frames, permission round-trip, close", async () => {

@@ -2,6 +2,9 @@
 // (files_write) whose cwd-relative paths ride the prompt, so dext reads them
 // from disk like any workspace file. Chips are per session; removing a chip
 // never deletes the uploaded file (the agent may still be told about it).
+import { attachmentBlock, humanSize, imageAttachmentKind } from "./attachments";
+
+export { attachmentBlock, humanSize, imageAttachmentKind };
 
 export interface Attachment {
   id: number;
@@ -46,18 +49,6 @@ export function clearAttachments(sid: string): void {
     if (a.thumb) URL.revokeObjectURL(a.thumb);
   }
   delete store[sid];
-}
-
-export const humanSize = (n: number): string =>
-  n < 1024 ? `${n} B` : n < 1024 * 1024 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1024 / 1024).toFixed(1)} MB`;
-
-/** The prompt tail that tells the agent which workspace files to inspect. Binary
- * files need format-aware tooling; read_file is intentionally text-only. */
-export function attachmentBlock(list: Attachment[]): string {
-  const done = list.filter((a) => a.status === "done" && a.path);
-  if (done.length === 0) return "";
-  const lines = done.map((a) => `- ${a.path} (${[a.type, humanSize(a.size)].filter(Boolean).join(", ")})`).join("\n");
-  return `Attached file${done.length > 1 ? "s" : ""} in the workspace. Inspect each with format-aware tools (read_file is text-only):\n${lines}`;
 }
 
 function patch(sid: string, id: number, fields: Partial<Attachment>): void {

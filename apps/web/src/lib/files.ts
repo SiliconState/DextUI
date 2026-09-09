@@ -42,7 +42,9 @@ export async function boundedResponseText(res: Response, cap: number): Promise<s
 
 export async function boundedResponseBlob(res: Response, cap: number): Promise<Blob> {
   const type = res.headers.get("content-type") ?? "application/octet-stream";
-  return new Blob([await boundedResponseBytes(res, cap)], { type });
+  const bytes = await boundedResponseBytes(res, cap);
+  const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+  return new Blob([buffer], { type });
 }
 
 /** Models emit file paths in several shapes — relative ("qc_charts/x.png"),

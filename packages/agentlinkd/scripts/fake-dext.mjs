@@ -102,6 +102,11 @@ if (process.argv.includes("--input") && process.argv[process.argv.indexOf("--inp
   const runTurn = (text) => {
     busy = true;
     out("turn_start", { pid: process.pid, resume });
+    if (text.includes("IMAGE_APPROVE")) {
+      out("tool_call_start", { call_id: "image-1", name: "read_image", summary: "read_image: uploads/shot.png (pixels will be sent to the model provider)" });
+      out("permission_request", { id: "image-perm-1", tool: "read_image", input: { path: "uploads/shot.png" }, summary: '{"path":"uploads/shot.png"}' });
+      return;
+    }
     if (text.includes("APPROVE")) {
       out("permission_request", { id: "perm-1", tool: "write_file", input: { path: "x" }, summary: "" });
       return;
@@ -128,7 +133,17 @@ if (process.argv.includes("--input") && process.argv[process.argv.indexOf("--inp
       if (f.type === "user") runTurn(String(f.text ?? ""));
       else if (f.type === "steer") out("steering_received", { messages: [f.text], preview: String(f.text).slice(0, 80) });
       else if (f.type === "permission") {
-        out("permission_resolved", { id: f.id, tool: "write_file", choice: f.choice });
+        const image = f.id === "image-perm-1";
+        out("permission_resolved", { id: f.id, tool: image ? "read_image" : "write_file", choice: f.choice });
+        if (image && f.choice !== "deny") {
+          out("tool_call_result", {
+            call_id: "image-1",
+            name: "read_image",
+            ok: true,
+            preview: "read_image: uploads/shot.png (pixels will be sent to the model provider)",
+            content: "approved image uploads/shot.png (1x1, sanitized as image/jpeg); pixels are available to the model only in this turn",
+          });
+        }
         endTurn(false);
       } else if (f.type === "interrupt") {
         if (busy) endTurn(true);
