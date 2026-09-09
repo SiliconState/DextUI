@@ -114,11 +114,38 @@ test("bridge: live steering, permission round-trip, capability flags", { timeout
   const a = await h.client();
   assert.ok(a.hello.data.capabilities.includes("steering.live"), "bridge mode must advertise steering.live");
   assert.ok(a.hello.data.capabilities.includes("approvals"), "bridge mode must advertise approvals");
+  assert.ok(a.hello.data.capabilities.includes("slash.compact"), "bridge mode must advertise native compaction");
+  assert.ok(a.hello.data.commands.some((command) => command.cmd === "/compact"), "composer command catalog includes /compact");
   const id = await open(a);
   a.send("session.subscribe", { id });
 
-  // Live steer: "SLOW" holds the turn open so the steer lands mid-turn.
+  // Native /compact runs on the persistent child, keeps its summary collapsed
+  // in projection, and sends the authoritative post-compaction CTX estimate.
   let at = a.events.length;
+  a.send("slash", { session: id, raw: "/compact" });
+  await a.wait((e) => e.session === id && e.event === "compact_start", at);
+  const context = await a.wait((e) => e.session === id && e.event === "history_context_updated", at);
+  assert.deepEqual(context.data, { chars: 4800, tokens: 1200 });
+  const compacted = await a.wait((e) => e.session === id && e.event === "compact_end", at);
+  assert.equal(compacted.data.before, 48);
+  assert.equal(compacted.data.after, 11);
+  assert.match(compacted.data.summary, /current objective/);
+  at = a.events.length;
+  a.send("session.subscribe", { id });
+  const snapshot = await a.wait((e) => e.session === id && e.event === "session.snapshot", at);
+  assert.equal(snapshot.data.context_tokens, 1200);
+  assert.equal(snapshot.data.context_source, "history");
+  assert.deepEqual(snapshot.data.blocks.find((block) => block.kind === "compact"), {
+    kind: "compact",
+    status: "complete",
+    before: 48,
+    after: 11,
+    summary: compacted.data.summary,
+    contextChars: 4800,
+    contextTokens: 1200,
+  });
+
+  // Live steer: "SLOW" holds the turn open so the steer lands mid-turn.
   a.send("prompt.submit", { session: id, text: "SLOW one" });
   await a.wait((e) => e.session === id && e.event === "turn_start", at);
   a.send("steering.inject", { session: id, text: "steer mid-turn" });

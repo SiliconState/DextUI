@@ -4,12 +4,14 @@
   // are CSS borders, never literal glyphs — glyph gutters shred when lines wrap.
   import type { ViewBlock as Block } from "@dextui/client";
   import { app, copyText, packOfPrompt, prefillComposer } from "../lib/state.svelte";
+  import { fmtTokens } from "../lib/markdown";
   import { humanizeTool, humanizeLabel, parseRunMeta, isBashAdvisory, looksLikeDiff, toolStatusDisplay } from "../lib/display";
   import { packForAuthMarker, openPackCredentials } from "../lib/packcreds.svelte";
   import Markdown from "./Markdown.svelte";
   import Diff from "./Diff.svelte";
 
   let { block, onInspect, sessionId = "" }: { block: Block; onInspect?: (b: Block) => void; sessionId?: string } = $props();
+  let compactOpen = $state(false);
 
   // Pack attribution: dext's `pack_start` stamps the turn's prompt block (the
   // fold does it), which is exact even when dext inferred the pack from plain
@@ -98,8 +100,8 @@
   const thinkTail = $derived.by(() => {
     if (block.kind !== "thinking") return "";
     const t = (block.text ?? "").replace(/\s+/g, " ").trim();
-    if (t.length <= 280) return t;
-    const cut = t.slice(-280);
+    if (t.length <= 560) return t;
+    const cut = t.slice(-560);
     const sp = cut.indexOf(" ");
     return sp > 0 && sp < 40 ? cut.slice(sp + 1) : cut;
   });
@@ -173,6 +175,27 @@
       </details>
     {/if}
   </div>
+{:else if block.kind === "compact"}
+  <details class="b-compact" bind:open={compactOpen} data-agent-id="block.compact" data-state={block.status}>
+    <summary>
+      <span class={block.status === "failed" ? "st-red" : block.status === "running" ? "st-magenta pulse" : "st-cyan"}>
+        {block.status === "running" ? "●" : block.status === "failed" ? "✗" : "✓"}
+      </span>
+      <span>{block.status === "running" ? "Compacting context…" : block.status === "failed" ? "Compaction failed" : block.before === 0 && block.after === 0 ? "Context already compact" : "Context compacted"}</span>
+      {#if block.status === "complete" && block.before !== undefined && block.after !== undefined}
+        <span class="faint">· {block.before} → {block.after} messages</span>
+      {/if}
+      {#if block.status === "complete" && block.contextTokens !== undefined}
+        <span class="faint">· {fmtTokens(block.contextTokens)} context</span>
+      {/if}
+      {#if block.status !== "running"}<span class="faint compact-reveal">details</span>{/if}
+    </summary>
+    {#if compactOpen && block.summary}
+      <div class="compact-detail" data-agent-id="block.compact.summary"><Markdown src={block.summary} {sessionId} /></div>
+    {:else if compactOpen && block.message}
+      <pre class="compact-error" data-agent-id="block.compact.error">{block.message}</pre>
+    {/if}
+  </details>
 {:else if block.kind === "marker"}
   {#if block.level !== "error" && !block.auth && isBashAdvisory(block.text)}
     <details class="bash-advisory" data-agent-id="block.marker.advisory" data-state={block.level}>
@@ -359,6 +382,57 @@
   }
   .think-p.stream {
     color: var(--dim);
+    line-height: 1.55;
+    max-height: calc(4 * 1.55em);
+    overflow: hidden;
+  }
+  .b-compact {
+    width: 100%;
+    border-left: 2px solid color-mix(in srgb, var(--cyan) 45%, var(--line));
+    padding: 3px 0 3px 10px;
+    color: var(--dim);
+  }
+  .b-compact[data-state="running"] {
+    border-left-color: color-mix(in srgb, var(--magenta) 55%, var(--line));
+  }
+  .b-compact[data-state="failed"] {
+    border-left-color: color-mix(in srgb, var(--red) 55%, var(--line));
+  }
+  .b-compact summary {
+    display: flex;
+    align-items: baseline;
+    gap: 7px;
+    width: fit-content;
+    cursor: pointer;
+    list-style: none;
+  }
+  .b-compact summary::-webkit-details-marker {
+    display: none;
+  }
+  .b-compact[data-state="running"] summary {
+    cursor: default;
+  }
+  .compact-reveal {
+    font-size: 11px;
+  }
+  .compact-detail,
+  .compact-error {
+    max-height: 18rem;
+    overflow: auto;
+    margin: 7px 0 3px;
+    padding: 8px 10px;
+    border: 1px solid var(--line);
+    background: var(--bg1);
+    color: var(--dim);
+  }
+  .compact-detail :global(:first-child) {
+    margin-top: 0;
+  }
+  .compact-detail :global(:last-child) {
+    margin-bottom: 0;
+  }
+  .compact-error {
+    white-space: pre-wrap;
   }
   /* Streaming thought indicator: a radar target — core dot with two
      concentric rings pinging outward in staggered waves. Pure CSS geometry,

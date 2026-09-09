@@ -132,6 +132,20 @@ if (process.argv.includes("--input") && process.argv[process.argv.indexOf("--inp
       buf = buf.slice(i + 1);
       if (f.type === "user") runTurn(String(f.text ?? ""));
       else if (f.type === "steer") out("steering_received", { messages: [f.text], preview: String(f.text).slice(0, 80) });
+      else if (f.type === "control" && String(f.command ?? "").startsWith("/compact")) {
+        const command = String(f.command ?? "");
+        if (command === "/compact") {
+          setTimeout(() => out("compact_start"), 20);
+          setTimeout(() => out("history_context_updated", { chars: 4800, tokens: 1200 }), 70);
+          setTimeout(() => out("compact_end", {
+            before: 48,
+            after: 11,
+            summary: "Task\nKeep the current objective, decisions, changed files, verification, and open work.",
+          }), 90);
+        } else {
+          out("slash", `compact setting: ${command.slice(9)}`);
+        }
+      }
       else if (f.type === "permission") {
         const image = f.id === "image-perm-1";
         out("permission_resolved", { id: f.id, tool: image ? "read_image" : "write_file", choice: f.choice });

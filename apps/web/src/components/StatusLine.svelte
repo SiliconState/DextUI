@@ -29,7 +29,7 @@ import Meter from "./Meter.svelte";
     return { top, c, more: liveRuns.length - 1 };
   });
   $effect(() => {
-    if (view.working || liveRuns.length > 0) {
+    if (view.working || view.compacting || liveRuns.length > 0) {
       const t = setInterval(() => {
         now = Date.now();
       }, 1000);
@@ -47,7 +47,12 @@ import Meter from "./Meter.svelte";
   const ctxUsed = $derived(view.contextTokens ?? (view.contextChars ? Math.ceil(view.contextChars / 4) : 0));
   const ctxPct = $derived(ctxUsed ? Math.min(100, Math.round((ctxUsed / ctxWindow) * 100)) : 0);
   const ctxClass = $derived(ctxPct >= 90 ? "st-red" : ctxPct >= 70 ? "st-yellow" : "st-cyan");
-  const ctxTitle = $derived(`Context: ${fmtTokens(ctxUsed)} of ${fmtTokens(ctxWindow)} tokens on the last request${view.diagnostics?.context_window ? "" : " (window assumed)"}`);
+  const ctxSource = $derived(view.contextSource ?? "request");
+  const ctxTitle = $derived(
+    ctxSource === "history"
+      ? `Context after compaction: ${fmtTokens(ctxUsed)} of ${fmtTokens(ctxWindow)} tokens${view.diagnostics?.context_window ? "" : " (window assumed)"}`
+      : `Context: ${fmtTokens(ctxUsed)} of ${fmtTokens(ctxWindow)} tokens on the last request${view.diagnostics?.context_window ? "" : " (window assumed)"}`,
+  );
 
   // Folder chip: click to move this session elsewhere (picker in "move"
   // intent, opening inside the current folder). Disabled mid-turn — the host
@@ -64,10 +69,10 @@ import Meter from "./Meter.svelte";
     const p = prettyPath(view.cwd);
     return p === "workspace" ? "Workspace" : p;
   });
-  const folderTitle = $derived(!foldersEnabled() ? view.cwd : view.working ? `${view.cwd}\nChange folder — available when the turn finishes` : `${view.cwd}\nChange folder (o)`);
+  const folderTitle = $derived(!foldersEnabled() ? view.cwd : view.working || view.compacting ? `${view.cwd}\nChange folder — available when current work finishes` : `${view.cwd}\nChange folder (o)`);
   const dotClass = $derived(
     app.phase === "live"
-      ? view.working
+      ? view.working || view.compacting
         ? "st-yellow pulse"
         : "st-green"
       : app.phase === "failed"
@@ -108,7 +113,7 @@ import Meter from "./Meter.svelte";
   // (git) or copies up (rclone). Disabled while a turn runs so the agent's
   // files never move underneath it.
   const connector = $derived(connectorFor(view.cwd));
-  const canSync = $derived(!!connector && connector.status !== "syncing" && !view.working && !connectors.pending);
+  const canSync = $derived(!!connector && connector.status !== "syncing" && !view.working && !view.compacting && !connectors.pending);
   function connAge(ms: number | undefined): string {
     if (!ms) return "never";
     const m = Math.floor((Date.now() - ms) / 60_000);
@@ -120,7 +125,7 @@ import Meter from "./Meter.svelte";
   }
 </script>
 
-<div class="sl" data-agent-id="status.hud" data-state={view.working ? "working" : "idle"}>
+<div class="sl" data-agent-id="status.hud" data-state={view.compacting ? "compacting" : view.working ? "working" : "idle"}>
   {#if onToggleIndex}
     <button class="act idx-toggle" data-agent-id="index.toggle" onclick={onToggleIndex}>[≡]</button>
   {/if}
@@ -186,8 +191,8 @@ import Meter from "./Meter.svelte";
   {/if}
   {#if ctxUsed > 0}
     <span class="sep">│</span>
-    <span data-agent-id="status.ctx" title={ctxTitle}>
-      <span class="faint">Ctx</span>
+    <span data-agent-id="status.ctx" data-source={ctxSource} title={ctxTitle}>
+      <span class="faint">Ctx{ctxSource === "history" ? " · compacted" : ""}</span>
       <span class={ctxClass} data-agent-id="status.ctxbar"><Meter pct={ctxPct} /></span>
       <span class={ctxClass}>{ctxPct}%</span>
     </span>
@@ -201,7 +206,7 @@ import Meter from "./Meter.svelte";
   {/if}
   {#if view.compacting}
     <span class="sep">│</span>
-    <span class="st-magenta">Compacting…</span>
+    <span class="st-magenta pulse" data-agent-id="status.compacting">Compacting context…</span>
   {/if}
   {#if view.retry}
     <span class="sep">│</span>

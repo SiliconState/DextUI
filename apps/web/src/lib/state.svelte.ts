@@ -190,7 +190,7 @@ function rebuildQueue(): void {
   for (const id of [...autoSubscribed]) {
     if (id === app.activeId || hydrating.has(id)) continue;
     const st = c.session(id).state;
-    if (st.pending.size === 0 && !st.working) {
+    if (st.pending.size === 0 && !st.working && !st.compacting) {
       c.unsubscribe(id);
       autoSubscribed.delete(id);
     }
@@ -747,7 +747,7 @@ export function activate(id: string): void {
   if (!c) return;
   if (prev && prev !== id && c.subscribed.has(prev)) {
     const ps = c.session(prev).state;
-    if (!ps.working && ps.pending.size === 0) c.unsubscribe(prev);
+    if (!ps.working && !ps.compacting && ps.pending.size === 0) c.unsubscribe(prev);
   }
   const meta = app.sessions.find((s) => s.id === id);
   if (meta && meta.status === "cold") c.openSession({ id });

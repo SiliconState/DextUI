@@ -60,6 +60,21 @@ H2=$(agent-browser eval 'Math.round(parseFloat(document.querySelector(`[data-age
 echo "height after send: $H2"
 [ "$H2" -le 30 ] || { echo "FAIL: height reset after send"; FAIL=1; }
 
+note "active thinking preview shows four lines"
+agent-browser fill '[data-agent-id="composer.input"]' 'thinking preview demo' >/dev/null
+agent-browser press Enter >/dev/null
+wait_js 'document.querySelector(`[data-agent-id="block.thinking"][data-state="thinking"] .think-p.stream`)?.textContent.includes("reasoning-120")' || { echo "FAIL: active thinking preview did not appear"; FAIL=1; }
+wait_js '(()=>{const p=document.querySelector(`[data-agent-id="block.thinking"][data-state="thinking"] .think-p.stream`);if(!p)return false;const s=getComputedStyle(p);const lines=parseFloat(s.maxHeight)/parseFloat(s.lineHeight);return lines>=3.9&&lines<=4.1&&p.scrollHeight>p.clientHeight})()' || { echo "FAIL: active thinking preview is not capped at four lines"; FAIL=1; }
+wait_js '!document.querySelector(`[data-agent-id="composer.stop"]`)' || { echo "FAIL: thinking preview turn did not finish"; FAIL=1; }
+
+note "native slash compaction updates CTX and keeps summary collapsed"
+agent-browser fill '[data-agent-id="composer.input"]' '/compact' >/dev/null
+agent-browser press Enter >/dev/null
+wait_js 'document.querySelector(`[data-agent-id="block.compact"]`)?.dataset.state === "running" && !!document.querySelector(`[data-agent-id="status.compacting"]`) && document.querySelector(`[data-agent-id="composer.input"]`)?.dataset.state === "compacting"' || { echo "FAIL: compaction progress state"; FAIL=1; }
+wait_js '(()=>{const b=document.querySelector(`[data-agent-id="block.compact"]`);const c=document.querySelector(`[data-agent-id="status.ctx"]`);return b?.dataset.state==="complete"&&!b.open&&!b.querySelector(`[data-agent-id="block.compact.summary"]`)&&b.textContent.includes("48 → 11 messages")&&b.textContent.includes("1.2k context")&&c?.dataset.source==="history"&&c.textContent.includes("compacted")&&c.title.includes("Context after compaction: 1.2k")&&!document.querySelector(`[data-agent-id="status.compacting"]`)})()' || { echo "FAIL: compact history/CTX projection"; FAIL=1; }
+agent-browser click '[data-agent-id="block.compact"] summary' >/dev/null
+wait_js 'document.querySelector(`[data-agent-id="block.compact.summary"]`)?.textContent.includes("current objective")' || { echo "FAIL: compact summary details"; FAIL=1; }
+
 note "attachments route native images through read_image consent and preserve document handoff"
 agent-browser eval '(()=>{const i=document.querySelector(`[data-agent-id="composer.attach.input"]`);const d=new DataTransfer();d.items.add(new File([Uint8Array.from(atob(`iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=`),c=>c.charCodeAt(0))],`screen sample.png`,{type:`image/png`}));i.files=d.files;i.dispatchEvent(new Event(`change`,{bubbles:true}));return true})()' >/dev/null
 wait_js 'document.querySelector(`[data-agent-id="composer.attachment"]`)?.dataset.state === "done" && !!document.querySelector(`[data-agent-id="composer.attachment.vision"]`)' || { echo "FAIL: native vision attachment state"; FAIL=1; }

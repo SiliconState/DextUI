@@ -64,8 +64,9 @@ export interface SessionState {
   turnUsage?: UsageUpdateEvent["turn"];
   sessionUsage?: UsageUpdateEvent["session"];
   contextChars?: number;
-  /** Tokens the model saw on its last request (input + cache), or an estimate
-   *  from history chars — the TUI's Ctx meter input, provider-agnostic. */
+  /** What the meter currently represents: a provider request or compacted history. */
+  contextSource?: "request" | "history";
+  /** Tokens the model saw on its last request, or core's post-compaction history estimate. */
   contextTokens?: number;
   diagnostics?: TurnDiagnosticsEvent;
   telemetry?: Record<string, number>;
@@ -261,7 +262,8 @@ export class SessionStore {
           turnUsage: s.turn_usage,
           sessionUsage: s.session_usage,
           contextChars: s.context_chars,
-          contextTokens: s.context_chars ? Math.max(1, Math.floor((s.context_chars + 3) / 4)) : undefined,
+          contextTokens: s.context_tokens ?? (s.context_chars ? Math.max(1, Math.floor((s.context_chars + 3) / 4)) : undefined),
+          contextSource: s.context_source,
           diagnostics: s.diagnostics,
           retry: undefined,
         });
@@ -416,12 +418,12 @@ export class SessionStore {
         // (compaction/local paths only). Mirrors the TUI: ctx = turn tokens,
         // chars = tokens × 4.
         const ctx = turnContextTokens(u.turn);
-        this.bump(ctx > 0 ? { turnUsage: u.turn, sessionUsage: u.session, contextTokens: ctx, contextChars: ctx * 4 } : { turnUsage: u.turn, sessionUsage: u.session });
+        this.bump(ctx > 0 ? { turnUsage: u.turn, sessionUsage: u.session, contextTokens: ctx, contextChars: ctx * 4, contextSource: "request" } : { turnUsage: u.turn, sessionUsage: u.session });
         return;
       }
       case "history_context_updated": {
         const h = d as HistoryContextUpdatedEvent;
-        this.bump({ contextChars: h.chars, contextTokens: h.tokens ?? Math.max(1, Math.floor((h.chars + 3) / 4)) });
+        this.bump({ contextChars: h.chars, contextTokens: h.tokens ?? Math.max(1, Math.floor((h.chars + 3) / 4)), contextSource: "history" });
         return;
       }
       case "turn_diagnostics": {
@@ -478,17 +480,28 @@ export class SessionStore {
       }
       case "compact_start":
         this.bump({ compacting: true });
+        this.pushBlock({ kind: "compact", status: "running" });
         return;
       case "compact_end": {
         const c = d as CompactEndEvent;
+        this.finishCompaction({
+          kind: "compact",
+          status: "complete",
+          before: c.before,
+          after: c.after,
+          summary: c.summary,
+          contextChars: this.state.contextChars,
+          contextTokens: this.state.contextTokens,
+        });
         this.bump({ compacting: false });
-        this.pushBlock({ kind: "marker", level: "note", text: `Context compacted: ${c.before} → ${c.after} chars.` });
         return;
       }
-      case "compact_failed":
+      case "compact_failed": {
+        const message = (d as { message: string }).message;
+        this.finishCompaction({ kind: "compact", status: "failed", message });
         this.bump({ compacting: false });
-        this.pushBlock({ kind: "marker", level: "warn", text: `Compaction failed: ${(d as { message: string }).message}` });
         return;
+      }
       // --- notices ---
       case "info":
         this.pushAnnotation({ kind: "marker", level: "info", text: d as string });
@@ -567,6 +580,17 @@ export class SessionStore {
       }
     });
     if (blocks) this.state.blocks = blocks;
+  }
+
+  private finishCompaction(next: Extract<Block, { kind: "compact" }>): void {
+    for (let i = this.state.blocks.length - 1; i >= 0; i--) {
+      const block = this.state.blocks[i];
+      if (block?.kind === "compact" && block.status === "running") {
+        this.replaceBlock(i, next);
+        return;
+      }
+    }
+    this.pushBlock(next);
   }
 
   /** Merge a tool lifecycle patch into the card keyed by call_id (create on first sight). */

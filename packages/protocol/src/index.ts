@@ -102,8 +102,10 @@ export interface RuntimeControlAppliedEvent {
 }
 
 export interface CompactEndEvent {
+  /** Message counts before and after compaction. */
   before: number;
   after: number;
+  /** Resume summary persisted by core; UIs keep it collapsed by default. */
   summary: string;
 }
 
@@ -847,6 +849,7 @@ export type Block =
       output_tail?: string;
     }
   | { kind: "user"; text: string; pack?: string }
+  | { kind: "compact"; status: "running" | "complete" | "failed"; before?: number; after?: number; summary?: string; message?: string; contextChars?: number; contextTokens?: number }
   | { kind: "marker"; level: "info" | "warn" | "error" | "note"; text: string; auth?: MarkerAuth }
   | { kind: "slash"; text: string; structured: boolean }
   | { kind: "view"; pack: string; title: string; markdown: string };
@@ -870,6 +873,10 @@ export interface SnapshotEvent {
   turn_usage?: Usage;
   session_usage?: Usage;
   context_chars?: number;
+  /** Exact core estimate; avoids reconstructing tokens as chars/4 after reconnect. */
+  context_tokens?: number;
+  /** Whether context reflects a provider request or post-compaction history. */
+  context_source?: "request" | "history";
   diagnostics?: TurnDiagnosticsEvent;
   compacting?: boolean;
   failed?: boolean;

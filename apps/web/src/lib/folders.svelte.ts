@@ -34,7 +34,9 @@ export function foldersEnabled(): boolean {
 export function movableSession(id = app.activeId): { id: string; title: string; cwd: string } | null {
   if (!id || !foldersEnabled()) return null;
   const s = app.sessions.find((x) => x.id === id);
-  if (!s || s.status === "exited" || app.conn?.session(id).state.working) return null;
+  if (!s || s.status === "exited") return null;
+  const state = app.conn?.session(id).state;
+  if (state?.working || state?.compacting) return null;
   return { id: s.id, title: s.title, cwd: s.cwd ?? "" };
 }
 
@@ -50,8 +52,9 @@ export function openFolderPicker(opts: { path?: string; seed?: string; onPick?: 
     const m = movableSession(opts.session);
     if (!m) {
       const s = app.sessions.find((x) => x.id === (opts.session ?? app.activeId));
-      const working = s && c.session(s.id).state.working;
-      pushToast("warn", working ? "Wait for the current turn to finish before changing folders" : "No session to move — pick a folder to start one");
+      const state = s && c.session(s.id).state;
+      const working = !!(state?.working || state?.compacting);
+      pushToast("warn", working ? "Wait for current work to finish before changing folders" : "No session to move — pick a folder to start one");
       if (working) return;
       intent = "open";
     } else {
@@ -114,8 +117,8 @@ export function moveSession(id: string, path: string): void {
     pushToast("ok", `Already in ${shortFolder(path)}`);
     return;
   }
-  if (c.session(id).state.working) {
-    pushToast("warn", "Wait for the current turn to finish before changing folders");
+  if (c.session(id).state.working || c.session(id).state.compacting) {
+    pushToast("warn", "Wait for current work to finish before changing folders");
     return;
   }
   folders.pendingMove = { id, path };

@@ -283,6 +283,8 @@ function snapshotEnvelope(s) {
       turn_usage: meta.turnUsage,
       session_usage: meta.sessionUsage,
       context_chars: meta.contextChars,
+      context_tokens: meta.contextTokens,
+      context_source: meta.contextSource,
       diagnostics: meta.diagnostics,
       compacting: meta.compacting,
       failed: meta.failed,
@@ -300,6 +302,7 @@ function usage(inTok, outTok) {
 }
 
 function echoPlan(text) {
+  if (/\bthinking preview demo\b/i.test(text)) return thinkingPreviewPlan();
   if (/\bAttached images? candidates? for native read_image\b/i.test(text) && /\bread_image\(path\)/i.test(text)) return imageVisionPlan(text);
   if (/\bartifact file demo\b/i.test(text)) return fileArtifactPlan();
   // Rich-rendering demo: prompt mentioning markdown/table/demo returns real
@@ -337,6 +340,19 @@ function echoPlan(text) {
       delay: 4,
     },
     { event: "turn_end", data: { usage: usage(12, 24), failed: false }, delay: 4 },
+  ];
+}
+
+function thinkingPreviewPlan() {
+  const thought = Array.from({ length: 120 }, (_, i) => `reasoning-${i + 1}`).join(" ");
+  return [
+    { event: "turn_start", delay: 5 },
+    { event: "thinking_delta", data: thought, delay: 700 },
+    { event: "thinking_block_complete", data: thought, delay: 5 },
+    { event: "thinking_preview_committed", delay: 5 },
+    { event: "text_block_complete", data: "Thinking preview complete.", delay: 5 },
+    { event: "usage_update", data: { turn: usage(20, 10), session: usage(20, 10) }, delay: 4 },
+    { event: "turn_end", data: { usage: usage(20, 10), failed: false }, delay: 4 },
   ];
 }
 
@@ -889,7 +905,9 @@ function handleCommand(client, frame) {
       if (!s.title || s.title.startsWith("New session") || s.title.startsWith("Fixture:")) {
         s.title = frame.text.slice(0, 60);
       }
-      if (/\bAttached images? candidates? for native read_image\b/i.test(frame.text) && /\bread_image\(path\)/i.test(frame.text)) {
+      if (/\bthinking preview demo\b/i.test(frame.text)) {
+        beginTurn(s, echoPlan(frame.text.trim().slice(0, 4000)));
+      } else if (/\bAttached images? candidates? for native read_image\b/i.test(frame.text) && /\bread_image\(path\)/i.test(frame.text)) {
         beginTurn(s, echoPlan(frame.text.trim().slice(0, 4000)));
       } else if (s.fixture) {
         const script = loadFixture(s.fixture);
@@ -954,6 +972,35 @@ function handleCommand(client, frame) {
       }
       sendAck(client, frame);
       const raw = String(frame.raw ?? "").trim();
+      if (raw === "/compact") {
+        if (s.working || s.compacting) {
+          sendError(client, "busy", "context compaction starts between turns");
+          return;
+        }
+        s.compacting = true;
+        s.turnStartedAt = Date.now();
+        publish(journalData(s, "compact_start"));
+        s.timer = setTimeout(() => {
+          if (!s.compacting) return;
+          publish(journalData(s, "history_context_updated", { chars: 4800, tokens: 1200 }));
+          publish(journalData(s, "compact_end", {
+            before: 48,
+            after: 11,
+            summary: "Task\nKeep the current objective, decisions, changed files, verification, and open work.",
+          }));
+          s.compacting = false;
+          s.turnStartedAt = null;
+        }, 700);
+        return;
+      }
+      if (/^\/compact\s+(?:status|auto|(?:100|[1-9]\d?)%?)$/i.test(raw)) {
+        publish(journalData(s, "slash", `compact setting: ${raw.slice(9)}`));
+        return;
+      }
+      if (raw.startsWith("/compact")) {
+        sendError(client, "bad_request", "usage: /compact [status|auto|<percent>|<percent>%]");
+        return;
+      }
       // `/pack run <name> <task>` and the `/pack <name> <task>` shorthand, as agentlinkd.
       const run = /^\/packs?\s+(?:(?:run|use|start)\s+)?([A-Za-z0-9][A-Za-z0-9_-]*)\s*(.*)$/s.exec(raw);
       if (run && !/^(list|ls|inspect|info|show|create|new)$/.test(run[1])) {

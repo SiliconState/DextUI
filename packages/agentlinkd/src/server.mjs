@@ -359,7 +359,7 @@ const CAPABILITIES = [
   // into the next model request). Without it, input sent mid-turn is queued
   // and delivered as the next turn's prompt.
   "steering",
-  ...(BRIDGE ? ["steering.live", "approvals", "model_switch"] : []),
+  ...(BRIDGE ? ["steering.live", "approvals", "model_switch", "slash.compact"] : []),
   "usage",
   "thinking",
   "effort_select",
@@ -437,6 +437,7 @@ const COMMANDS = [
   { cmd: "/help", desc: "List host commands" },
   { cmd: "/login", desc: "Sign-in help for another device; --show reveals the access code" },
   { cmd: "/approval", desc: `Set dext approval profile (${[...APPROVALS].join("|")}) — next turn` },
+  ...(BRIDGE ? [{ cmd: "/compact", desc: "Compact context now · status · auto · percent" }] : []),
 ];
 
 // Random per process: lets clients tell a reconnect to the same host (resume
@@ -631,7 +632,10 @@ function hostIdle() {
 }
 function busyDetail() {
   const out = [];
-  for (const s of sessions.values()) if (s.working) out.push({ kind: "turn", session: s.id, title: s.title.slice(0, 40) });
+  for (const s of sessions.values()) {
+    if (s.compacting || s.compactRequested) out.push({ kind: "compact", session: s.id, title: s.title.slice(0, 40) });
+    else if (s.working) out.push({ kind: "turn", session: s.id, title: s.title.slice(0, 40) });
+  }
   if (CREW) for (const r of CREW.summaries().runs) if (r.status === "running" || r.status === "pending") out.push({ kind: "crew", run: r.id });
   return out;
 }
@@ -815,6 +819,8 @@ function makeSession({ cwd, approval }) {
     // Bridge mode: the persistent ndjson child and the approval it is blocked on.
     bridge: null,
     pendingPermission: null,
+    compacting: false,
+    compactRequested: false,
     dextSessionId: null,
     killed: false,
     indexEntry: null,
@@ -962,9 +968,16 @@ function restoreJournal(s) {
 // every consumer sees one consistent story.
 function terminateUnfinishedTurn(s) {
   let open = false;
+  let compacting = false;
   for (const env of s.journal) {
     if (env.event === "user_message" || env.event === "turn_start") open = true;
     else if (env.event === "turn_end" || env.event === "interrupted") open = false;
+    if (env.event === "compact_start") compacting = true;
+    else if (env.event === "compact_end" || env.event === "compact_failed") compacting = false;
+  }
+  if (compacting) {
+    journalData(s, "compact_failed", { message: "agentlinkd restarted while context compaction was running" });
+    console.error(`agentlinkd: ${s.id} had unfinished compaction at restart; journaled as failed`);
   }
   if (!open) return;
   journalData(s, "error", "turn lost: agentlinkd restarted while dext was running");
@@ -1015,6 +1028,8 @@ function restoreSessions() {
       turns: Number.isInteger(e.turns) && e.turns >= 0 ? e.turns : 0,
       child: null,
       killed: false,
+      compacting: false,
+      compactRequested: false,
       indexEntry: null,
       epoch: 0,
       deleted: false,
@@ -1110,6 +1125,8 @@ function snapshotEnvelope(s) {
       turn_usage: meta.turnUsage,
       session_usage: meta.sessionUsage,
       context_chars: meta.contextChars,
+      context_tokens: meta.contextTokens,
+      context_source: meta.contextSource,
       diagnostics: meta.diagnostics,
       compacting: meta.compacting,
       failed: meta.failed,
@@ -1165,6 +1182,14 @@ function ensureBridge(s) {
     if (s.bridge === bridge) s.bridge = null;
     if (s.child === bridge?.child) s.child = null;
     if (s.deleted || s.epoch !== epoch) return;
+    if (s.compacting || s.compactRequested) {
+      const wasWorking = s.working;
+      const message = `dext exited before context compaction completed (code ${code ?? sig})`;
+      publish(journalData(s, "compact_failed", { message }));
+      s.compacting = false;
+      s.compactRequested = false;
+      if (!wasWorking) s.turnStartedAt = null;
+    }
     if (s.pendingPermission) {
       publish(journalData(s, "permission.resolved", { request_id: s.pendingPermission.request_id, choice: "deny", by: "exit" }));
       s.pendingPermission = null;
@@ -1223,12 +1248,41 @@ function handleBridgeEvent(s, v) {
     case "input_ack":
       // Withheld/invalid frames are the only acks worth showing.
       if (d && (d.route === "withheld" || d.route === "invalid" || d.route === "unsupported_busy_slash")) {
-        publish(journalData(s, "warn", `input ${d.route}${d.detail ? `: ${d.detail}` : ""}`));
+        if (s.compactRequested || s.compacting) {
+          s.compactRequested = false;
+          s.compacting = false;
+          s.turnStartedAt = null;
+          publish(journalData(s, "compact_failed", { message: `dext refused the compaction command${d.detail ? `: ${d.detail}` : ""}` }));
+          persistIndex();
+          scheduleList();
+          SELF.tick();
+        } else {
+          publish(journalData(s, "warn", `input ${d.route}${d.detail ? `: ${d.detail}` : ""}`));
+        }
       }
       return;
     case "turn_start":
       s.working = true;
       s.turnStartedAt = Date.now();
+      break;
+    case "compact_start": {
+      const alreadyVisible = s.compacting;
+      s.compactRequested = false;
+      s.compacting = true;
+      persistIndex();
+      scheduleList();
+      SELF.tick();
+      if (alreadyVisible) return;
+      break;
+    }
+    case "compact_end":
+    case "compact_failed":
+      s.compacting = false;
+      s.compactRequested = false;
+      s.killed = false;
+      persistIndex();
+      scheduleList();
+      SELF.tick();
       break;
     case "turn_end":
       s.working = false;
@@ -1270,6 +1324,18 @@ function handleBridgeEvent(s, v) {
       break;
     case "thinking_effort_changed":
       if (EFFORTS.has(d?.effort)) s.thinkingEffort = d.effort;
+      break;
+    case "info":
+      if ((s.compactRequested || s.compacting) && typeof d === "string" && d.includes("[compact: nothing to compact yet]")) {
+        s.compactRequested = false;
+        s.compacting = false;
+        s.turnStartedAt = null;
+        publish(journalData(s, "compact_end", { before: 0, after: 0, summary: "" }));
+        persistIndex();
+        scheduleList();
+        SELF.tick();
+        return;
+      }
       break;
     case "steering_received":
       // The host already journaled steering_received as the immediate ack;
@@ -1560,11 +1626,11 @@ function killChild(s, interrupted = true) {
   if (s.bridge && !s.bridge.exited) {
     const bridge = s.bridge;
     s.killed = interrupted;
-    if (interrupted && s.working) {
-      // Real interrupt: dext stops the turn and stays alive for the next one.
+    if (interrupted && (s.working || s.compacting || s.compactRequested)) {
+      // Real interrupt: dext stops the turn/compaction and stays alive for the next one.
       bridge.interrupt();
-      setTimeout(() => { if (s.working && s.bridge === bridge) bridge.kill("SIGINT"); }, 3000);
-      setTimeout(() => { if (s.working && s.bridge === bridge) bridge.kill("SIGKILL"); }, 8000);
+      setTimeout(() => { if ((s.working || s.compacting || s.compactRequested) && s.bridge === bridge) bridge.kill("SIGINT"); }, 3000);
+      setTimeout(() => { if ((s.working || s.compacting || s.compactRequested) && s.bridge === bridge) bridge.kill("SIGKILL"); }, 8000);
       return;
     }
     s.bridge = null;
@@ -1734,6 +1800,7 @@ const HOST_HELP = [
   "  /login [--show]       sign in on another device; --show prints the access code",
   "  /approval <profile>   set this session's dext approval profile",
   `                        (${[...APPROVALS].join(" | ")}) — applies from the next turn`,
+  "  /compact              compact older context now; status | auto | <percent> also supported",
   "  /pack …               list | run <name> <task> | inspect <name> | create <shelf>/<name> [--from <pack>]",
   "  /task …               shared tasks: list | show <name> | new <name> <goal>",
   "                        set <name> status|goal|summary|blocked_on|answer=…",
@@ -1803,11 +1870,15 @@ async function handleUiSlash(client, s, rest) {
   }
 }
 
-function handleSlash(client, s, raw) {
+async function handleSlash(client, s, raw) {
   const trimmed = String(raw ?? "").trim();
   const pack = parsePackSlash(trimmed);
   if (pack) {
-    if (pack.sub === "run" && s.working) {
+    if (pack.sub === "run" && (s.working || s.compacting || s.compactRequested)) {
+      if (s.compacting || s.compactRequested) {
+        sendError(client, "busy", "pack runs start after context compaction finishes");
+        return;
+      }
       // Same semantics as a prompt sent mid-turn: queue for the boundary.
       if (guardPackRun(client, s, pack)) return;
       if (!queueSteering(s, `/pack run ${pack.name} ${pack.task}`)) sendError(client, "busy", "steering queue is full (10 messages / 100k chars); interrupt or wait");
@@ -1844,6 +1915,52 @@ function handleSlash(client, s, raw) {
   if (ui) return handleUiSlash(client, s, ui[1].trim());
   const task = /^\/task\b\s*([\s\S]*)$/.exec(trimmed);
   if (task) return handleTaskSlash(client, s, task[1].trim());
+  const compact = /^\/compact(?:\s+(status|auto|(?:100|[1-9]\d?)%?))?$/i.exec(trimmed);
+  if (compact) {
+    if (!BRIDGE) {
+      sendError(client, "unsupported", "/compact requires dext's persistent bridge; restart agentlinkd with the current dext binary");
+      return;
+    }
+    if (s.status === "cold") wakeSession(s);
+    if (s.working || s.compacting || s.compactRequested) {
+      sendError(client, "busy", "context compaction starts between turns — wait for the current work to finish");
+      return;
+    }
+    try {
+      const bridge = await ensureBridge(s);
+      if (s.deleted || s.bridge !== bridge) return;
+      if (!bridge.control(trimmed)) {
+        sendError(client, "not_live", "dext bridge could not accept the compaction command");
+        return;
+      }
+      s.compactRequested = !compact[1];
+      if (s.compactRequested) {
+        s.compacting = true;
+        s.turnStartedAt = Date.now();
+        publish(journalData(s, "compact_start"));
+        persistIndex();
+        scheduleList();
+        SELF.tick();
+        setTimeout(() => {
+          if (!s.compactRequested || s.bridge !== bridge || s.deleted) return;
+          s.compactRequested = false;
+          s.compacting = false;
+          s.turnStartedAt = null;
+          publish(journalData(s, "compact_failed", { message: "dext accepted /compact but did not start it" }));
+          persistIndex();
+          scheduleList();
+          SELF.tick();
+        }, 5000);
+      }
+    } catch (error) {
+      sendError(client, "not_live", `could not start compaction: ${String(error?.message ?? error)}`);
+    }
+    return;
+  }
+  if (trimmed.startsWith("/compact")) {
+    sendError(client, "bad_request", "usage: /compact [status|auto|<percent>|<percent>%]");
+    return;
+  }
   const m = /^\/approval\s+(\S+)$/.exec(trimmed);
   if (m) {
     const profile = m[1];
@@ -1854,12 +1971,12 @@ function handleSlash(client, s, raw) {
     s.approval = profile;
     persistIndex();
     publish(journalData(s, "approval_profile_changed", { profile }));
-    if (BRIDGE && !s.working) recycleBridge(s);
-    else if (BRIDGE) s.recycleOnTurnEnd = true; // turn in flight: restart at its boundary
+    if (BRIDGE && !s.working && !s.compacting && !s.compactRequested) recycleBridge(s);
+    else if (BRIDGE && s.working) s.recycleOnTurnEnd = true;
     publish(journalData(s, "slash", `approval profile → ${profile}${s.working ? " (next turn)" : ""}`));
     return;
   }
-  sendError(client, "unsupported", `host handles /help, /login, /approval, /pack, /task and /ui; '${trimmed.split(/\s/)[0]}' needs interactive dext`);
+  sendError(client, "unsupported", `host handles /help, /login, /approval, /compact, /pack, /task and /ui; '${trimmed.split(/\s/)[0]}' needs interactive dext`);
 }
 
 // ---------- packs: slash + prompt routing ----------
@@ -2167,10 +2284,15 @@ async function handleCommand(client, frame) {
         sendError(client, "not_live", "session is not live");
         return;
       }
+      const compactBusy = s.compacting || s.compactRequested;
       const wantsModel = frame.provider !== undefined || frame.model !== undefined;
       const wantsEffort = frame.thinking_effort !== undefined;
       const wantsCwd = frame.cwd !== undefined;
       const liveBridge = !!(s.bridge && !s.bridge.exited && s.bridge.ready);
+      if (compactBusy) {
+        sendError(client, "busy", "session controls apply after context compaction finishes");
+        return;
+      }
       // The folder never moves under a running turn: the agent's tool calls
       // are resolving paths against it right now.
       if (s.working && (wantsCwd || !(BRIDGE && liveBridge && wantsEffort && !wantsModel))) {
@@ -2320,6 +2442,10 @@ async function handleCommand(client, frame) {
         sendError(client, "bad_request", `text exceeds ${MAX_PROMPT_CHARS} characters`);
         return;
       }
+      if (s.compacting || s.compactRequested) {
+        sendError(client, "busy", "context compaction is in progress — wait for it to finish", frame.cmd);
+        return;
+      }
       // `/pack …` may arrive as a prompt too (agents driving /__agent). Management
       // verbs answer immediately; a run passes the catalog + profile guard before
       // anything is journaled, then follows the normal prompt/steering path.
@@ -2384,7 +2510,7 @@ async function handleCommand(client, frame) {
       // Idle persistent bridge: no turn in flight. Killing the warm child
       // would drop the live seat and approval wiring for nothing; the
       // interruptible part is any queued steering.
-      if (BRIDGE && !s.working && s.bridge && !s.bridge.exited) {
+      if (BRIDGE && !s.working && !s.compacting && !s.compactRequested && s.bridge && !s.bridge.exited) {
         if (s.steeringQueue.length > 0) {
           s.steeringQueue = [];
           persistIndex();

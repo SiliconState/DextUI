@@ -49,7 +49,7 @@
 
   let now = $state(Date.now());
   $effect(() => {
-    if (!view.working) return;
+    if (!view.working && !view.compacting) return;
     const t = setInterval(() => {
       now = Date.now();
     }, 1000);
@@ -66,6 +66,7 @@
   $effect(() => {
     void view.blocks;
     void view.working;
+    void view.compacting;
     if (pinned && container) container.scrollTop = container.scrollHeight;
   });
 
@@ -78,7 +79,7 @@
 <div
   class="sb-wrap"
   data-agent-id="transcript.root"
-  data-state={view.pending.size > 0 ? "awaiting_approval" : view.working ? "working" : "idle"}
+  data-state={view.pending.size > 0 ? "awaiting_approval" : view.compacting ? "compacting" : view.working ? "working" : "idle"}
 >
   <div bind:this={container} onscroll={onScroll} class="sb">
     <div class="sb-axis content-axis">
@@ -106,11 +107,11 @@
             <Block block={group.blocks[0]!} {onInspect} sessionId={view.id} />
           {/if}
         {/each}
-        {#if view.working}
+        {#if view.compacting || view.working}
           <p class="sb-working" data-agent-id="transcript.working" aria-live="polite">
-            <span class="st-yellow pulse">●</span>
+            <span class={view.compacting ? "st-magenta pulse" : "st-yellow pulse"}>●</span>
             <span class="dim">
-              Working{view.compacting ? " · compacting" : ""}{view.turnStartedAt ? ` · ${fmtElapsed(now - view.turnStartedAt)}` : ""}
+              {view.compacting ? "Compacting context" : "Working"}{view.turnStartedAt ? ` · ${fmtElapsed(now - view.turnStartedAt)}` : ""}
             </span>
           </p>
         {/if}
@@ -191,6 +192,9 @@
   }
   .st-yellow {
     color: var(--yellow);
+  }
+  .st-magenta {
+    color: var(--magenta);
   }
   .dim {
     color: var(--dim);

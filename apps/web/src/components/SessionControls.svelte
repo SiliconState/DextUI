@@ -20,7 +20,7 @@
     app.phase === "live" &&
       app.caps.includes("model_select") &&
       view.status === "live" &&
-      !view.working && !view.modelLocked && app.modelCatalog.length > 0,
+      !view.working && !view.compacting && !view.modelLocked && app.modelCatalog.length > 0,
   );
   // With the bridge (steering.live), /effort is a runtime control dext applies
   // mid-turn, so the selector stays enabled while working.
@@ -29,6 +29,7 @@
     app.phase === "live" &&
       app.caps.includes("effort_select") &&
       view.status === "live" &&
+      !view.compacting &&
       (liveEffort || !view.working) && app.effortOptions.length > 0,
   );
 
@@ -56,7 +57,7 @@
     never: "Deny all actions",
   };
   const canSetApproval = $derived(
-    app.phase === "live" && app.caps.includes("slash.approval") && view.status === "live",
+    app.phase === "live" && app.caps.includes("slash.approval") && view.status === "live" && !view.compacting,
   );
   const approvalOptions = $derived.by(() => {
     const base = ["ask", "auto-read", "auto-write"];

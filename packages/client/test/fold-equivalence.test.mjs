@@ -42,6 +42,8 @@ for (const file of files) {
         turnUsage: s.turnUsage,
         sessionUsage: s.sessionUsage,
         contextChars: s.contextChars,
+        contextTokens: s.contextTokens,
+        contextSource: s.contextSource,
         diagnostics: s.diagnostics,
         compacting: s.compacting,
         failed: s.failed,
@@ -61,6 +63,7 @@ test("(ctx) usage_update feeds the context meter for every provider; history_con
   ]));
   assert.equal(store.state.contextTokens, 10_000, "input + cache_create + cache_read is what the model saw");
   assert.equal(store.state.contextChars, 40_000, "chars mirror the TUI's tokens×4");
+  assert.equal(store.state.contextSource, "request");
   // Parity with the server fold (snapshot meta).
   assert.equal(foldMeta(journal([{ event: "usage_update", data: { turn: usage, session: usage } }])).contextChars, 40_000);
 
@@ -70,6 +73,7 @@ test("(ctx) usage_update feeds the context meter for every provider; history_con
   ]));
   assert.equal(local.state.contextTokens, 700);
   assert.equal(local.state.contextChars, 2000);
+  assert.equal(local.state.contextSource, "history", "authoritative post-compaction estimate replaces last-request CTX");
 
   const zero = applyAll(new SessionStore("sess_t"), journal([
     { event: "usage_update", data: { turn: { input: 0, output: 5, cache_create: 0, cache_read: 0, cost_usd: 0 }, session: usage } },
@@ -262,15 +266,23 @@ test("(h) pack_start stamps the turn's prompt block; runtime_view keeps its own 
   assert.equal(store.state.activePack, undefined, "cleared at turn_end");
 });
 
-test("(g) compact_end and compact_failed markers", () => {
+test("(g) compaction is one persistent block with collapsed summary metadata", () => {
+  const summary = "Task\nKeep the verified result and next steps.";
   const envelopes = journal([
     { event: "compact_start" },
-    { event: "compact_end", data: { before: 5000, after: 1200 } },
+    { event: "history_context_updated", data: { chars: 2000, tokens: 700 } },
+    { event: "compact_end", data: { before: 50, after: 12, summary } },
     { event: "compact_start" },
     { event: "compact_failed", data: { message: "provider down" } },
   ]);
   const store = assertEquivalent(envelopes);
   assert.equal(store.state.compacting, false);
+  assert.equal(store.state.contextTokens, 700);
+  assert.equal(store.state.contextSource, "history");
+  assert.deepStrictEqual(stripIds(store.state.blocks), [
+    { kind: "compact", status: "complete", before: 50, after: 12, summary, contextChars: 2000, contextTokens: 700 },
+    { kind: "compact", status: "failed", message: "provider down" },
+  ]);
 });
 
 test("(g) tool_batch_start/end with failed 0 and failed 2", () => {

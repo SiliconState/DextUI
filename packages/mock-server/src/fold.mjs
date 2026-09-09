@@ -7,6 +7,8 @@ export function foldMeta(journal) {
   let turnUsage;
   let sessionUsage;
   let contextChars;
+  let contextTokens;
+  let contextSource;
   let diagnostics;
   let compacting = false;
   let failed = false;
@@ -23,7 +25,11 @@ export function foldMeta(journal) {
           // Client parity: the turn's input + cache tokens are the context.
           const t = d?.turn;
           const ctx = t ? (t.input || 0) + (t.cache_create || 0) + (t.cache_read || 0) : 0;
-          if (Number.isFinite(ctx) && ctx > 0) contextChars = ctx * 4;
+          if (Number.isFinite(ctx) && ctx > 0) {
+            contextChars = ctx * 4;
+            contextTokens = ctx;
+            contextSource = "request";
+          }
         }
         break;
       case "turn_end":
@@ -32,6 +38,8 @@ export function foldMeta(journal) {
         break;
       case "history_context_updated":
         contextChars = d?.chars;
+        contextTokens = Number.isFinite(d?.tokens) ? d.tokens : Number.isFinite(d?.chars) ? Math.max(1, Math.floor((d.chars + 3) / 4)) : undefined;
+        contextSource = "history";
         break;
       case "turn_diagnostics":
         diagnostics = d;
@@ -47,7 +55,7 @@ export function foldMeta(journal) {
         break;
     }
   }
-  return { turnUsage, sessionUsage, contextChars, diagnostics, compacting, failed };
+  return { turnUsage, sessionUsage, contextChars, contextTokens, contextSource, diagnostics, compacting, failed };
 }
 
 export function fold(journal) {
@@ -56,6 +64,9 @@ export function fold(journal) {
   const pendingRequests = new Map();
   let openText = null;
   let openThinking = null;
+  let openCompaction = null;
+  let contextChars;
+  let contextTokens;
   // Client parity: pack_start sets the turn's active pack; turn_end clears it.
   let activePack = null;
 
@@ -234,12 +245,37 @@ export function fold(journal) {
       case "structured_slash":
         blocks.push({ kind: "slash", text: d, structured: true });
         break;
-      case "compact_end":
-        blocks.push({ kind: "marker", level: "note", text: `Context compacted: ${d.before} → ${d.after} chars.` });
+      case "usage_update": {
+        const turn = d?.turn;
+        const tokens = turn ? (turn.input || 0) + (turn.cache_create || 0) + (turn.cache_read || 0) : 0;
+        if (Number.isFinite(tokens) && tokens > 0) {
+          contextTokens = tokens;
+          contextChars = tokens * 4;
+        }
         break;
-      case "compact_failed":
-        blocks.push({ kind: "marker", level: "warn", text: `Compaction failed: ${d.message}` });
+      }
+      case "history_context_updated":
+        contextChars = d?.chars;
+        contextTokens = Number.isFinite(d?.tokens) ? d.tokens : Number.isFinite(d?.chars) ? Math.max(1, Math.floor((d.chars + 3) / 4)) : undefined;
         break;
+      case "compact_start":
+        openCompaction = { kind: "compact", status: "running" };
+        blocks.push(openCompaction);
+        break;
+      case "compact_end": {
+        const completed = { kind: "compact", status: "complete", before: d.before, after: d.after, summary: d.summary, contextChars, contextTokens };
+        if (openCompaction && blocks.includes(openCompaction)) Object.assign(openCompaction, completed);
+        else blocks.push(completed);
+        openCompaction = null;
+        break;
+      }
+      case "compact_failed": {
+        const failed = { kind: "compact", status: "failed", message: d.message };
+        if (openCompaction && blocks.includes(openCompaction)) Object.assign(openCompaction, failed);
+        else blocks.push(failed);
+        openCompaction = null;
+        break;
+      }
       case "permission.request":
         pendingRequests.set(d.request_id, d);
         break;

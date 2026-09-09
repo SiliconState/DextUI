@@ -105,6 +105,7 @@
   const canSend = $derived(
     (text.trim().length > 0 || atts.some((a) => a.status === "done")) &&
       !uploading &&
+      !view.compacting &&
       app.phase === "live" &&
       app.activeId !== "" &&
       live &&
@@ -116,6 +117,7 @@
     if (view.status === "exited") return `session closed — ${MOD}n for a new one`;
     if (view.status === "cold") return "session closed — use wake in the session menu";
     if (!live) return "waking session…";
+    if (view.compacting) return "compacting context…";
     if (view.working) {
       return canSteer ? "type to queue — delivers as the next turn… (^c to stop)" : "turn running… (^c to stop)";
     }
@@ -494,7 +496,7 @@
   <input class="c-file" type="file" multiple bind:this={fileInput} onchange={onPick} data-agent-id="composer.attach.input" />
 
   <div class="c-row">
-    <span class="pg" class:pg-busy={view.working}>❯</span>
+    <span class="pg" class:pg-busy={view.working || view.compacting}>❯</span>
     <textarea
       bind:this={inputEl}
       bind:value={text}
@@ -504,7 +506,7 @@
       rows="1"
       {placeholder}
       data-agent-id="composer.input"
-      data-state={view.working ? "working" : "idle"}
+      data-state={view.compacting ? "compacting" : view.working ? "working" : "idle"}
     ></textarea>
     <span class="c-side">
       {#if canAttach}
