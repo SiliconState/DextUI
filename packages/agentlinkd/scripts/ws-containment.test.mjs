@@ -12,12 +12,13 @@ import { FrameParser } from "../../mock-server/src/ws.mjs";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const root = path.resolve("packages/agentlinkd");
 
-async function harness(t, env = {}) {
+async function harness(t, env = {}, prepare = null) {
   const temp = fs.mkdtempSync(path.join(root, ".ws-test-"));
   const home = path.join(temp, "dext");
   const state = path.join(temp, "state");
   const cwd = path.join(temp, "workspace");
   fs.mkdirSync(cwd);
+  if (prepare) prepare({ state, cwd });
   let child;
   let base;
   let stderr = "";
@@ -138,6 +139,42 @@ test("FrameParser closes on a single oversized complete message", () => {
   const frame = Buffer.concat([Buffer.from([0x81, 0x80 | 126]), (() => { const b = Buffer.alloc(2); b.writeUInt16BE(2048); return b; })(), mask, masked]);
   parser.push(frame);
   assert.deepEqual([...closed[0]], [0x03, 0xf1]);
+});
+
+test("long-session snapshots larger than the backlog cap stay connected", { timeout: 15000 }, async (t) => {
+  const id = "sess_123456789";
+  const largeText = "x".repeat(3 * 1024 * 1024);
+  const h = await harness(t, {}, ({ state, cwd }) => {
+    const journals = path.join(state, "journals");
+    fs.mkdirSync(journals, { recursive: true });
+    fs.writeFileSync(path.join(state, "sessions.json"), JSON.stringify([{
+      id, title: "Long session", cwd, approval: "auto-read", seat: "dextui-large",
+      generation: 0, turns: 1, createdAt: Date.now(), updatedAt: Date.now(),
+    }]));
+    fs.writeFileSync(path.join(journals, `${id}.jsonl`), `${JSON.stringify({
+      v: 1, session: id, seq: 1, ts: Date.now(), event: "text_block_complete", data: largeText,
+    })}\n`);
+  });
+  const ws = new WebSocket(h.base.replace("http", "ws") + "/ws");
+  await once(ws, "open");
+  ws.send(JSON.stringify({ v: 1, cmd: "hello", token: "test-token", protocol: 1 }));
+  let snapshot;
+  let pong = false;
+  ws.addEventListener("message", (e) => {
+    const env = JSON.parse(e.data);
+    if (env.event === "hello_ok") ws.send(JSON.stringify({ v: 1, cmd: "session.subscribe", id }));
+    if (env.event === "session.snapshot") {
+      snapshot = env;
+      ws.send(JSON.stringify({ v: 1, cmd: "ping" }));
+    }
+    if (env.event === "pong") pong = true;
+  });
+  for (let i = 0; i < 200 && !pong; i++) await sleep(25);
+  assert.equal(snapshot?.data?.blocks?.[0]?.text?.length, largeText.length, "complete snapshot arrived");
+  assert.equal(pong, true, "socket remained usable after the large frame drained");
+  assert.equal(ws.readyState, WebSocket.OPEN);
+  ws.close();
+  assert.ok(h.alive(), "host remains healthy");
 });
 
 test("upgraded sockets must authenticate within the deadline", async (t) => {

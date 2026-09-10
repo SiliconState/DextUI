@@ -3858,7 +3858,7 @@ const server = http.createServer((req, res) => {
 // upgrade (e.g. an unparsable request target) must destroy only that socket.
 const MAX_WS_CLIENTS = Number(process.env.AGENTLINKD_WS_MAX_CLIENTS ?? 64);
 const WS_AUTH_DEADLINE_MS = Number(process.env.AGENTLINKD_WS_AUTH_DEADLINE_MS ?? 15_000); // upgraded sockets must complete hello promptly
-const WS_SEND_BUFFER_LIMIT = 2 * 1024 * 1024; // slow consumers are dropped to resync
+const WS_SEND_BUFFER_LIMIT = 2 * 1024 * 1024; // queued backlog before a client is considered slow
 server.on("upgrade", (req, socket, head) => {
   // Attach before any write: an unhandled socket "error" would exit Node.
   socket.on("error", () => { socket.destroy(); });
@@ -3920,9 +3920,11 @@ server.on("upgrade", (req, socket, head) => {
     send: (text) => {
       const buf = Buffer.from(text, "utf8");
       if (socket.destroyed) return;
-      // Slow-consumer policy: rather than buffering without bound, drop the
-      // client (code 1013). It reconnects and resyncs from a journal snapshot.
-      if (socket.writableLength + buf.length > WS_SEND_BUFFER_LIMIT) {
+      // Slow-consumer policy: rather than buffering an unbounded backlog, drop
+      // the client (code 1013). One server-generated message may itself exceed
+      // the backlog cap (notably a long-session snapshot); allow it while the
+      // existing queue is healthy, then let the next send observe the backlog.
+      if (socket.writableLength > WS_SEND_BUFFER_LIMIT) {
         try { client.close(1013); } catch { /* already gone */ }
         dropClient();
         return;
