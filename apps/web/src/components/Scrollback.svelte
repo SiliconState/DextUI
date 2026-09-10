@@ -3,7 +3,10 @@
   // Web-native where it matters: scroll pinning + jump-to-latest.
   import type { SessionStore, ViewBlock } from "@dextui/client";
   import Block from "./Block.svelte";
+  import ActivityGroup from "./ActivityGroup.svelte";
+  import WorkMeta from "./WorkMeta.svelte";
   import PackGallery from "./PackGallery.svelte";
+  import { transcriptItems, type TranscriptItem } from "../lib/transcript-groups";
   import { app } from "../lib/state.svelte";
   import { fmtElapsed } from "../lib/markdown";
   import { useSession } from "../lib/useSession.svelte";
@@ -23,28 +26,39 @@
   const view = $derived(sess.view ?? store.state);
   const hidden = $derived(Math.max(0, view.blocks.length - windowSize));
   const visible = $derived(view.blocks.slice(-windowSize));
-  const groups = $derived.by(() => {
-    const result: { id: number; blocks: ViewBlock[] }[] = [];
-    for (let i = 0; i < visible.length;) {
-      const first = visible[i]!;
-      let end = i + 1;
-      if (first.kind === "tool") {
-        while (end < visible.length) {
-          const next = visible[end];
-          if (next?.kind !== "tool" || next.name !== first.name) break;
-          end++;
-        }
-      }
-      if (end - i <= 3) end = i + 1;
-      result.push({ id: first.id, blocks: visible.slice(i, end) });
-      i = end;
-    }
-    return result;
-  });
+  // Presentation grouping runs only over the already-bounded visible window.
+  // The canonical store stays flat/lossless; Bash and other rich tools remain
+  // standalone blocks, while structural reads/edits become lazy disclosures.
+  const items = $derived(app.compactTools
+    ? transcriptItems(visible)
+    : visible.map((block): TranscriptItem => ({ kind: "block", id: block.id, block })));
+
+  // Manual disclosure state is keyed by stable first-block IDs, so streaming
+  // updates and regrouping do not snap open rows shut. Untouched running/failed
+  // activity defaults open; completed clean activity defaults folded.
+  let disclosure = $state<Record<string, boolean>>({});
+  const keyOf = (item: TranscriptItem) => `${item.kind}:${item.id}`;
+  function defaultOpen(item: TranscriptItem): boolean {
+    return item.kind === "activity" && item.tools.some((t) => t.status === "running" || t.status === "preview" || t.status === "failed");
+  }
+  function itemOpen(item: TranscriptItem): boolean {
+    const key = keyOf(item);
+    return key in disclosure ? disclosure[key]! : defaultOpen(item);
+  }
+  function setItemOpen(item: TranscriptItem, open: boolean, user = true) {
+    // Explicit disclosure buttons call this only for a user choice; keeping
+    // state outside the derived grouping prevents stream updates snapping shut.
+    if (user) disclosure[keyOf(item)] = open;
+  }
+  const anyDetailsOpen = $derived(items.some((item) => item.kind !== "block" && itemOpen(item)));
+  function collapseWork() {
+    for (const item of items) if (item.kind !== "block") disclosure[keyOf(item)] = false;
+  }
   // Switching sessions starts at the newest slice again.
   $effect(() => {
     void view.id;
     windowSize = WINDOW;
+    disclosure = {};
   });
 
   let now = $state(Date.now());
@@ -97,14 +111,26 @@
             ↑ show {Math.min(hidden, WINDOW_STEP)} older{hidden > WINDOW_STEP ? ` of ${hidden}` : ""}
           </button>
         {/if}
-        {#each groups as group (group.id)}
-          {#if group.blocks.length > 3}
-            <details class="tool-batch" open={group.blocks.some((b) => b.kind === "tool" && (b.status === "running" || b.status === "failed"))}>
-              <summary>Batch · {group.blocks.length} calls <span class="faint">· {group.blocks[0]?.kind === "tool" ? group.blocks[0].name : ""}</span></summary>
-              {#each group.blocks as block (block.id)}<Block {block} {onInspect} sessionId={view.id} />{/each}
-            </details>
+        {#if anyDetailsOpen}
+          <button class="work-collapse" data-agent-id="transcript.collapse-work" onclick={collapseWork}>Collapse work details</button>
+        {/if}
+        {#each items as item (keyOf(item))}
+          {#if item.kind === "activity"}
+            <ActivityGroup
+              id={item.id}
+              tools={item.tools}
+              activity={item.activity}
+              caption={item.caption}
+              progress={item.progress}
+              open={itemOpen(item)}
+              onToggle={(open, user) => setItemOpen(item, open, user)}
+              {onInspect}
+              sessionId={view.id}
+            />
+          {:else if item.kind === "meta"}
+            <WorkMeta id={item.id} blocks={item.blocks} open={itemOpen(item)} onToggle={(open, user) => setItemOpen(item, open, user)} />
           {:else}
-            <Block block={group.blocks[0]!} {onInspect} sessionId={view.id} />
+            <Block block={item.block} {onInspect} sessionId={view.id} />
           {/if}
         {/each}
         {#if view.compacting || view.working}
@@ -125,8 +151,15 @@
 </div>
 
 <style>
-  .tool-batch > summary { cursor: pointer; color: var(--dim); font-size: 12px; padding: 3px 0; }
-  .tool-batch :global(.tool) { margin-top: 6px; }
+  .work-collapse {
+    align-self: flex-end;
+    border: 0;
+    background: transparent;
+    color: var(--faint);
+    font-size: 11px;
+    padding: 1px 0;
+  }
+  .work-collapse:hover { color: var(--fg); }
   .sb-wrap {
     position: relative;
     flex: 1;

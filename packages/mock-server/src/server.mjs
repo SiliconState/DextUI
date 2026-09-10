@@ -302,6 +302,7 @@ function usage(inTok, outTok) {
 }
 
 function echoPlan(text) {
+  if (/\btool folding demo\b/i.test(text)) return toolFoldingPlan();
   if (/\bthinking preview demo\b/i.test(text)) return thinkingPreviewPlan();
   if (/\bAttached images? candidates? for native read_image\b/i.test(text) && /\bread_image\(path\)/i.test(text)) return imageVisionPlan(text);
   if (/\bartifact file demo\b/i.test(text)) return fileArtifactPlan();
@@ -340,6 +341,39 @@ function echoPlan(text) {
       delay: 4,
     },
     { event: "turn_end", data: { usage: usage(12, 24), failed: false }, delay: 4 },
+  ];
+}
+
+function toolFoldingPlan() {
+  const tool = (call_id, name, summary, content, ok = true) => [
+    { event: "tool_call_start", data: { call_id, name, summary }, delay: 8 },
+    { event: "tool_call_result", data: { call_id, name, summary, ok, content }, delay: 18 },
+  ];
+  return [
+    { event: "turn_start", delay: 5 },
+    { event: "info", data: "[objective: Make tool-heavy work easier to scan | checkpoints: inspect the renderer; preserve rich Bash; verify drill-down]", delay: 2 },
+    { event: "info", data: "[phase:probe] Inspecting transcript structure", delay: 2 },
+    { event: "text_block_complete", data: "Inspecting the transcript renderer and its current batch boundaries.", delay: 3 },
+    { event: "tool_batch_start", data: { labels: ["rg: /tool/ in apps/web/src", "read_file: apps/web/src/components/Scrollback.svelte", "git_diff: apps/web/src"] }, delay: 2 },
+    ...tool("fold-rg", "rg", "rg: /tool/ in apps/web/src", "Scrollback.svelte: tool renderer\nBlock.svelte: tool details"),
+    ...tool("fold-read", "read_file", "read_file: apps/web/src/components/Scrollback.svelte", "1 <script lang=\"ts\">\n2 import Block from './Block.svelte';\n3 // transcript rendering"),
+    ...tool("fold-diff", "git_diff", "git_diff: apps/web/src", "diff --git a/Scrollback.svelte b/Scrollback.svelte\n@@ -1,2 +1,3 @@\n import Block from './Block.svelte';\n+import ActivityGroup from './ActivityGroup.svelte';"),
+    { event: "tool_batch_end", data: { failed: 0 }, delay: 2 },
+    { event: "tool_call_start", data: { call_id: "fold-bash", name: "bash", summary: "npm test" }, delay: 8 },
+    { event: "tool_output_delta", data: { call_id: "fold-bash", text: "249 tests passed\n" }, delay: 12 },
+    { event: "tool_call_result", data: { call_id: "fold-bash", name: "bash", summary: "npm test", ok: true, content: "exit: 0\n--- stdout ---\n249 tests passed\n--- stderr ---" }, delay: 18 },
+    { event: "info", data: "[phase:implement] Folding routine reads and edits", delay: 2 },
+    { event: "text_block_complete", data: "Applying the compact activity presentation.", delay: 3 },
+    { event: "tool_batch_start", data: { labels: ["edit_file: Scrollback.svelte", "multi_edit: ActivityGroup.svelte (3 edits)"] }, delay: 2 },
+    ...tool("fold-edit", "edit_file", "edit_file: apps/web/src/components/Scrollback.svelte", "@@ -24,2 +24,3 @@\n const visible = view.blocks;\n+const items = transcriptItems(visible);"),
+    ...tool("fold-multi", "multi_edit", "multi_edit: apps/web/src/components/ActivityGroup.svelte (3 edits)", "@@ -40,2 +40,4 @@\n+<details class=\"activity\">\n+  <summary>Changed files</summary>\n+</details>"),
+    { event: "tool_batch_end", data: { failed: 0 }, delay: 2 },
+    { event: "info", data: "[phase:verify] Checking failure visibility", delay: 2 },
+    { event: "text_block_complete", data: "Checking that a failed structural call opens its activity group.", delay: 3 },
+    ...tool("fold-fail", "read_file", "read_file: missing.fixture", "file not found", false),
+    { event: "text_block_complete", data: "Tool folding demo complete — Bash stayed rich, routine work folded, and every detail remains reachable.", delay: 5 },
+    { event: "usage_update", data: { turn: usage(80, 100), session: usage(80, 100) }, delay: 4 },
+    { event: "turn_end", data: { usage: usage(80, 100), failed: false }, delay: 4 },
   ];
 }
 

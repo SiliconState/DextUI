@@ -5,7 +5,7 @@
   // (opens away from the nearest edge); a transparent catcher closes it on any
   // outside click. Theme offers explicit choices, not a blind cycle.
   import type { Theme } from "../lib/state.svelte";
-  import { app, setTheme, closeSettings, toggleNotify, rePair } from "../lib/state.svelte";
+  import { app, setTheme, setCompactTools, closeSettings, toggleNotify, rePair } from "../lib/state.svelte";
   import { openProviders, providersEnabled } from "../lib/connectors.svelte";
   import { popoverPos } from "../lib/popover";
   import { useDialog } from "../lib/dialog.svelte";
@@ -66,6 +66,15 @@
           >{t.label}</button>
         {/each}
       </div>
+    </div>
+
+    <div class="sec">
+      <span class="lbl">Work details</span>
+      <div class="seg two" role="group" aria-label="Work details">
+        <button class="seg-b" class:on={app.compactTools} aria-pressed={app.compactTools} data-agent-id="tools.view.compact" onclick={() => setCompactTools(true)}>Compact</button>
+        <button class="seg-b" class:on={!app.compactTools} aria-pressed={!app.compactTools} data-agent-id="tools.view.all" onclick={() => setCompactTools(false)}>Show all</button>
+      </div>
+      <span class="hint">Bash output stays visible in both views</span>
     </div>
 
     <div class="sec row">
@@ -137,6 +146,7 @@
     grid-template-columns: repeat(4, 1fr);
     gap: 4px;
   }
+  .seg.two { grid-template-columns: repeat(2, 1fr); }
   .seg-b {
     text-align: center;
     padding: 4px 0;

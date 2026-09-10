@@ -41,6 +41,8 @@ export const app = $state({
   /** Bumps whenever the host process identity changes (stores were reset). */
   hostEpoch: 0,
   paletteOpen: false,
+  /** Compact routine structural tool activity; Bash and rich tools stay full. */
+  compactTools: true,
   /** Raw envelope tail drawer for the active session. */
   eventsOpen: false,
   /** Settings popover (theme · notifications · providers · sign out). */
@@ -368,6 +370,11 @@ export function setTheme(t: Theme): void {
   applyTheme(t);
 }
 
+export function setCompactTools(compact: boolean): void {
+  app.compactTools = compact;
+  localStorage.setItem("dextui.compactTools", compact ? "1" : "0");
+}
+
 /** Open the settings popover, anchored to the trigger's viewport rect so it
  *  opens away from the nearest edge; pass nothing to fall back to the corner. */
 export function openSettings(anchor?: { top: number; bottom: number; right: number }): void {
@@ -429,6 +436,7 @@ export function ensureStarted(): void {
   const theme: Theme = stored === "dark" || stored === "dim" || stored === "light" || stored === "system" ? stored : "system";
   app.theme = theme;
   app.sidebarCollapsed = localStorage.getItem("dextui.sidebarCollapsed") === "1";
+  app.compactTools = localStorage.getItem("dextui.compactTools") !== "0";
   const storedNotify = localStorage.getItem("dextui.notify");
   app.notify =
     storedNotify === "1"

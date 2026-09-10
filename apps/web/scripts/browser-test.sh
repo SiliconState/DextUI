@@ -181,6 +181,43 @@ echo "surfaces dark/dim: $BD / $BM; bar fill light/dark: $FL / $FD"
 [ "$FL" != "$FD" ] || { echo "FAIL: bar fill unchanged light→dark"; FAIL=1; }
 [ "$BD" != "$BM" ] || { echo "FAIL: dim surfaces identical to dark (dim not a distinct theme)"; FAIL=1; }
 
+note "tool activity: structural work folds, Bash stays rich, every edit remains inspectable"
+agent-browser fill '[data-agent-id="composer.input"]' 'tool folding demo' >/dev/null
+agent-browser press Enter >/dev/null
+wait_js '[...document.querySelectorAll(`[data-agent-id="block.text"]`)].at(-1)?.textContent.includes("Tool folding demo complete")' || { echo "FAIL: tool folding turn did not finish"; FAIL=1; }
+# Clean read/edit groups are pre-folded and lazy: their output DOM is absent,
+# not merely hidden. The failed structural group opens itself.
+wait_js '(()=>{const a=[...document.querySelectorAll(`.activity`)];const clean=a.filter(x=>x.dataset.state==="complete");const failed=a.find(x=>x.dataset.state==="failed");return clean.length>=2&&clean.every(x=>x.querySelector(`:scope > button`)?.getAttribute(`aria-expanded`)==="false"&&!x.querySelector(`[data-agent-id$=".details"]`))&&failed?.querySelector(`:scope > button`)?.getAttribute(`aria-expanded`)==="true"})()' || { echo "FAIL: activity fold defaults/lazy DOM"; FAIL=1; }
+# Bash is deliberately outside structural folding and keeps its visible preview.
+wait_js 'document.querySelector(`[data-agent-id="tool.fold-bash.tail"]`)?.textContent.includes("249 tests passed") && !document.querySelector(`[data-agent-id="tool.fold-bash"]`)?.closest(`.activity`)' || { echo "FAIL: Bash lost its rich standalone layer"; FAIL=1; }
+# Objective + all phase transitions coalesce to one quiet strip; latest phase is visible.
+wait_js '(()=>{const m=[...document.querySelectorAll(`[data-agent-id^="activity.meta."]`)].filter(x=>!x.dataset.agentId.endsWith(`.details`));return m.length===1&&m[0].textContent.includes("objective")&&m[0].textContent.includes("verify")&&m[0].textContent.includes("4 updates")})()' || { echo "FAIL: objective/phase did not coalesce"; FAIL=1; }
+# Read group → individual call → existing output disclosure: all details survive.
+agent-browser eval '(()=>{const g=[...document.querySelectorAll(`.activity[data-state="complete"]`)].find(x=>x.textContent.includes(`Inspected`));g?.querySelector(`:scope > button`)?.click();return !!g})()' >/dev/null
+wait_js '!!document.querySelector(`[data-agent-id$=".tool.fold-read"]`) && !document.querySelector(`[data-agent-id="tool.fold-read.content"]`)' || { echo "FAIL: read calls not reachable/lazy"; FAIL=1; }
+agent-browser eval 'document.querySelector(`[data-agent-id$=".tool.fold-read"] > .activity-tool-head > button`)?.click()' >/dev/null
+wait_js '!!document.querySelector(`[data-agent-id="tool.fold-read"] .tool-full`)' || { echo "FAIL: original read tool card not mounted on demand"; FAIL=1; }
+agent-browser click '[data-agent-id="tool.fold-read"] .tool-full > summary' >/dev/null
+wait_js 'document.querySelector(`[data-agent-id="tool.fold-read.content"]`)?.textContent.includes("transcript rendering")' || { echo "FAIL: read output lost behind folds"; FAIL=1; }
+# Edit group preserves the same drill-down, including the exact multi-edit diff.
+agent-browser eval '(()=>{const g=[...document.querySelectorAll(`.activity[data-state="complete"]`)].find(x=>x.textContent.includes(`Changed`));g?.querySelector(`:scope > button`)?.click();return !!g})()' >/dev/null
+agent-browser eval 'document.querySelector(`[data-agent-id$=".tool.fold-multi"] > .activity-tool-head > button`)?.click()' >/dev/null
+wait_js '!!document.querySelector(`[data-agent-id="tool.fold-multi"] .tool-full`) && !!document.querySelector(`[data-agent-id$=".tool.fold-multi.inspect"]`)' || { echo "FAIL: original multi-edit tool card/Raw action not mounted on demand"; FAIL=1; }
+agent-browser click '[data-agent-id="tool.fold-multi"] .tool-full > summary' >/dev/null
+wait_js 'document.querySelector(`[data-agent-id="tool.fold-multi"] .tool-full`)?.textContent.includes("Changed files")' || { echo "FAIL: multi-edit diff no longer inspectable"; FAIL=1; }
+# Device setting restores the fully verbose rendering, then compact mode folds it again.
+agent-browser click '[data-agent-id="settings.open"]' >/dev/null
+agent-browser click '[data-agent-id="tools.view.all"]' >/dev/null
+wait_js '!document.querySelector(`.activity`) && !!document.querySelector(`[data-agent-id="tool.fold-read"]`) && !!document.querySelector(`[data-agent-id="tool.fold-multi"]`) && localStorage.getItem("dextui.compactTools") === "0"' || { echo "FAIL: Show all work details"; FAIL=1; }
+agent-browser click '[data-agent-id="tools.view.compact"]' >/dev/null
+wait_js 'document.querySelectorAll(`.activity`).length >= 3 && localStorage.getItem("dextui.compactTools") === "1"' || { echo "FAIL: restore compact work details"; FAIL=1; }
+agent-browser click '[data-agent-id="settings.scrim"]' >/dev/null
+# One contextual action refolds everything and unmounts all heavy detail DOM.
+agent-browser eval 'document.querySelector(`.activity[data-state="failed"] > button`)?.click()' >/dev/null
+wait_js '!!document.querySelector(`[data-agent-id="transcript.collapse-work"]`)' || { echo "FAIL: collapse work action unavailable"; FAIL=1; }
+agent-browser click '[data-agent-id="transcript.collapse-work"]' >/dev/null
+wait_js '[...document.querySelectorAll(`.activity`)].every(x=>x.querySelector(`:scope > button`)?.getAttribute(`aria-expanded`)==="false")&&!document.querySelector(`[data-agent-id^="activity."][data-agent-id$=".details"]`)' || { echo "FAIL: collapse work details"; FAIL=1; }
+
 note "session: draft saved on switch, rename, true delete purges local state"
 agent-browser click '[data-agent-id="session.sess_002.open"]' >/dev/null
 agent-browser wait '[data-agent-id="composer.input"]' >/dev/null
