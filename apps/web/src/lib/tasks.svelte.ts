@@ -58,7 +58,7 @@ export function closeTasks(): void {
   tasks.open = false;
   tasks.draft = null;
   tasks.confirmDelete = "";
-  pendingTaskSave = ""; // its save reply no longer has a buffer to settle
+  pendingTaskSaves = []; // their save replies no longer have a buffer to settle
 }
 
 export function refreshTasks(): void {
@@ -93,12 +93,15 @@ export function newTask(): void {
     dirty: true,
   };
   tasks.confirmDelete = "";
-  pendingTaskSave = ""; // a fresh buffer supersedes any in-flight save
+  pendingTaskSaves = []; // a fresh buffer supersedes any in-flight save
 }
 
-/** The record exactly as sent, so a save reply can tell whether the buffer
- *  moved on while the save was in flight (keystrokes during saving). */
-let pendingTaskSave = "";
+/** Saves in flight, in send order (replies arrive in order). Each entry
+ *  remembers the task name and the exact bytes sent, so a reply settles only
+ *  the save that produced it: a double-clicked Save cannot mislabel the
+ *  buffer as "newer edits", and a stale reply after a reload finds nothing
+ *  to settle and leaves the fresh buffer alone. */
+let pendingTaskSaves: { name: string; payload: string }[] = [];
 
 /** Save the buffer. `expectedRev` is the rev we based edits on — the host
  *  refuses with `stale_rev` instead of clobbering a concurrent writer (the
@@ -120,7 +123,7 @@ export function saveTask(): void {
     return;
   }
   const payload = { ...d, dirty: undefined, stale: undefined } as TaskRecord;
-  pendingTaskSave = JSON.stringify(payload);
+  pendingTaskSaves.push({ name: d.name, payload: JSON.stringify(payload) });
   c.tasksPut(payload, {
     cwd: tasks.cwd || undefined,
     expectedRev: d.rev > 0 ? d.rev : undefined,
@@ -137,7 +140,7 @@ export function deleteTask(name: string): void {
   app.conn?.tasksDelete(name, tasks.cwd || undefined);
   if (tasks.draft?.name === name) {
     tasks.draft = null;
-    pendingTaskSave = ""; // the deleted record's save reply has nowhere to land
+    pendingTaskSaves = []; // the deleted record's save replies have nowhere to land
   }
 }
 
@@ -168,16 +171,19 @@ export function onTasksControl(env: Envelope): void {
     if (d?.cwd === tasks.cwd || !tasks.cwd) tasks.cwd = d.cwd;
     if (d?.task) {
       tasks.draft = { ...d.task, dirty: false, stale: false };
-      pendingTaskSave = ""; // a reload supersedes any in-flight save of the old buffer
+      pendingTaskSaves = []; // a reload supersedes any in-flight save of the old buffer
     }
     return;
   }
   if (env.event === "x-agentlinkd.tasks.put") {
     const d = env.data as { cwd: string; task: TaskRecord };
     if (d?.cwd && tasks.cwd && d.cwd !== tasks.cwd) return; // different workspace's save
+    const i = pendingTaskSaves.findIndex((p) => p.name === d?.task?.name);
+    if (i < 0) return; // stale reply (its buffer is long gone): nothing to settle
+    const [pending] = pendingTaskSaves.splice(i, 1);
     if (d?.task?.name === tasks.draft?.name) {
       const buffer = JSON.stringify({ ...tasks.draft, dirty: undefined, stale: undefined } as TaskRecord);
-      if (buffer === pendingTaskSave) {
+      if (pending && buffer === pending.payload) {
         tasks.draft = { ...d.task, dirty: false, stale: false };
       } else {
         // Keystrokes landed while the save was in flight: keep the NEWER
@@ -187,14 +193,13 @@ export function onTasksControl(env: Envelope): void {
         tasks.draft.dirty = true;
         pushToast("ok", "Saved — newer edits are still in the editor (save again when ready)");
       }
-      pendingTaskSave = "";
     }
     return;
   }
   if (env.event === "error") {
     const d = env.data as { code: string; message: string; cmd?: string };
     if (typeof d?.cmd === "string" && d.cmd.startsWith("x-agentlinkd.tasks.")) {
-      if (d.cmd === "x-agentlinkd.tasks.put") pendingTaskSave = ""; // refused: no reply will settle it
+      if (d.cmd === "x-agentlinkd.tasks.put") pendingTaskSaves.shift(); // refused: replies are ordered — drop the oldest
       if (d.code === "stale_rev") {
         pushToast("err", "Not saved — the record changed (maybe the agent). Reload and re-apply", {
           label: "Reload",

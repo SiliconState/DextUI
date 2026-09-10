@@ -60,6 +60,14 @@ export function closeFlows(): void {
   flows.confirmDelete = "";
 }
 
+/** Leave the editor for the list view — same dirty-draft protection as
+ *  closing: the back button is a user act, but it must not silently discard. */
+export function backToFlows(): void {
+  if (flows.draft?.dirty && !window.confirm("Discard unsaved changes to this flow?")) return;
+  flows.draft = null;
+  flows.preview = "";
+}
+
 export function refreshFlows(): void {
   app.conn?.flowsList(flows.cwd || undefined);
 }

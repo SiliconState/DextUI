@@ -5,7 +5,7 @@
   // can add a node type without touching this file). Save writes
   // .dext/flows/<name>.flow.json; Run compiles to a crew spec and starts it.
   import type { FlowNode, FlowNodeType } from "@dextui/protocol";
-  import { flows, flowsEnabled, openFlow, newFlow, saveFlow, deleteFlow, runFlow, compileFlow_, closeFlows, addTrigger, removeTrigger, hookFor } from "../lib/flows.svelte";
+  import { flows, flowsEnabled, openFlow, newFlow, saveFlow, deleteFlow, runFlow, compileFlow_, closeFlows, backToFlows, addTrigger, removeTrigger, hookFor } from "../lib/flows.svelte";
   import { flowNodeTypes, flowNode } from "../ext";
   import { app, pushToast } from "../lib/state.svelte";
   import { packTitle } from "../lib/display";
@@ -256,7 +256,7 @@
       <span class="dim">{draft ? (draft.title || draft.name) : "Workflows in this folder"}</span>
       <span class="insp-acts">
         {#if draft}
-          <button class="act" data-agent-id="flows.back" onclick={() => { flows.draft = null; flows.preview = ""; }} aria-label="Back to the flow list">← Flows</button>
+          <button class="act" data-agent-id="flows.back" onclick={backToFlows} aria-label="Back to the flow list">← Flows</button>
           <button class="act" data-agent-id="flows.save" onclick={saveFlow} title="Save (Ctrl+S)">{draft.dirty ? "[⌃s] Save*" : "Saved"}</button>
           <button class="act" data-agent-id="flows.compile" onclick={() => { showPreview = !showPreview; if (!flows.preview) compileFlow_(); }} title="Show the crew spec this flow compiles to (works without the crew engine)">Spec</button>
           <button class="act accent" data-agent-id="flows.run" onclick={runFlow} disabled={!canRun}

@@ -2,6 +2,7 @@ node_modules/
 dist/
 dist.lkg/
 dist.staging/
+dist.staging.*/
 dist.smoke/
 dist.broken-*/
 *.local
