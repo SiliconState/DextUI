@@ -7,11 +7,11 @@ import { humanizeLabel, humanizeTool, parseRunMeta } from "./display";
 export type ActivityKind = "read" | "edit" | "mixed";
 export type TranscriptItem =
   | { kind: "block"; id: number; block: ViewBlock }
-  | { kind: "activity"; id: number; tools: Extract<ViewBlock, { kind: "tool" }>[]; activity: ActivityKind; caption: string; progress?: Extract<ViewBlock, { kind: "text" }>; labels: string[] }
+  | { kind: "activity"; id: number; tools: Extract<ViewBlock, { kind: "tool" }>[]; activity: ActivityKind; caption: string; labels: string[] }
   | { kind: "meta"; id: number; blocks: Extract<ViewBlock, { kind: "marker" }>[] };
 
-const READ_TOOLS = new Set(["read_file", "read_symbol", "rg", "fd", "git_diff", "git_status", "todo_read"]);
-const EDIT_TOOLS = new Set(["edit_file", "multi_edit", "write_file", "todo_write"]);
+const READ_TOOLS = new Set(["read_file", "read_symbol", "read_image", "rg", "fd", "git_diff", "git_status", "todo_read", "http"]);
+const EDIT_TOOLS = new Set(["edit_file", "multi_edit", "write_file", "todo_write", "git_commit"]);
 
 export function activityKind(name: string): "read" | "edit" | null {
   const n = name.toLowerCase();
@@ -36,25 +36,18 @@ function metaBlock(block: ViewBlock): block is Extract<ViewBlock, { kind: "marke
   return block.kind === "marker" && !!parseRunMeta(block.text);
 }
 
-function shortCaption(text: string): string {
-  const line = text
-    .replace(/[`*_#>]/g, "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .replace(/[:—-]\s*$/, "");
-  if (line.length <= 100) return line;
-  const cut = line.slice(0, 100);
-  const space = cut.lastIndexOf(" ");
-  return `${cut.slice(0, space > 70 ? space : 100)}…`;
-}
-
 function fallbackCaption(tools: Extract<ViewBlock, { kind: "tool" }>[], kind: ActivityKind, labels: string[]): string {
   if (labels.length) {
     const first = humanizeLabel(labels[0] ?? "");
     return labels.length > 1 ? `${first} +${labels.length - 1} more` : first;
   }
   const first = tools[0];
+  const firstName = first?.name.toLowerCase() ?? "";
   const detail = first ? humanizeTool(first.name, first.summary) : "";
+  if (tools.length === 1 && firstName === "read_image") return detail.replace(/^Inspect image\s*/i, "") || "image";
+  if (tools.length === 1 && firstName === "http") return detail.replace(/^(?:HTTP|Request)\s*/i, "") || "request";
+  if (tools.length === 1 && firstName === "git_commit") return detail.replace(/^Commit\s*/i, "") || "changes";
+  if (tools.length === 1 && firstName === "write_file") return detail.replace(/^Write\s*/i, "") || "file";
   if (tools.length === 1 && detail) return detail;
   if (kind === "edit") return "Changed files";
   if (kind === "mixed") return "Reviewed and changed code";
@@ -64,11 +57,11 @@ function fallbackCaption(tools: Extract<ViewBlock, { kind: "tool" }>[], kind: Ac
 /** Build bounded presentation groups from the already-windowed block slice.
  *
  * Conservative boundaries:
- * - bash, images, HTTP, commits, approvals/artifacts and unknown tools remain
- *   ordinary rich blocks;
- * - only complete assistant text immediately followed by foldable activity is
- *   consumed as a caption (a final answer has no following tools, so cannot be
- *   swallowed);
+ * - bash remains an ordinary rich block; image, HTTP, and commit calls may
+ *   fold but preserve meaningful outcomes in their summary and full drill-down;
+ * - approvals/artifacts and unknown tools remain ordinary rich blocks;
+ * - Dext text is always ordinary, prominent transcript prose; only tool cards
+ *   and their technical batch markers fold;
  * - objective/phase markers are coalesced per user turn, but every transition
  *   remains reachable in the meta disclosure.
  */
@@ -100,21 +93,7 @@ export function transcriptItems(blocks: ViewBlock[]): TranscriptItem[] {
       continue;
     }
 
-    let caption = "";
-    let progress: Extract<ViewBlock, { kind: "text" }> | undefined;
     let j = i;
-    // Progress prose is folded only when structural activity follows directly
-    // (optionally through its explicit batch marker).
-    if (first.kind === "text" && first.complete) {
-      let probe = i + 1;
-      if (batchLabels(blocks[probe])) probe++;
-      const next = blocks[probe];
-      if (next?.kind === "tool" && activityKind(next.name)) {
-        caption = shortCaption(first.text);
-        progress = first;
-        j = i + 1;
-      }
-    }
 
     const labels: string[] = [];
     const tools: Extract<ViewBlock, { kind: "tool" }>[] = [];
@@ -156,8 +135,7 @@ export function transcriptItems(blocks: ViewBlock[]): TranscriptItem[] {
         id: first.id,
         tools,
         activity,
-        caption: caption || fallbackCaption(tools, activity, groupLabels),
-        progress,
+        caption: fallbackCaption(tools, activity, groupLabels),
         labels: groupLabels,
       });
       i = j;

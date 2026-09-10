@@ -6,24 +6,20 @@
   let {
     tool,
     groupId,
+    open,
+    onToggle,
     onInspect,
     sessionId,
   }: {
     tool: Extract<ViewBlock, { kind: "tool" }>;
     groupId: number;
+    open: boolean;
+    onToggle: (open: boolean, user: boolean) => void;
     onInspect?: (b: ViewBlock) => void;
     sessionId: string;
   } = $props();
 
   const status = $derived(toolStatusDisplay(tool.name, tool.status, tool.content));
-  let open = $state(false);
-  let touched = $state(false);
-
-  // A failure that arrives while this keyed row is mounted must break through
-  // the fold, unless the user has deliberately toggled this exact call.
-  $effect(() => {
-    if (tool.status === "failed" && !touched) open = true;
-  });
 </script>
 
 <div class="activity-tool" data-agent-id={`activity.${groupId}.tool.${tool.call_id}`}>
@@ -32,7 +28,7 @@
       class="activity-tool-toggle"
       type="button"
       aria-expanded={open}
-      onclick={() => { touched = true; open = !open; }}
+      onclick={() => onToggle(!open, true)}
     >
       <span class="caret" class:open aria-hidden="true">▸</span>
       <span class="tool-name">{tool.name}</span>

@@ -529,6 +529,7 @@
       rows="1"
       {placeholder}
       data-agent-id="composer.input"
+      data-session={view.id}
       data-state={view.compacting ? "compacting" : view.working ? "working" : "idle"}
     ></textarea>
     <span class="c-side">

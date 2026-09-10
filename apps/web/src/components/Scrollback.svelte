@@ -27,38 +27,110 @@
   const hidden = $derived(Math.max(0, view.blocks.length - windowSize));
   const visible = $derived(view.blocks.slice(-windowSize));
   // Presentation grouping runs only over the already-bounded visible window.
-  // The canonical store stays flat/lossless; Bash and other rich tools remain
-  // standalone blocks, while structural reads/edits become lazy disclosures.
+  // The canonical store stays flat/lossless; Bash remains standalone, while
+  // compactable tool classes become lazy disclosures.
   const items = $derived(app.compactTools
     ? transcriptItems(visible)
     : visible.map((block): TranscriptItem => ({ kind: "block", id: block.id, block })));
 
-  // Manual disclosure state is keyed by stable first-block IDs, so streaming
-  // updates and regrouping do not snap open rows shut. Untouched running/failed
-  // activity defaults open; completed clean activity defaults folded.
+  // Manual disclosure state is keyed by stable session + first-block IDs, so
+  // streaming updates and session switches do not snap open rows shut. Clean
+  // and running activity starts compact; failures open unless the user already
+  // made a choice. No status transition ever auto-closes a disclosure.
   let disclosure = $state<Record<string, boolean>>({});
-  const keyOf = (item: TranscriptItem) => `${item.kind}:${item.id}`;
-  function defaultOpen(item: TranscriptItem): boolean {
-    return item.kind === "activity" && item.tools.some((t) => t.status === "running" || t.status === "preview" || t.status === "failed");
-  }
+  let disclosureTouched = $state<Record<string, boolean>>({});
+  let toolDisclosure = $state<Record<string, boolean>>({});
+  let toolDisclosureTouched = $state<Record<string, boolean>>({});
+  let windowSession = $state("");
+  const sessionGeneration = $derived(app.sessions.find((s) => s.id === view.id)?.generation ?? 0);
+  const keyOf = (item: TranscriptItem) => `${app.hostEpoch}:${view.id}:${sessionGeneration}:${item.kind}:${item.id}`;
   function itemOpen(item: TranscriptItem): boolean {
-    const key = keyOf(item);
-    return key in disclosure ? disclosure[key]! : defaultOpen(item);
+    return disclosure[keyOf(item)] ?? false;
   }
   function setItemOpen(item: TranscriptItem, open: boolean, user = true) {
     // Explicit disclosure buttons call this only for a user choice; keeping
     // state outside the derived grouping prevents stream updates snapping shut.
-    if (user) disclosure[keyOf(item)] = open;
+    if (user) {
+      const key = keyOf(item);
+      disclosure[key] = open;
+      disclosureTouched[key] = true;
+    }
   }
+  const toolKey = (callId: string) => `${app.hostEpoch}:${view.id}:${sessionGeneration}:tool:${callId}`;
+  function toolOpen(tool: Extract<ViewBlock, { kind: "tool" }>): boolean {
+    return toolDisclosure[toolKey(tool.call_id)] ?? false;
+  }
+  function setToolOpen(tool: Extract<ViewBlock, { kind: "tool" }>, open: boolean, user = true) {
+    if (!user) return;
+    const key = toolKey(tool.call_id);
+    toolDisclosure[key] = open;
+    toolDisclosureTouched[key] = true;
+  }
+  // Keep the maps sparse: ordinary collapsed groups/calls need no entry. Only
+  // user choices and automatic failure opens are stored. This avoids hundreds
+  // of reactive writes in a long visible transcript while retaining the rule
+  // that nothing ever auto-closes.
+  $effect(() => {
+    void items;
+    let nextGroups: Record<string, boolean> | undefined;
+    let nextTools: Record<string, boolean> | undefined;
+    for (const item of items) {
+      if (item.kind !== "activity") continue;
+      const failed = item.tools.some((tool) => tool.status === "failed");
+      const key = keyOf(item);
+      if (failed && !disclosureTouched[key] && disclosure[key] !== true) {
+        nextGroups ??= { ...disclosure };
+        nextGroups[key] = true;
+      }
+      for (const tool of item.tools) {
+        if (tool.status !== "failed") continue;
+        const tKey = toolKey(tool.call_id);
+        if (!toolDisclosureTouched[tKey] && toolDisclosure[tKey] !== true) {
+          nextTools ??= { ...toolDisclosure };
+          nextTools[tKey] = true;
+        }
+      }
+    }
+    if (nextGroups) disclosure = nextGroups;
+    if (nextTools) toolDisclosure = nextTools;
+  });
   const anyDetailsOpen = $derived(items.some((item) => item.kind !== "block" && itemOpen(item)));
   function collapseWork() {
-    for (const item of items) if (item.kind !== "block") disclosure[keyOf(item)] = false;
+    // Refold every remembered disclosure, including groups currently outside
+    // the 300-block window; otherwise "show older" could resurrect an expanded
+    // row after the user explicitly collapsed all work details.
+    for (const key of Object.keys(disclosure)) {
+      disclosure[key] = false;
+      disclosureTouched[key] = true;
+    }
+    for (const key of Object.keys(toolDisclosure)) {
+      toolDisclosure[key] = false;
+      toolDisclosureTouched[key] = true;
+    }
+    // Untouched collapsed items have no sparse-map entry. Mark all currently
+    // visible groups/calls as user-collapsed so failures do not auto-reopen.
+    for (const item of items) {
+      if (item.kind === "block") continue;
+      const key = keyOf(item);
+      disclosure[key] = false;
+      disclosureTouched[key] = true;
+      if (item.kind === "activity") {
+        for (const tool of item.tools) {
+          const tKey = toolKey(tool.call_id);
+          toolDisclosure[tKey] = false;
+          toolDisclosureTouched[tKey] = true;
+        }
+      }
+    }
   }
-  // Switching sessions starts at the newest slice again.
+  // Switching sessions starts at the newest slice again. Fold choices remain
+  // keyed by session for this page lifetime, so switching away/back preserves
+  // them too; a page refresh remounts and intentionally resets them.
   $effect(() => {
-    void view.id;
+    const id = view.id;
+    if (id === windowSession) return;
+    windowSession = id;
     windowSize = WINDOW;
-    disclosure = {};
   });
 
   let now = $state(Date.now());
@@ -121,9 +193,10 @@
               tools={item.tools}
               activity={item.activity}
               caption={item.caption}
-              progress={item.progress}
               open={itemOpen(item)}
               onToggle={(open, user) => setItemOpen(item, open, user)}
+              getToolOpen={toolOpen}
+              setToolOpen={setToolOpen}
               {onInspect}
               sessionId={view.id}
             />

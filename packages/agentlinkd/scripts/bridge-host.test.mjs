@@ -204,6 +204,37 @@ test("bridge: live steering, permission round-trip, capability flags", { timeout
   await a.wait((e) => e.session === id && e.event === "turn_end", at);
 });
 
+test("bridge: browser disconnect does not interrupt the active turn or recycle its child", { timeout: 30000 }, async (t) => {
+  const h = await harness(t);
+  const a = await h.client();
+  const id = await open(a);
+  a.send("session.subscribe", { id });
+  const at = a.events.length;
+  a.send("prompt.submit", { session: id, text: "SLOW survives refresh" });
+  const started = await a.wait((e) => e.session === id && e.event === "turn_start", at);
+  const pid = started.data.pid;
+
+  // A page refresh closes this WebSocket. The host owns the child and turn, so
+  // client loss must only remove the subscription — never send interrupt/close.
+  const closed = once(a.ws, "close");
+  a.ws.close();
+  await closed;
+  await sleep(700); // fake dext completes the 500 ms turn with no subscribers
+
+  const b = await h.client();
+  const mark = b.events.length;
+  b.send("session.subscribe", { id });
+  const snapshot = await b.wait((e) => e.session === id && e.event === "session.snapshot", mark);
+  assert.equal(snapshot.data.working, false, "the in-flight turn completed while the page was disconnected");
+  assert.ok(snapshot.data.blocks.some((block) => block.kind === "text" && /fake SLOW survives refresh/.test(block.text)), "reconnect snapshot carries the completed turn");
+
+  const next = b.events.length;
+  b.send("prompt.submit", { session: id, text: "after refresh" });
+  const restarted = await b.wait((e) => e.session === id && e.event === "turn_start", next);
+  assert.equal(restarted.data.pid, pid, "browser reconnect reuses the same persistent dext child");
+  await b.wait((e) => e.session === id && e.event === "turn_end", next);
+});
+
 test("bridge: warm child across idle interrupt, /approval recycle, queued-steer drain", { timeout: 60000 }, async (t) => {
   const h = await harness(t);
   const a = await h.client();

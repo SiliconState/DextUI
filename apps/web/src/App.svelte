@@ -399,7 +399,7 @@
             aria-haspopup="dialog"
             aria-expanded={app.settingsOpen}
             onclick={openSettingsAt}
-            title="Settings — theme, notifications, sign out"
+            title="Settings — theme, work details, notifications, sign out"
           >⚙</button
           >
           <span class="faint sl-min-right">⌘k Finder</span>

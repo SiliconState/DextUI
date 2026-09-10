@@ -45,7 +45,7 @@ export const app = $state({
   compactTools: true,
   /** Raw envelope tail drawer for the active session. */
   eventsOpen: false,
-  /** Settings popover (theme · notifications · providers · sign out). */
+  /** Settings popover (theme · work details · notifications · providers · sign out). */
   settingsOpen: false,
   /** Viewport rect of the trigger, so the popover anchors to it and opens
    *  away from the nearest edge; null → default bottom-right corner. */
@@ -266,6 +266,14 @@ let toastSeq = 0;
 let selectionAfterRemoval: number | null = null;
 let expectedRename = "";
 let sessionActionTimer: ReturnType<typeof setTimeout> | undefined;
+const ACTIVE_SESSION_KEY = "dextui.activeSession";
+
+/** Remember tab selection without coupling it to process lifecycle. Restoring a
+ *  tab subscribes to its transcript only; it never wakes a cold agent. */
+function rememberActiveSession(id: string): void {
+  if (id) localStorage.setItem(ACTIVE_SESSION_KEY, id);
+  else localStorage.removeItem(ACTIVE_SESSION_KEY);
+}
 
 function purgeLocalSession(id: string): void {
   app.draftRevisions[id] = (app.draftRevisions[id] ?? 0) + 1;
@@ -541,9 +549,11 @@ export function start(token: string): void {
     onSessionRemoved: (id) => {
       if (app.conn !== c) return;
       purgeLocalSession(id);
+      if (localStorage.getItem(ACTIVE_SESSION_KEY) === id) rememberActiveSession("");
       if (app.activeId === id) {
         selectionAfterRemoval = Math.max(0, app.sessions.findIndex((s) => s.id === id));
         app.activeId = "";
+        rememberActiveSession("");
       }
       app.sessions = app.sessions.filter((s) => s.id !== id);
       app.hostEpoch++;
@@ -562,6 +572,8 @@ export function start(token: string): void {
     onSessionList: (sessions) => {
       if (app.conn !== c) return; // stale connection
       const ids = new Set(sessions.map((s) => s.id));
+      const remembered = localStorage.getItem(ACTIVE_SESSION_KEY);
+      if (remembered && !ids.has(remembered)) rememberActiveSession("");
       // Also clean tabs opened after deletion, not just currently subscribed stores.
       for (const key of Object.keys(localStorage)) {
         const match = /^dextui\.(?:draft|history|generation)\.(.+)$/.exec(key);
@@ -582,13 +594,17 @@ export function start(token: string): void {
         if (neighbor) {
           // Show a neighbor without automatically waking a closed agent.
           app.activeId = neighbor.id;
+          rememberActiveSession(neighbor.id);
           c.subscribe(neighbor.id);
         }
       }
       // Host restart: an active id can disappear while the Connection's local
       // stores survive. Drop the stale selection; a reused id will be reset by
       // the next snapshot rather than displaying the old host's transcript.
-      if (app.activeId && !ids.has(app.activeId)) app.activeId = "";
+      if (app.activeId && !ids.has(app.activeId)) {
+        app.activeId = "";
+        rememberActiveSession("");
+      }
       if (wantNewSession) {
         const fresh = sessions.find((s) => !newSessionBaseline.has(s.id));
         if (fresh) {
@@ -598,10 +614,19 @@ export function start(token: string): void {
         }
       }
       if (!app.activeId && sessions.length > 0) {
-        // Auto-activate a live session only: waking a cold one would spawn an
-        // agent process the user never asked for. Cold sessions open on click.
-        const firstLive = sessions.find((s) => s.status === "live");
-        if (firstLive) activate(firstLive.id);
+        // Restore the exact tab selected before a page refresh. Subscribe only:
+        // merely reloading the UI must never wake a cold agent process.
+        const rememberedNow = localStorage.getItem(ACTIVE_SESSION_KEY);
+        const prior = rememberedNow ? sessions.find((s) => s.id === rememberedNow) : undefined;
+        if (prior) {
+          app.activeId = prior.id;
+          c.subscribe(prior.id);
+        } else {
+          // With no valid preference, auto-activate a live session only: waking
+          // a cold one would spawn an agent process the user never asked for.
+          const firstLive = sessions.find((s) => s.status === "live");
+          if (firstLive) activate(firstLive.id);
+        }
       }
       // A session with pending approvals is live by definition; subscribe so
       // it yields real cards and a real received_at instead of a bare count.
@@ -751,6 +776,7 @@ export function activate(id: string): void {
   const c = app.conn;
   const prev = app.activeId;
   app.activeId = id;
+  rememberActiveSession(id);
   autoSubscribed.delete(id); // user-driven from here on
   hydrating.delete(id);
   if (!c) return;

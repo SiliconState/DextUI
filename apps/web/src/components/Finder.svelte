@@ -175,7 +175,7 @@
     });
     out.push({
       slug: "settings.open",
-      label: "Settings — theme, notifications, sign out",
+      label: "Settings — theme, work details, notifications, sign out",
       hint: `theme: ${app.theme}`,
       group: "app",
       run: () => openSettings(),

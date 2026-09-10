@@ -1,6 +1,6 @@
 <script lang="ts">
-  // Settings popover: the status bar's four scattered controls — theme,
-  // notifications, providers, sign out — folded behind one trigger so the bar
+  // Settings popover: device preferences and account controls — theme, work
+  // details, notifications, providers, sign out — behind one trigger so the bar
   // reads as status, not a toolbar. Anchored to the trigger's viewport rect
   // (opens away from the nearest edge); a transparent catcher closes it on any
   // outside click. Theme offers explicit choices, not a blind cycle.
@@ -74,7 +74,7 @@
         <button class="seg-b" class:on={app.compactTools} aria-pressed={app.compactTools} data-agent-id="tools.view.compact" onclick={() => setCompactTools(true)}>Compact</button>
         <button class="seg-b" class:on={!app.compactTools} aria-pressed={!app.compactTools} data-agent-id="tools.view.all" onclick={() => setCompactTools(false)}>Show all</button>
       </div>
-      <span class="hint">Bash output stays visible in both views</span>
+      <span class="hint">Dext replies and Bash output stay visible</span>
     </div>
 
     <div class="sec row">
@@ -115,6 +115,8 @@
     position: fixed;
     z-index: 37;
     width: min(15rem, calc(100vw - 24px));
+    max-height: calc(100dvh - 24px);
+    overflow-y: auto;
     display: flex;
     flex-direction: column;
     gap: 6px;
