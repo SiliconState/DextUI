@@ -4,17 +4,19 @@
 import type { ViewBlock } from "@dextui/client";
 import { humanizeLabel, humanizeTool, parseRunMeta } from "./display";
 
-export type ActivityKind = "read" | "edit" | "mixed";
+export type ActivityKind = "read" | "web" | "image" | "edit" | "mixed";
 export type TranscriptItem =
   | { kind: "block"; id: number; block: ViewBlock }
   | { kind: "activity"; id: number; tools: Extract<ViewBlock, { kind: "tool" }>[]; activity: ActivityKind; caption: string; labels: string[] }
   | { kind: "meta"; id: number; blocks: Extract<ViewBlock, { kind: "marker" }>[] };
 
-const READ_TOOLS = new Set(["read_file", "read_symbol", "read_image", "rg", "fd", "git_diff", "git_status", "todo_read", "http"]);
+const READ_TOOLS = new Set(["read_file", "read_symbol", "rg", "fd", "git_diff", "git_status", "todo_read"]);
 const EDIT_TOOLS = new Set(["edit_file", "multi_edit", "write_file", "todo_write", "git_commit"]);
 
-export function activityKind(name: string): "read" | "edit" | null {
+export function activityKind(name: string): Exclude<ActivityKind, "mixed"> | null {
   const n = name.toLowerCase();
+  if (n === "http") return "web";
+  if (n === "read_image") return "image";
   if (READ_TOOLS.has(n)) return "read";
   if (EDIT_TOOLS.has(n)) return "edit";
   return null;
@@ -49,6 +51,8 @@ function fallbackCaption(tools: Extract<ViewBlock, { kind: "tool" }>[], kind: Ac
   if (tools.length === 1 && firstName === "git_commit") return detail.replace(/^Commit\s*/i, "") || "changes";
   if (tools.length === 1 && firstName === "write_file") return detail.replace(/^Write\s*/i, "") || "file";
   if (tools.length === 1 && detail) return detail;
+  if (kind === "web") return "Web activity";
+  if (kind === "image") return "Images";
   if (kind === "edit") return "Changed files";
   if (kind === "mixed") return "Reviewed and changed code";
   return "Inspected files and code";
@@ -99,6 +103,7 @@ export function transcriptItems(blocks: ViewBlock[]): TranscriptItem[] {
     const tools: Extract<ViewBlock, { kind: "tool" }>[] = [];
     let sawRead = false;
     let sawEdit = false;
+    let specialKind: "web" | "image" | null = null;
     while (j < blocks.length) {
       const labelsHere = batchLabels(blocks[j]);
       if (labelsHere) {
@@ -118,14 +123,18 @@ export function transcriptItems(blocks: ViewBlock[]): TranscriptItem[] {
       if (block?.kind !== "tool") break;
       const k = activityKind(block.name);
       if (!k) break;
+      // Web and image work get their own visible category rather than being
+      // absorbed into a neighboring generic file/code inspection group.
+      if (tools.length && (specialKind !== null || k === "web" || k === "image") && k !== specialKind) break;
       tools.push(block);
+      if (k === "web" || k === "image") specialKind = k;
       sawRead ||= k === "read";
       sawEdit ||= k === "edit";
       j++;
     }
 
     if (tools.length) {
-      const activity: ActivityKind = sawRead && sawEdit ? "mixed" : sawEdit ? "edit" : "read";
+      const activity: ActivityKind = specialKind ?? (sawRead && sawEdit ? "mixed" : sawEdit ? "edit" : "read");
       // A rich boundary (notably Bash) may split an explicit mixed batch. Keep
       // only as many structural labels as this actual fold contains, so its
       // summary never counts a later call that stayed outside.

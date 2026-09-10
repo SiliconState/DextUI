@@ -35,14 +35,16 @@
   const singleton = $derived(tools.length === 1 ? tools[0] : undefined);
   const singletonName = $derived(singleton?.name.toLowerCase() ?? "");
   const verb = $derived(
-    singletonName === "read_image" ? "Inspected image"
-      : singletonName === "http" ? "Requested"
+    activity === "web" ? "Browsed web"
+      : activity === "image" ? "Viewed image"
       : singletonName === "git_commit" ? "Committed"
       : singletonName === "write_file" ? "Wrote"
       : activity === "edit" ? "Changed"
       : activity === "mixed" ? "Reviewed + changed"
       : "Inspected",
   );
+  const completeMark = $derived(activity === "web" ? "↗" : activity === "image" ? "◇" : activity === "read" ? "·" : "✓");
+  const completeClass = $derived(activity === "web" ? "st-cyan" : activity === "image" ? "st-magenta" : activity === "read" ? "dim" : "st-green");
   const outcome = $derived(singleton ? toolStatusDisplay(singleton.name, singleton.status, singleton.content) : undefined);
   const specialOutcome = $derived.by(() => {
     if (!singleton || singleton.status !== "ok") return "";
@@ -62,15 +64,17 @@
 <div
   class="activity"
   class:open
-  class:changed={activity !== "read"}
+  class:changed={activity === "edit" || activity === "mixed"}
+  class:web={activity === "web"}
+  class:image={activity === "image"}
   class:failed={failed > 0}
   data-agent-id={`activity.${id}`}
   data-state={failed ? "failed" : running ? "running" : "complete"}
 >
   <button class="activity-toggle" type="button" aria-expanded={open} onclick={() => onToggle(!open, true)}>
     <span class="caret" class:open aria-hidden="true">▸</span>
-    <span class={failed ? "st-red" : running ? "st-cyan pulse" : activity === "read" ? "dim" : "st-green"}>
-      {failed ? "✗" : running ? "●" : activity === "read" ? "·" : "✓"} {verb}
+    <span class={failed ? "st-red" : running ? "st-cyan pulse" : completeClass}>
+      {failed ? "✗" : running ? "●" : completeMark} {verb}
     </span>
     <span class="activity-caption">{caption}</span>
     <span class="faint activity-count">· {tools.length} {tools.length === 1 ? "call" : "calls"}</span>
@@ -95,6 +99,8 @@
     padding: 2px 0 2px 9px;
   }
   .activity.changed { border-left-color: color-mix(in srgb, var(--green) 45%, var(--line)); }
+  .activity.web { border-left-color: color-mix(in srgb, var(--cyan) 42%, var(--line)); }
+  .activity.image { border-left-color: color-mix(in srgb, var(--magenta) 42%, var(--line)); }
   .activity.failed { border-left-color: color-mix(in srgb, var(--red) 60%, var(--line)); }
   .activity-toggle {
     display: flex;
