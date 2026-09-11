@@ -53,9 +53,9 @@ function fallbackCaption(tools: Extract<ViewBlock, { kind: "tool" }>[], kind: Ac
   if (tools.length === 1 && detail) return detail;
   if (kind === "web") return "Web activity";
   if (kind === "image") return "Images";
-  if (kind === "edit") return "Changed files";
-  if (kind === "mixed") return "Reviewed and changed code";
-  return "Inspected files and code";
+  if (kind === "edit") return "Files";
+  if (kind === "mixed") return "Files and code";
+  return "Files and code";
 }
 
 /** Build bounded presentation groups from the already-windowed block slice.

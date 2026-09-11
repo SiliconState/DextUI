@@ -1,6 +1,21 @@
 // Pure display helpers shared by components and state (no store imports, so
 // lower layers like state.svelte can use them without a cycle).
 import type { PackInfo } from "@dextui/protocol";
+import type { ActivityKind } from "./transcript-groups";
+
+export function activityVerb(kind: ActivityKind, names: string[], active: boolean): string {
+  const all = (choices: string[]) => names.length > 0 && names.every((name) => choices.includes(name.toLowerCase()));
+  const pair = kind === "web" ? ["Browsing web", "Browsed web"]
+    : kind === "image" ? ["Viewing image", "Viewed image"]
+    : all(["git_commit"]) ? ["Committing", "Committed"]
+    : all(["write_file"]) ? ["Writing", "Wrote"]
+    : all(["todo_write"]) ? ["Updating tasks", "Updated tasks"]
+    : all(["rg", "fd"]) ? ["Searching", "Searched"]
+    : kind === "edit" ? ["Editing", "Changed"]
+    : kind === "mixed" ? ["Reviewing + editing", "Reviewed + changed"]
+    : ["Inspecting", "Inspected"];
+  return pair[active ? 0 : 1]!;
+}
 
 /** Capitalize the first letter of every word, leaving the rest untouched
  * ("Bank reconciliation" → "Bank Reconciliation", "TradingView" stays). Words

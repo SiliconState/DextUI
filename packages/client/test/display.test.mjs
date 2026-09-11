@@ -5,7 +5,24 @@ import ts from "typescript";
 
 const source = fs.readFileSync(new URL("../../../apps/web/src/lib/display.ts", import.meta.url), "utf8");
 const { outputText } = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } });
-const { isBashAdvisory, humanizeTool, looksLikeDiff, toolStatusDisplay } = await import(`data:text/javascript;base64,${Buffer.from(outputText).toString("base64")}`);
+const { activityVerb, isBashAdvisory, humanizeTool, looksLikeDiff, toolStatusDisplay } = await import(`data:text/javascript;base64,${Buffer.from(outputText).toString("base64")}`);
+
+test("activity verbs use present-progressive while active and past tense when settled", () => {
+  for (const [kind, names, active, settled] of [
+    ["read", ["read_file", "git_diff"], "Inspecting", "Inspected"],
+    ["read", ["rg", "fd"], "Searching", "Searched"],
+    ["web", ["http"], "Browsing web", "Browsed web"],
+    ["image", ["read_image"], "Viewing image", "Viewed image"],
+    ["edit", ["git_commit"], "Committing", "Committed"],
+    ["edit", ["write_file"], "Writing", "Wrote"],
+    ["edit", ["todo_write"], "Updating tasks", "Updated tasks"],
+    ["edit", ["edit_file", "multi_edit"], "Editing", "Changed"],
+    ["mixed", ["read_file", "write_file"], "Reviewing + editing", "Reviewed + changed"],
+  ]) {
+    assert.equal(activityVerb(kind, names, true), active);
+    assert.equal(activityVerb(kind, names, false), settled);
+  }
+});
 
 test("bash advisory disclosure detection stays scoped to backend marker prefixes", () => {
   assert.equal(isBashAdvisory("bash advisory: prefer native rg"), true);

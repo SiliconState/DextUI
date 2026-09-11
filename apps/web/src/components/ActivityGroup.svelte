@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { ViewBlock } from "@dextui/client";
   import ActivityTool from "./ActivityTool.svelte";
-  import { toolStatusDisplay } from "../lib/display";
+  import { activityVerb, toolStatusDisplay } from "../lib/display";
   import type { ActivityKind } from "../lib/transcript-groups";
 
   let {
@@ -34,15 +34,7 @@
   const commitOk = $derived(tools.filter((tool) => tool.name.toLowerCase() === "git_commit" && tool.status === "ok").length);
   const singleton = $derived(tools.length === 1 ? tools[0] : undefined);
   const singletonName = $derived(singleton?.name.toLowerCase() ?? "");
-  const verb = $derived(
-    activity === "web" ? "Browsed web"
-      : activity === "image" ? "Viewed image"
-      : singletonName === "git_commit" ? "Committed"
-      : singletonName === "write_file" ? "Wrote"
-      : activity === "edit" ? "Changed"
-      : activity === "mixed" ? "Reviewed + changed"
-      : "Inspected",
-  );
+  const verb = $derived(activityVerb(activity, tools.map((tool) => tool.name), running > 0));
   const completeMark = $derived(activity === "web" ? "↗" : activity === "image" ? "◇" : activity === "read" ? "·" : "✓");
   const completeClass = $derived(activity === "web" ? "st-cyan" : activity === "image" ? "st-magenta" : activity === "read" ? "dim" : "st-green");
   const outcome = $derived(singleton ? toolStatusDisplay(singleton.name, singleton.status, singleton.content) : undefined);
@@ -69,16 +61,17 @@
   class:image={activity === "image"}
   class:failed={failed > 0}
   data-agent-id={`activity.${id}`}
-  data-state={failed ? "failed" : running ? "running" : "complete"}
+  data-state={running ? "running" : failed ? "failed" : "complete"}
 >
   <button class="activity-toggle" type="button" aria-expanded={open} onclick={() => onToggle(!open, true)}>
     <span class="caret" class:open aria-hidden="true">▸</span>
-    <span class={failed ? "st-red" : running ? "st-cyan pulse" : completeClass}>
-      {failed ? "✗" : running ? "●" : completeMark} {verb}
+    <span class={running ? "st-cyan pulse" : failed ? "st-red" : completeClass}>
+      {running ? "●" : failed ? "✗" : completeMark} {verb}
     </span>
     <span class="activity-caption">{caption}</span>
     <span class="faint activity-count">· {tools.length} {tools.length === 1 ? "call" : "calls"}</span>
-    {#if failed}<span class={outcomeLabel ? (outcome?.className ?? "st-red") : "st-red"}>· {outcomeLabel || `${failed} failed`}</span>{:else if running}<span class="st-cyan">· {running} active</span>{:else if outcomeLabel}<span class={outcome?.className ?? "faint"}>· {outcomeLabel}</span>{:else}<span class="faint">· passed</span>{/if}
+    {#if running}<span class="st-cyan">· {running} active</span>{/if}
+    {#if failed}<span class={outcomeLabel ? (outcome?.className ?? "st-red") : "st-red"}>· {outcomeLabel || `${failed} failed`}</span>{:else if running}{:else if outcomeLabel}<span class={outcome?.className ?? "faint"}>· {outcomeLabel}</span>{:else}<span class="faint">· passed</span>{/if}
     {#if !singleton && imageOk}<span class="st-green">· {imageOk === 1 ? "image" : `${imageOk} images`} → context</span>{/if}
     {#if !singleton && commitOk}<span class="faint">· {commitOk} {commitOk === 1 ? "commit" : "commits"}</span>{/if}
   </button>
