@@ -64,8 +64,7 @@ html[data-theme="light"] {
    the default dark are lifted onto a soft cool slate so the high fg/near-black
    contrast stops glaring, while the accent identity is kept intact. Same hue
    family and ramp shape as dark, just a few stops brighter at the floor.
-   For the artifact-theming contract (files.ts &theme=, HtmlArtifact bootstrap)
-   dim collapses to `dark` — that channel stays binary (see DESIGN.md). */
+   Interactive reports receive this exact dim theme (see DESIGN.md). */
 html[data-theme="dim"] {
   --bg: #1b1f27;
   --bg1: #21262f;

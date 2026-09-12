@@ -412,10 +412,9 @@ export function closeSessionCtl(): void {
   app.sessionCtlAnchor = null;
 }
 
-/** Resolved app theme collapsed to the binary artifact-theming contract
- *  (dim → dark) for artifact URL/srcdoc consumers — see DESIGN.md. */
-export function currentResolvedTheme(): "dark" | "light" {
-  return app.resolvedTheme === "light" ? "light" : "dark";
+/** Preserve the exact resolved palette for interactive reports. */
+export function currentResolvedTheme(): "dark" | "dim" | "light" {
+  return app.resolvedTheme;
 }
 
 export async function copyText(text: string, what = "Copied"): Promise<void> {

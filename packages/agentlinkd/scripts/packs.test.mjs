@@ -402,7 +402,8 @@ test("host: catalog in hello_ok, /pack list, guard, profile switch, --pack reach
   const um = await c.wait((e) => e.session === id && e.event === "user_message", mark);
   assert.equal(um.data.text, "/pack run report summarise this", "journaled prompt keeps the /pack prefix for attribution");
   const done = await c.wait((e) => e.session === id && e.event === "text_block_complete", mark);
-  assert.match(done.data, /^fake summarise this \[pack=report\]/, "task alone on stdin; --pack report on argv");
+  assert.match(done.data, /^fake summarise this\n\n\[DextUI display\]/, "task plus compact UI capability context reaches stdin");
+  assert.match(done.data, /\[\/DextUI display\] \[pack=report\]/, "--pack report remains on argv");
   const view = await c.wait((e) => e.session === id && e.event === "runtime_view", mark);
   assert.equal(view.data.pack, "report");
   await c.wait((e) => e.session === id && e.event === "turn_end", mark);

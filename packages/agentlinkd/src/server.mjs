@@ -43,6 +43,7 @@ import { compileFlow, deleteFlow, flowRev, listFlows, readFlow, writeFlow } from
 import { createScheduler } from "./triggers.mjs";
 import { TASK_STATUSES, createTasksAdapter } from "./tasks.mjs";
 import { fetchToFile, receiveUpload, uploadDirFor } from "./uploads.mjs";
+import { withDisplayContext } from "./display-context.mjs";
 import { bridgeArgs, probeNdjsonSupport, spawnBridge, toBridgeChoice, toPermissionRequest } from "./bridge.mjs";
 
 const here = path.dirname(url.fileURLToPath(import.meta.url));
@@ -1428,7 +1429,7 @@ function runBridgedTurn(s, prompt) {
     // Ownership stamp: onExit only fails a turn whose bridge carried it.
     s.turnSeq = (s.turnSeq ?? 0) + 1;
     bridge.turnSeq = s.turnSeq;
-    if (!bridge.user(text)) throw new Error("dext stdin closed");
+    if (!bridge.user(withDisplayContext(text))) throw new Error("dext stdin closed");
   }).catch((err) => {
     if (s.deleted) return;
     publish(journalData(s, "error", String(err?.message ?? err)));
@@ -1518,7 +1519,7 @@ function runTurn(s, prompt) {
   // A failed spawn (ENOENT etc.) destroys stdin and emits an async stream
   // error; without a listener that unhandled error would crash the server.
   child.stdin.on("error", () => {});
-  child.stdin.write(stdinText);
+  child.stdin.write(withDisplayContext(stdinText));
   child.stdin.end();
 
   const handleLine = (line) => {

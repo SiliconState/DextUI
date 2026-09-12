@@ -206,6 +206,11 @@ echo "surfaces dark/dim: $BD / $BM; bar fill light/dark: $FL / $FD"
 [ "$FL" != "$FD" ] || { echo "FAIL: bar fill unchanged light→dark"; FAIL=1; }
 [ "$BD" != "$BM" ] || { echo "FAIL: dim surfaces identical to dark (dim not a distinct theme)"; FAIL=1; }
 
+note "interactive report receives the exact dim theme"
+agent-browser eval '[...document.querySelectorAll(`[data-agent-id="markdown.artifact.open"]`)].at(-1)?.click()' >/dev/null
+wait_js '(()=>{const src=document.querySelector(`[data-agent-id="artifact.frame"]`)?.srcdoc;return !!src && new DOMParser().parseFromString(src,"text/html").documentElement.dataset.theme === "dim"})()' || { echo "FAIL: report dim theme collapsed to dark"; FAIL=1; }
+agent-browser press Escape >/dev/null
+
 note "tool activity: structural work folds, Bash stays rich, every edit remains inspectable"
 agent-browser fill '[data-agent-id="composer.input"]' 'tool folding demo' >/dev/null
 agent-browser press Enter >/dev/null

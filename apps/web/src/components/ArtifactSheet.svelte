@@ -138,9 +138,10 @@
     const fullDocument = /<html[\s>]/i.test(source);
     const shell = fullDocument
       ? source
-      : `<!doctype html><html><head><style>body{margin:16px;font:13px/1.45 system-ui,sans-serif;color:light-dark(#242830,#c8cfd9);background:light-dark(#f4f2ec,#0b0d10)}</style></head><body>${source}</body></html>`;
+      : `<!doctype html><html><head><style>body{margin:16px;font:13px/1.45 system-ui,sans-serif;color:light-dark(#242830,#c8cfd9);background:light-dark(#f4f2ec,#0b0d10)}:root[data-theme=dim] body{color:#cdd4de;background:#1b1f27}</style></head><body>${source}</body></html>`;
     const parsed = new DOMParser().parseFromString(shell, "text/html");
     parsed.documentElement.dataset.theme = theme;
+    parsed.documentElement.style.colorScheme = theme === "light" ? "light" : "dark";
 
     const meta = parsed.createElement("meta");
     meta.httpEquiv = "Content-Security-Policy";

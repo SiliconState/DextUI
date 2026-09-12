@@ -73,16 +73,20 @@ Designed from the driver's seat: what makes a *driving* agent excellent cheaply?
 
 6. **Consumer packs, one folder.** The business packs (`packs/`) are Rust runtimes on a shared SDK (`dextui_pack_sdk`: protocol framing, money as cents, CSV, dates, confined paths, fences, live panels) that read each other's plain files in the user's folder — receipts feed reconciliation, cash flow and tax; invoices feed follow-ups and cash flow. The agent narrates and asks; the runtime owns every number. Flows chain the packs; triggers start flows; crew executes. Nothing new thinks.
 
+## DextUI display capability
+
+The host appends DextUI-specific display context to agent turns (including resumed sessions and pack tasks), without altering the user's UI journal or replacing core system policies. Dashboards, built webpages, interactive visualizations and HTML reports should be delivered as self-contained workspace HTML with `[Title](relative/path.html)`, or small fenced HTML/SVG displays. These open in the native report viewer; no report pack or preview server is required. This is presentation guidance, not a new core tool. Native slash controls are left intact. External websites remain ordinary links, and server-dependent applications need a self-contained preview rather than a claim of full sandbox compatibility.
+
 ## Artifact theming contract
 
 HTML artifacts render in opaque-origin sandboxed iframes — they cannot see the app's DOM, storage, token, or theme toggle. The trusted parent fetches file artifacts with an Authorization header, inlines bounded same-session image dependencies as data URLs, then supplies token-free `srcdoc`. Embeds track the app theme through two deliberate channels:
 
 1. **`color-scheme` inheritance (zero-JS path).** Artifact iframes inherit `color-scheme` from the app root, so a document styled with a `@media (prefers-color-scheme: dark)` block follows the app toggle in Chromium — no script needed. Every srcdoc document already gets `<meta name="color-scheme" content="light dark">` injected.
-2. **`data-theme` (exact path).** The artifact sheet sets the app's resolved `dark|light` value directly on the srcdoc document root (the dark-family "dim" theme collapses to `dark`). Documents wanting pixel-exact sync style `:root[data-theme="dark"]`; no URL value is reflected into the DOM.
+2. **`data-theme` (exact path).** The artifact sheet sets the app's resolved `dark|dim|light` value directly on the srcdoc document root. Documents wanting pixel-exact sync style `:root[data-theme="dark"]`; no URL value is reflected into the DOM.
 
 Producers: `ArtifactSheet.svelte` applies `data-theme`, remounts the token-free srcdoc on theme changes, and retains the raw source for code/download actions. `HtmlArtifact.svelte` is the durable chat-side launcher; interactive HTML itself lives only in the wide sheet rather than competing with the transcript. Pack panels (`PackSheet`) are out of scope. Downloaded standalone documents fall back to their authored/OS theme.
 
-Agents authoring workspace `.html` artifacts SHOULD follow this contract: self-contained output; light default mirroring the app's paper palette (`#f4f2ec` body, `#ffffff` panels, `#ebe9e1` boxes, `#d4d0c2` lines, `#242830` foreground); dark styles keyed to `:root[data-theme="dark"]` and/or `prefers-color-scheme`; `<meta name="color-scheme" content="light dark">`. Small relative image dependencies are supported, but inline SVG/data assets are preferred.
+Agents authoring workspace `.html` artifacts SHOULD follow this contract: self-contained output; light default mirroring the app's paper palette (`#f4f2ec` body, `#ffffff` panels, `#ebe9e1` boxes, `#d4d0c2` lines, `#242830` foreground); dark and dim styles keyed to `:root[data-theme="dark"]` and `:root[data-theme="dim"]` (dim background `#1b1f27`, panels `#21262f`, text `#cdd4de`), with `prefers-color-scheme` as a standalone fallback; preserve the injected initial theme in report scripts; `<meta name="color-scheme" content="light dark">`. Small relative image dependencies are supported, but inline SVG/data assets are preferred.
 
 ## Repo map
 
