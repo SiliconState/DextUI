@@ -456,7 +456,7 @@ const MD_DEMO = process.env.MOCK_MARKDOWN_FILE ? fs.readFileSync(process.env.MOC
 Structured agent output renders as **real HTML**, not wrapped monospace:
 
 \`\`\`html
-<!doctype html><html><body><h2>Interactive report demo</h2><label>Load <input type="range" min="1" max="10" value="4"></label><p>This report runs in the sandboxed artifact sheet.</p></body></html>
+<!doctype html><html><body><h2>Interactive report demo</h2><label>Load <input type="range" min="1" max="10" value="4"></label><p>This report runs in the sandboxed artifact sheet.</p><script>document.documentElement.dataset.theme=matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light';addEventListener('message',e=>{if(e.source===parent&&['light','dark','dim'].includes(e.data?.theme)){document.documentElement.dataset.theme=e.data.theme;parent.postMessage({reportTheme:document.documentElement.dataset.theme},'*')}});</script></body></html>
 \`\`\`
 
 | Option | Cost | Risk | Verdict |

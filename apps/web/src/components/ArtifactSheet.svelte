@@ -220,7 +220,7 @@
       {:else}
         <div class="report" class:hidden={mode === "code"}>
           {#key `${artifact.revision}\u001f${currentResolvedTheme()}`}
-            <iframe bind:this={frame} sandbox="allow-scripts" title={item.name} srcdoc={doc} data-agent-id="artifact.frame"></iframe>
+            <iframe bind:this={frame} sandbox="allow-scripts" title={item.name} srcdoc={doc} onload={() => frame?.contentWindow?.postMessage({ theme: currentResolvedTheme() }, "*")} data-agent-id="artifact.frame"></iframe>
           {/key}
         </div>
         {#if mode === "code"}<pre data-agent-id="artifact.source">{codeText}</pre>{/if}
