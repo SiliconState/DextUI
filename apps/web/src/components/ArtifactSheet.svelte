@@ -3,7 +3,8 @@
   // fetched by the trusted parent, then rendered as srcdoc: the sandbox never
   // receives the bearer query string. Chat keeps only its compact launcher.
   import { boundedResponseBlob, boundedResponseText } from "../lib/files";
-  import { currentResolvedTheme } from "../lib/state.svelte";
+  import { ARTIFACT_STATE_MAX, artifactStateName, validateArtifactState, validateStateReceipt } from "../lib/artifact-state";
+  import { app, currentResolvedTheme } from "../lib/state.svelte";
   import { artifact, closeArtifact } from "../lib/artifact.svelte";
   import { useDialog } from "../lib/dialog.svelte";
 
@@ -16,6 +17,95 @@
   let frame = $state<HTMLIFrameElement | null>(null);
 
   const item = $derived(artifact.document);
+  let saveRequest = $state("");
+  let pendingState = $state<string | null>(null);
+  let saveBusy = $state(false);
+  let saveNotice = $state("");
+  let restoreBusy = $state(false);
+  let restoreInput = $state<HTMLInputElement | undefined>();
+  let requestTimer: ReturnType<typeof setTimeout> | undefined;
+  let viewGeneration = 0;
+  let requestDeadline = 0;
+  let showFullState = $state(false);
+  const canSave = $derived(!!item?.sessionId && app.caps.includes("files_write"));
+
+  $effect(() => {
+    artifact.revision;
+    currentResolvedTheme();
+    frame;
+    viewGeneration++;
+    showFullState = false;
+    saveRequest = "";
+    pendingState = null;
+    saveNotice = "";
+    clearTimeout(requestTimer);
+    return () => clearTimeout(requestTimer);
+  });
+
+  function requestState() {
+    if (!frame?.contentWindow || !canSave || saveBusy || restoreBusy || reportLoading || reportFailed || saveRequest || pendingState !== null) return;
+    const requestId = crypto.randomUUID();
+    saveRequest = requestId;
+    requestDeadline = Date.now() + 5000;
+    pendingState = null;
+    saveNotice = "Waiting for report state…";
+    frame.contentWindow.postMessage({ dextArtifact: "state.request", requestId }, "*");
+    requestTimer = setTimeout(() => {
+      if (saveRequest !== requestId) return;
+      saveRequest = "";
+      saveNotice = "Report did not provide state. It must support state.request.";
+    }, 5000);
+  }
+
+  async function saveState() {
+    const current = item;
+    const text = pendingState;
+    if (!current?.sessionId || !canSave || text === null || saveBusy) {
+      saveNotice = "Cannot save: session or pending state unavailable.";
+      return;
+    }
+    const revision = artifact.revision;
+    const generation = viewGeneration;
+    saveBusy = true;
+    const ctl = new AbortController();
+    const deadline = setTimeout(() => ctl.abort(), 15000);
+    try {
+      const res = await fetch(`/sessions/${encodeURIComponent(current.sessionId)}/upload?name=${encodeURIComponent(artifactStateName(current.name))}`, {
+        method: "POST", headers: { ...authHeaders(), "content-type": "application/json" }, body: text, signal: ctl.signal,
+      });
+      const out = JSON.parse(await boundedResponseText(res, 8192));
+      if (!res.ok) throw new Error(out.message || "Could not save state.");
+      const savedPath = validateStateReceipt(out, new TextEncoder().encode(text).length);
+      if (artifact.revision === revision && viewGeneration === generation) {
+        pendingState = null;
+        saveNotice = `Saved ${savedPath}`;
+      }
+    } catch (e) {
+      if (artifact.revision === revision && viewGeneration === generation) saveNotice = ctl.signal.aborted
+        ? "Save timed out; it may have reached disk. Check uploads before retrying."
+        : `Save not confirmed: ${e instanceof Error ? e.message : "request failed"}. Snapshot retained for retry.`;
+    } finally { clearTimeout(deadline); saveBusy = false; }
+  }
+
+  async function restoreState(e: Event) {
+    const input = e.currentTarget as HTMLInputElement;
+    const file = input.files?.[0];
+    input.value = "";
+    if (!file || restoreBusy || saveBusy || saveRequest || pendingState !== null || reportLoading || reportFailed) return;
+    const target = frame;
+    if (!target?.contentWindow) return;
+    const revision = artifact.revision;
+    const generation = viewGeneration;
+    restoreBusy = true;
+    try {
+      if (file.size > ARTIFACT_STATE_MAX) throw new Error("State exceeds 1 MiB.");
+      const json = validateArtifactState(await file.text());
+      if (artifact.revision !== revision || viewGeneration !== generation || frame !== target) return;
+      target.contentWindow?.postMessage({ dextArtifact: "state.restore", json }, "*");
+      saveNotice = "State sent to report; restoration requires report support.";
+    } catch (e) { if (artifact.revision === revision && viewGeneration === generation && frame === target) saveNotice = e instanceof Error ? e.message : "Invalid state."; }
+    finally { restoreBusy = false; }
+  }
   const source = $derived(item?.html ?? reportHtml);
   const codeText = $derived(item?.code ?? item?.html ?? reportSource);
 
@@ -173,7 +263,20 @@
     const el = frame;
     if (!el) return;
     const onMessage = (e: MessageEvent) => {
-      if (e.source === el.contentWindow && e.data?.dextArtifact === "close") closeArtifact();
+      if (frame !== el || e.source !== el.contentWindow) return;
+      if (e.data?.dextArtifact === "close") closeArtifact();
+      if (e.data?.dextArtifact !== "state.response" || !saveRequest || e.data.requestId !== saveRequest) return;
+      saveRequest = "";
+      clearTimeout(requestTimer);
+      if (Date.now() > requestDeadline) {
+        saveNotice = "Report state arrived too late. Request a fresh snapshot.";
+        return;
+      }
+      showFullState = false;
+      try {
+        pendingState = validateArtifactState(e.data.json);
+        saveNotice = "Review this data before saving. Only save state from reports you trust.";
+      } catch { saveNotice = "Invalid report state: JSON object/array required, maximum 1 MiB."; }
     };
     addEventListener("message", onMessage);
     return () => removeEventListener("message", onMessage);
@@ -209,9 +312,24 @@
         <button class="act" class:on={mode === "report"} data-agent-id="artifact.report" onclick={() => (mode = "report")}>Report</button>
         <button class="act" class:on={mode === "code"} data-agent-id="artifact.code" disabled={reportLoading || reportFailed} onclick={() => (mode = "code")}>Code</button>
         <button class="act" data-agent-id="artifact.download" disabled={reportLoading || reportFailed} onclick={downloadCopy}>Download</button>
+        <button class="act" data-agent-id="artifact.state.request" disabled={!canSave || reportLoading || reportFailed || saveBusy || restoreBusy || !!saveRequest || pendingState !== null} onclick={requestState}>Save state</button>
+        <button class="act" disabled={reportLoading || reportFailed || saveBusy || restoreBusy || !!saveRequest || pendingState !== null} onclick={() => restoreInput?.click()}>Restore state</button>
+        <input hidden bind:this={restoreInput} data-agent-id="artifact.state.file" type="file" accept=".json,application/json" onchange={restoreState} />
         <button class="act" data-agent-id="artifact.close" data-dialog-initial onclick={closeArtifact}>esc</button>
       </span>
     </header>
+    {#if saveNotice || saveBusy || pendingState !== null}
+      <section class="save-state" aria-live="polite" data-agent-id="artifact.state.status">
+        <span>{saveBusy ? "Saving…" : saveNotice}</span>
+        {#if pendingState !== null}
+          <p>New file: uploads/{artifactStateName(item.name)} · {new TextEncoder().encode(pendingState).length} bytes. Never overwrites existing files.</p>
+          <pre>{showFullState ? pendingState : pendingState.slice(0, 2000)}{!showFullState && pendingState.length > 2000 ? "\n… preview truncated" : ""}</pre>
+          {#if pendingState.length > 2000}<button class="act" onclick={() => (showFullState = !showFullState)}>{showFullState ? "Short preview" : "Review full JSON"}</button>{/if}
+          <button class="act" data-agent-id="artifact.state.confirm" disabled={saveBusy} onclick={saveState}>Save JSON to workspace</button>
+          <button class="act" disabled={saveBusy} onclick={() => { pendingState = null; saveNotice = "Save cancelled."; }}>Cancel</button>
+        {/if}
+      </section>
+    {/if}
     <div class="body">
       {#if reportLoading}
         <p class="state dim pulse" data-agent-id="artifact.loading">Loading report…</p>
@@ -230,6 +348,9 @@
 {/if}
 
 <style>
+  .save-state { flex: none; max-height: 40vh; overflow: auto; padding: 10px 16px; border-bottom: 1px solid var(--line); font-size: 12px; }
+  .save-state pre { margin: 8px 0; padding: 8px; max-height: 100px; height: auto; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .save-state .act { margin-right: 16px; }
   .artifact-sheet {
     width: min(76rem, 96vw);
   }
@@ -244,6 +365,7 @@
     gap: 12px;
     align-items: baseline;
     flex: none;
+    flex-wrap: wrap;
   }
   .act.on {
     color: var(--fg);
@@ -273,7 +395,7 @@
   .state {
     padding: 16px;
   }
-  pre {
+  .body > pre {
     width: 100%;
     height: 100%;
     overflow: auto;

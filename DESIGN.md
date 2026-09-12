@@ -77,6 +77,31 @@ Designed from the driver's seat: what makes a *driving* agent excellent cheaply?
 
 The host appends DextUI-specific display context to agent turns (including resumed sessions and pack tasks), without altering the user's UI journal or replacing core system policies. Dashboards, built webpages, interactive visualizations and HTML reports should be delivered as self-contained workspace HTML with `[Title](relative/path.html)`, or small fenced HTML/SVG displays. These open in the native report viewer; no report pack or preview server is required. This is presentation guidance, not a new core tool. Native slash controls are left intact. External websites remain ordinary links, and server-dependent applications need a self-contained preview rather than a claim of full sandbox compatibility.
 
+## Lightweight technical displays and state
+
+SVG is the preferred 2D plan/molecule format; use mesh previews (STL/OBJ converted offline or embedded mesh data) for 3D rather than shipping a CAD kernel. Native STEP/BIM editing is not provided. WebGL 1 and 2 were verified in an opaque allow-scripts iframe under the viewer CSP by drawing a triangle and checking pixels; the test used SwiftShader software rendering, not hardware GPU verification. Render on interaction, cap mesh complexity/pixel ratio, and dispose GPU resources when done. No new rendering dependency is shipped.
+
+Report state is explicit, data-only persistence: click **Save state** in trusted viewer chrome, review the JSON, then confirm a new `uploads/<report>.state.json` file. The existing authenticated upload endpoint confines paths and suffixes collisions, never overwriting. Reports cannot pick destinations, obtain tokens, or trigger writes themselves. One outstanding request, a five-second response deadline, matching iframe source/request ID, and a 1 MiB UTF-8 JSON object/array limit bound accepted state. Uploads have a 15-second deadline and bounded receipts checked for snapshot path and exact byte count; unsuccessful saves retain the reviewed snapshot for retry. The preview can expand to show the complete bounded JSON. A timeout does not prove the file was not written, so check uploads before retrying. Restore is pinned to the selected report, iframe and theme across asynchronous file reads; simultaneous save/restore operations are refused. PostMessage still incurs browser structured-clone costs before validation; this is not a CPU/memory isolation boundary for hostile scripts. Reports remain untrusted data, including text inside saved JSON.
+
+Minimal report integration (register after initialization):
+
+```js
+addEventListener('message', e => {
+  if (e.source !== parent) return;
+  const m = e.data;
+  if (m?.dextArtifact === 'state.request') {
+    parent.postMessage({ dextArtifact: 'state.response', requestId: m.requestId,
+      json: JSON.stringify({ version: 1, ...editableState }) }, '*');
+  }
+  if (m?.dextArtifact === 'state.restore') {
+    // Validate your own schema; never eval state or insert it as HTML.
+    restoreValidatedState(JSON.parse(m.json));
+  }
+});
+```
+
+**Restore state** lets the user explicitly choose a local JSON snapshot; only that file is sent to the current iframe. No automatic filesystem reads, database, polling, or autosave. For future agent edits, the saved JSON is a normal workspace file. Browser storage is not durable in this opaque sandbox. Reports must opt into the contract; old reports do not automatically become editors.
+
 ## Artifact theming contract
 
 HTML artifacts render in opaque-origin sandboxed iframes — they cannot see the app's DOM, storage, token, or theme toggle. The trusted parent fetches file artifacts with an Authorization header, inlines bounded same-session image dependencies as data URLs, then supplies token-free `srcdoc`. Embeds track the app theme through two deliberate channels:

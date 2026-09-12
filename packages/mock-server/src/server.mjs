@@ -456,7 +456,7 @@ const MD_DEMO = process.env.MOCK_MARKDOWN_FILE ? fs.readFileSync(process.env.MOC
 Structured agent output renders as **real HTML**, not wrapped monospace:
 
 \`\`\`html
-<!doctype html><html><body><h2>Interactive report demo</h2><label>Load <input type="range" min="1" max="10" value="4"></label><p>This report runs in the sandboxed artifact sheet.</p><script>document.documentElement.dataset.theme=matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light';addEventListener('message',e=>{if(e.source===parent&&['light','dark','dim'].includes(e.data?.theme)){document.documentElement.dataset.theme=e.data.theme;parent.postMessage({reportTheme:document.documentElement.dataset.theme},'*')}});</script></body></html>
+<!doctype html><html><body><h2>Interactive report demo</h2><label>Load <input type="range" min="1" max="10" value="4"></label><p>This report runs in the sandboxed artifact sheet.</p><script>addEventListener('message',e=>{if(e.source===parent&&e.data?.dextArtifact==='state.restore'){const s=JSON.parse(e.data.json);if(s.version===1&&typeof s.load==='string')document.querySelector('input').value=s.load}if(e.source===parent&&e.data?.dextArtifact==='state.request')parent.postMessage({dextArtifact:'state.response',requestId:e.data.requestId,json:JSON.stringify({version:1,load:document.querySelector('input').value})},'*')});document.documentElement.dataset.theme=matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light';addEventListener('message',e=>{if(e.source===parent&&['light','dark','dim'].includes(e.data?.theme)){document.documentElement.dataset.theme=e.data.theme;parent.postMessage({reportTheme:document.documentElement.dataset.theme},'*')}});</script></body></html>
 \`\`\`
 
 | Option | Cost | Risk | Verdict |

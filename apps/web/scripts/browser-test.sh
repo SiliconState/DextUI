@@ -209,6 +209,29 @@ echo "surfaces dark/dim: $BD / $BM; bar fill light/dark: $FL / $FD"
 note "interactive report receives the exact dim theme after startup scripts"
 agent-browser eval 'window.__reportTheme=null;window.addEventListener("message",e=>{if(e.source===document.querySelector(`[data-agent-id="artifact.frame"]`)?.contentWindow&&e.data?.reportTheme)window.__reportTheme=e.data.reportTheme});document.querySelector(`[data-agent-id="markdown.artifact.open"]`)?.click()' >/dev/null
 wait_js 'window.__reportTheme === "dim"' || { echo "FAIL: report startup overrode dim theme"; FAIL=1; }
+note "report state requires a user request and confirmation"
+agent-browser eval 'window.postMessage({dextArtifact:"state.response",requestId:"unsolicited",json:"{}"},"*")' >/dev/null
+wait_js '!document.querySelector(`[data-agent-id="artifact.state.confirm"]`)' || { echo "FAIL: unsolicited state accepted"; FAIL=1; }
+agent-browser click '[data-agent-id="artifact.state.request"]' >/dev/null
+wait_js '!!document.querySelector(`[data-agent-id="artifact.state.confirm"]`) && document.querySelector(`[data-agent-id="artifact.state.status"]`)?.textContent.includes("version")' || { echo "FAIL: state confirmation missing"; FAIL=1; }
+# Allow the newly inserted confirmation panel to settle before hit-testing.
+agent-browser wait 500 >/dev/null
+agent-browser eval 'window.__stateFetch=window.fetch;window.fetch=(url,opts)=>String(url).includes("/upload?")?Promise.resolve(new Response(JSON.stringify({message:"simulated upload failure"}),{status:503,headers:{"content-type":"application/json"}})):window.__stateFetch(url,opts)' >/dev/null
+agent-browser click '[data-agent-id="artifact.state.confirm"]' >/dev/null
+wait_js 'document.querySelector(`[data-agent-id="artifact.state.status"]`)?.textContent.includes("Snapshot retained for retry") && !!document.querySelector(`[data-agent-id="artifact.state.confirm"]`)' || { echo "FAIL: failed save lost snapshot"; FAIL=1; }
+agent-browser eval 'window.fetch=window.__stateFetch;delete window.__stateFetch' >/dev/null
+agent-browser wait 500 >/dev/null
+agent-browser click '[data-agent-id="artifact.state.confirm"]' >/dev/null
+wait_js 'document.querySelector(`[data-agent-id="artifact.state.status"]`)?.textContent.includes("Saved uploads/")' || { echo "FAIL: state not saved"; agent-browser eval 'document.querySelector(`[data-agent-id="artifact.state.status"]`)?.textContent'; FAIL=1; }
+agent-browser press Escape >/dev/null
+
+note "saved JSON restores into the report and survives another snapshot"
+agent-browser eval 'document.querySelector(`[data-agent-id="markdown.artifact.open"]`)?.click()' >/dev/null
+wait_js '!!document.querySelector(`[data-agent-id="artifact.frame"]`)' || exit 1
+agent-browser eval '(()=>{const input=document.querySelector(`[data-agent-id="artifact.state.file"]`);const dt=new DataTransfer();dt.items.add(new File([JSON.stringify({version:1,load:"8"})],"restored.json",{type:"application/json"}));input.files=dt.files;input.dispatchEvent(new Event("change",{bubbles:true}))})()' >/dev/null
+wait_js 'document.querySelector(`[data-agent-id="artifact.state.status"]`)?.textContent.includes("State sent")' || { echo "FAIL: restore not delivered"; FAIL=1; }
+agent-browser click '[data-agent-id="artifact.state.request"]' >/dev/null
+wait_js 'document.querySelector(`[data-agent-id="artifact.state.status"] pre`)?.textContent.includes(`"load":"8"`)' || { echo "FAIL: restored state did not round-trip"; FAIL=1; }
 agent-browser press Escape >/dev/null
 
 note "tool activity: structural work folds, Bash stays rich, every edit remains inspectable"
