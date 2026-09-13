@@ -1,6 +1,6 @@
 // App-level reactive state bridging the framework-free Connection into Svelte 5 runes.
 
-import { Connection, type ConnPhase, type PendingPermission } from "@dextui/client";
+import { Connection, type ConnPhase, type PendingPackUi, type PendingPermission } from "@dextui/client";
 import type { Envelope, HostCommand, ModelGroup, PackInfo, SessionMeta, ThinkingEffort } from "@dextui/protocol";
 import { notifyEvent } from "./notify";
 import { acceptCrews, crewEscalations, onCrewControl, openRun } from "./crew.svelte";
@@ -131,11 +131,10 @@ export function packOfPrompt(text: string): string | null {
 
 // ---------- global action queue ----------
 //
-// Every pending permission across ALL sessions of the current connection:
+// Every pending human decision across ALL sessions of the current connection:
 // full entries from subscribed stores, count-only rows from SessionMeta for
 // sessions whose snapshot is still in flight (or hosts without the events).
-// Rebuilt from the onEvent tap (permission.request/resolved/timeout,
-// session.snapshot) and onSessionList — never polled.
+// Rebuilt from permission/form events and session snapshots — never polled.
 
 export interface QueueEntry {
   sessionId: string;
@@ -147,8 +146,13 @@ export interface QueueCount {
   title: string;
   count: number;
 }
+export interface UiQueueEntry {
+  sessionId: string;
+  sessionTitle: string;
+  pending: PendingPackUi;
+}
 
-export const queue = $state({ entries: [] as QueueEntry[], counts: [] as QueueCount[] });
+export const queue = $state({ entries: [] as QueueEntry[], uiEntries: [] as UiQueueEntry[], counts: [] as QueueCount[] });
 
 /** Sessions subscribed to only because they had pending approvals. */
 const autoSubscribed = new Set<string>();
@@ -160,39 +164,45 @@ const hydrating = new Set<string>();
 /** Decisions only: pending permissions plus open crew escalations. Run
  *  failures are observation and never count (title badge, rail badge). */
 export function queueTotal(): number {
-  return queue.entries.length + queue.counts.reduce((n, s) => n + s.count, 0) + crewEscalations().length;
+  return queue.entries.length + queue.uiEntries.length + queue.counts.reduce((n, s) => n + s.count, 0) + crewEscalations().length;
 }
 
 function rebuildQueue(): void {
   const c = app.conn;
   if (!c) {
     queue.entries = [];
+    queue.uiEntries = [];
     queue.counts = [];
     return;
   }
   const titleOf = (id: string): string =>
     app.sessions.find((s) => s.id === id)?.title ?? c.session(id).state.title ?? id;
   const entries: QueueEntry[] = [];
+  const uiEntries: UiQueueEntry[] = [];
   for (const id of c.subscribed) {
-    for (const p of c.session(id).state.pending.values()) {
+    const state = c.session(id).state;
+    for (const p of state.pending.values()) {
       entries.push({ sessionId: id, sessionTitle: titleOf(id), pending: p });
     }
+    if (state.pendingUi) uiEntries.push({ sessionId: id, sessionTitle: titleOf(id), pending: state.pendingUi });
   }
-  // Oldest first for global approval keys/navigation. Count-only rows cannot be
-  // ordered honestly and always sort after real entries.
+  // Oldest first within each decision kind; the rail renders forms before tool
+  // approvals because forms block an active pack runtime without shortcuts.
   entries.sort((a, b) => a.pending.received_at - b.pending.received_at);
-  const withEntries = new Set(entries.map((e) => e.sessionId));
+  uiEntries.sort((a, b) => a.pending.received_at - b.pending.received_at);
+  const withEntries = new Set([...entries.map((e) => e.sessionId), ...uiEntries.map((e) => e.sessionId)]);
   queue.counts = app.sessions
-    .filter((s) => s.pending_permissions > 0 && !withEntries.has(s.id))
-    .map((s) => ({ id: s.id, title: s.title, count: s.pending_permissions }));
+    .map((s) => ({ id: s.id, title: s.title, count: s.pending_permissions + (s.pending_ui_requests ?? 0) }))
+    .filter((s) => s.count > 0 && !withEntries.has(s.id));
   queue.entries = entries;
+  queue.uiEntries = uiEntries;
   // Detach mirror: an auto-subscribed session that went quiet and is not the
   // active one drops off the live tail again (same policy as activate()).
   // Sessions still waiting for their snapshot/replay are left alone.
   for (const id of [...autoSubscribed]) {
     if (id === app.activeId || hydrating.has(id)) continue;
     const st = c.session(id).state;
-    if (st.pending.size === 0 && !st.working && !st.compacting) {
+    if (st.pending.size === 0 && !st.pendingUi && !st.working && !st.compacting) {
       c.unsubscribe(id);
       autoSubscribed.delete(id);
     }
@@ -467,6 +477,7 @@ export function start(token: string): void {
   // Retire any previous connection; its late callbacks must not clobber the new one.
   app.conn?.close();
   queue.entries = [];
+  queue.uiEntries = [];
   queue.counts = [];
   autoSubscribed.clear();
   hydrating.clear();
@@ -486,6 +497,7 @@ export function start(token: string): void {
         app.effortOptions = [];
         app.commands = [];
         queue.entries = [];
+        queue.uiEntries = [];
         queue.counts = [];
         autoSubscribed.clear();
         hydrating.clear();
@@ -536,6 +548,7 @@ export function start(token: string): void {
       // Stores were dropped; force every `c.session(id)` lookup to re-resolve.
       app.hostEpoch++;
       queue.entries = [];
+      queue.uiEntries = [];
       queue.counts = [];
       autoSubscribed.clear();
       hydrating.clear();
@@ -563,7 +576,7 @@ export function start(token: string): void {
       if (app.conn !== c) return;
       purgeLocalSession(id);
       localStorage.setItem(`dextui.generation.${id}`, String(generation));
-      app.sessions = app.sessions.map((s) => s.id === id ? { ...s, generation, pending_permissions: 0, last_seq: 0, model_locked: false } : s);
+      app.sessions = app.sessions.map((s) => s.id === id ? { ...s, generation, pending_permissions: 0, pending_ui_requests: 0, last_seq: 0, model_locked: false } : s);
       app.hostEpoch++;
       if (app.sessionAction && "id" in app.sessionAction && app.sessionAction.id === id) finishSessionAction();
       rebuildQueue();
@@ -632,7 +645,7 @@ export function start(token: string): void {
       // Subscribe only — never openSession/activate: spawning agents is not
       // our call.
       for (const s of sessions) {
-        if (s.pending_permissions > 0 && !c.subscribed.has(s.id)) {
+        if ((s.pending_permissions > 0 || (s.pending_ui_requests ?? 0) > 0) && !c.subscribed.has(s.id)) {
           autoSubscribed.add(s.id);
           hydrating.add(s.id);
           c.subscribe(s.id);
@@ -738,6 +751,9 @@ export function start(token: string): void {
         case "permission.request":
         case "permission.resolved":
         case "permission.timeout":
+        case "ui.request":
+        case "ui.resolved":
+        case "ui.response_failed":
         case "session.snapshot":
           rebuildQueue();
           break;
@@ -757,6 +773,14 @@ export function start(token: string): void {
     onConnectorsControl(env);
     onFlowsControl(env);
     onTasksControl(env);
+    if (env.event === "ui.response_pending") {
+      const d = env.data as { session?: string; request_id?: string } | undefined;
+      if (d?.session === app.activeId) pushToast("info", "Another client is already sending an answer for this form");
+    }
+    if (env.event === "ui.already_resolved") {
+      const d = env.data as { session?: string; request_id?: string } | undefined;
+      if (d?.session === app.activeId) pushToast("info", "This form was already answered");
+    }
     if (env.event === "sessions.deleted") {
       const d = env.data as { ids: string[] };
       finishSessionAction();
@@ -781,7 +805,7 @@ export function activate(id: string): void {
   if (!c) return;
   if (prev && prev !== id && c.subscribed.has(prev)) {
     const ps = c.session(prev).state;
-    if (!ps.working && !ps.compacting && ps.pending.size === 0) c.unsubscribe(prev);
+    if (!ps.working && !ps.compacting && ps.pending.size === 0 && !ps.pendingUi) c.unsubscribe(prev);
   }
   const meta = app.sessions.find((s) => s.id === id);
   if (meta && meta.status === "cold") c.openSession({ id });
@@ -817,12 +841,15 @@ export function respondGlobal(
 }
 
 /** Badge / notification-click target: open the session holding the oldest
- *  pending approval (a count-only session when nothing fuller exists), else
- *  the run sheet of the first crew escalation. */
+ * known pending form or approval (a count-only session when nothing fuller
+ * exists), else the run sheet of the first crew escalation. */
 export function jumpToOldestPending(): void {
-  const first = queue.entries[0];
-  if (first) {
-    activate(first.sessionId);
+  const form = queue.uiEntries[0];
+  const permission = queue.entries[0];
+  const oldest = !form ? permission : !permission ? form
+    : form.pending.received_at <= permission.pending.received_at ? form : permission;
+  if (oldest) {
+    activate(oldest.sessionId);
     return;
   }
   const count = queue.counts[0];

@@ -6,13 +6,14 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { bridgeArgs, probeNdjsonSupport, spawnBridge, toBridgeChoice, toPermissionRequest } from "../src/bridge.mjs";
+import { bridgeArgs, probeNdjsonSupport, probePackUiSupport, spawnBridge, supportsPackUi, toBridgeChoice, toPermissionRequest } from "../src/bridge.mjs";
+import { normalizeUiRequest, validUiResponse } from "../src/pack-ui.mjs";
 
 const FAKE = `
 const lines = [];
 let buf = "";
 const out = (o) => process.stdout.write(JSON.stringify(o) + "\\n");
-out({ event: "ready", data: { input: "ndjson", session_id: "sid-1", model: "m", provider: "p" } });
+out({ event: "ready", data: { input: "ndjson", session_id: "sid-1", model: "m", provider: "p", ui_protocol: 1, frames: ["ui.capabilities", "ui.response"] } });
 process.stdin.on("data", (d) => {
   buf += d;
   let i;
@@ -57,6 +58,37 @@ test("probeNdjsonSupport keys off `--input ndjson` in --help", () => {
   assert.equal(probeNdjsonSupport(() => ""), false);
 });
 
+test("pack UI support is probed independently from generic NDJSON", () => {
+  assert.equal(probePackUiSupport(() => "--input ndjson ui.capabilities ui.response ui.request"), true);
+  assert.equal(probePackUiSupport(() => "--input ndjson"), false);
+});
+
+test("pack UI support is negotiated from ready", () => {
+  assert.equal(supportsPackUi({ ui_protocol: 1, frames: ["ui.capabilities", "ui.response"] }), true);
+  assert.equal(supportsPackUi({ ui_protocol: 1, frames: ["ui.response"] }), false);
+  assert.equal(supportsPackUi({ frames: ["ui.capabilities", "ui.response"] }), false);
+});
+
+test("pack UI requests and responses are bounded to the baseline schema", () => {
+  const form = normalizeUiRequest({
+    id: "ui-1", pack: "demo", request_id: "profile", method: "form",
+    params: { title: "Profile", fields: [
+      { id: "name", label: "Name", type: "text", required: true },
+      { id: "color", label: "Color", type: "select", options: ["blue", { value: 2, label: "Two" }] },
+    ] },
+  });
+  assert.equal(form.request.method, "form");
+  assert.deepEqual(form.request.params.fields[1].options, [{ value: "blue", label: "blue" }, { value: 2, label: "Two" }]);
+  assert.match(normalizeUiRequest({ id: "bad id", pack: "demo", request_id: "x", method: "form", params: { fields: [] } }).error, /transport/);
+  assert.match(normalizeUiRequest({ id: "bad:id", pack: "demo", request_id: "x", method: "form", params: { fields: [] } }).error, /transport/);
+  assert.match(normalizeUiRequest({ id: "ui-2", pack: "demo", request_id: "x", method: "form", params: { fields: [{ id: "x", label: "X", type: "select" }] } }).error, /form params/);
+  assert.match(normalizeUiRequest({ id: "ui-2", pack: "demo", request_id: "x", method: "form", params: { fields: [{ id: "x", label: "X", type: "boolean", default: "yes" }] } }).error, /form params/);
+  assert.deepEqual(validUiResponse({ status: "ok" }), { status: "ok" });
+  assert.deepEqual(validUiResponse({ status: "cancelled", value: "ignored" }), { status: "cancelled" });
+  assert.equal(validUiResponse({ status: "ok", value: "bad\u007fcontrol" }), null);
+  assert.equal(validUiResponse({ status: "ok", value: "x".repeat(70 * 1024) }), null);
+});
+
 test("choice + permission mapping", () => {
   assert.equal(toBridgeChoice("allow"), "once");
   assert.equal(toBridgeChoice("allow_always"), "always");
@@ -82,6 +114,10 @@ test("spawnBridge: ready, frames, permission round-trip, close", async () => {
   });
   const ready = await b.whenReady();
   assert.equal(ready.session_id, "sid-1");
+  assert.ok(b.uiCapabilities(["form", "progress"]));
+  assert.ok(b.uiResponse("ui-1", { status: "ok", value: { name: "Ada" } }, "answer-1"));
+  assert.ok(b.uiResponse("ui-2", { status: "cancelled" }));
+  assert.ok(b.uiResponse("ui-3", { status: "error", code: "host_error", message: "unavailable" }));
   assert.ok(b.user("hello", 1));
   const wait = (pred, ms = 3000) => new Promise((res, rej) => {
     const t0 = Date.now();
@@ -97,7 +133,7 @@ test("spawnBridge: ready, frames, permission round-trip, close", async () => {
   assert.equal(resolved.data.choice, "once");
   await wait((e) => e.event === "turn_end");
   const acks = events.filter((e) => e.event === "input_ack").map((e) => e.data.type);
-  assert.deepEqual(acks, ["user", "permission"]);
+  assert.deepEqual(acks, ["ui.capabilities", "ui.response", "ui.response", "ui.response", "user", "permission"]);
   b.close();
   await new Promise((r) => setTimeout(r, 300));
   assert.equal(b.exited, true);

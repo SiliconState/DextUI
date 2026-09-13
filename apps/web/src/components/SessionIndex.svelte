@@ -98,8 +98,8 @@
           <span class="idx-cur">{s.id === app.activeId ? "❯" : " "}</span>
           <span class={`st-${s.status}`} class:pulse={s.status === "starting"}>{glyph(s.status)}</span>
           <span class="truncate">{s.title}</span>
-          {#if s.pending_permissions > 0}
-            <span class="st-warn" data-agent-id={`session.${s.id}.pending`}>!{s.pending_permissions}</span>
+          {#if s.pending_permissions + (s.pending_ui_requests ?? 0) > 0}
+            <span class="st-warn" data-agent-id={`session.${s.id}.pending`}>!{s.pending_permissions + (s.pending_ui_requests ?? 0)}</span>
           {/if}
         </span>
         <span class="idx-sub">

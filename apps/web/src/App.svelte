@@ -40,6 +40,7 @@
   import SessionControls from "./components/SessionControls.svelte";
   import ArtifactSheet from "./components/ArtifactSheet.svelte";
   import PackCredentials from "./components/PackCredentials.svelte";
+  import PackUiForm from "./components/PackUiForm.svelte";
   import { packCreds, closePackCredentials } from "./lib/packcreds.svelte";
   import { folders, closeFolderPicker, foldersEnabled, openFolderPicker } from "./lib/folders.svelte";
   import { providers, closeProviders } from "./lib/connectors.svelte";
@@ -65,6 +66,9 @@
   const sess = useSession(() => activeStore);
   const view = $derived(sess.view);
   const pendingList = $derived(view ? [...view.pending.values()] : []);
+  const pendingUi = $derived(view?.pendingUi);
+  const pendingUiError = $derived(view?.uiResponseError);
+  const pendingUiErrorRev = $derived(view?.uiResponseErrorRev ?? 0);
   const pendingTotal = $derived(queueTotal());
 
   function openSettingsAt(e: MouseEvent) {
@@ -140,6 +144,7 @@
       dlgGallery.onKey(e);
       dlgCrew.onKey(e);
       if (e.key === "Escape") {
+        if (pendingUi) return; // PackUiForm owns Escape and keeps failed sends editable.
         if (artifact.document) closeArtifact();
         else if (inspect) inspect = null;
         else if (app.sessionCtlOpen) closeSessionCtl();
@@ -160,7 +165,7 @@
       }
       // Modal surfaces own the keyboard until closed. In particular, do not let
       // Ctrl+N/session cycling switch the document underneath a focused report.
-      if (app.paletteOpen || app.shortcutsOpen || artifact.document || inspect || app.eventsOpen || app.galleryOpen || app.settingsOpen || app.sessionCtlOpen || providers.open || packSheet.open || packSheet.panelOpen || crew.openId || folders.open || flows.open || tasks.open || packCreds.open) return;
+      if (app.paletteOpen || app.shortcutsOpen || artifact.document || pendingUi || inspect || app.eventsOpen || app.galleryOpen || app.settingsOpen || app.sessionCtlOpen || providers.open || packSheet.open || packSheet.panelOpen || crew.openId || folders.open || flows.open || tasks.open || packCreds.open) return;
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "b") {
         e.preventDefault();
         toggleNavigation();
@@ -324,6 +329,20 @@
 
       {#if activeStore}
         <Scrollback store={activeStore} onInspect={(b) => (inspect = b)} />
+        {#if view && view.uiProgress.size > 0}
+          <div class="pack-progress content-axis" data-agent-id="pack-ui.progress" aria-live="polite">
+            {#each [...view.uiProgress.values()] as p (`${p.pack}:${p.params.id}`)}
+              <div class="pack-progress-row" data-state={p.params.state}>
+                <span class={p.params.state === "error" ? "st-red" : p.params.state === "completed" ? "st-green" : "st-cyan"}>{p.params.state === "running" ? "◉" : p.params.state === "completed" ? "✓" : "✗"}</span>
+                <span class="st-magenta">{p.pack}</span>
+                <span>{p.params.title}</span>
+                {#if p.params.message}<span class="dim truncate">{p.params.message}</span>{/if}
+                {#if p.params.current !== undefined}<span class="faint">{p.params.current}{p.params.total !== undefined ? ` / ${p.params.total}` : ""}</span>{/if}
+                {#if p.params.current !== undefined && p.params.total !== undefined}<progress value={p.params.current} max={p.params.total}></progress>{/if}
+              </div>
+            {/each}
+          </div>
+        {/if}
         {#if pendingList.length > 0}
           <div class="appr-dock" data-agent-id="approval.dock" data-state="awaiting_approval">
             <div class="appr-axis content-axis">
@@ -459,6 +478,11 @@
 {/if}
 
 <ArtifactSheet />
+{#if pendingUi && app.activeId}
+  {#key pendingUi.id}
+    <PackUiForm request={pendingUi} sessionId={app.activeId} responseError={pendingUiError} responseErrorRev={pendingUiErrorRev} />
+  {/key}
+{/if}
 <PackSheet />
 <FolderPicker />
 <Providers />
@@ -498,6 +522,10 @@
 <Toasts />
 
 <style>
+  .pack-progress { padding-block: 5px; border-top: 1px solid var(--line); }
+  .pack-progress-row { display: flex; gap: 7px; align-items: center; min-width: 0; font-size: 12px; }
+  .pack-progress-row progress { width: min(10rem, 20vw); accent-color: var(--cyan); }
+
   .pair {
     display: flex;
     height: 100%;

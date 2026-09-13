@@ -124,11 +124,13 @@ will change `runTurn` in `~/DextUI/packages/agentlinkd/src/server.mjs`
 (search `packRun`). A `main_tests.rs` case that pipes a prompt into
 `-p --pack <name>` and asserts the pack prompt was prepended would settle it.
 
-## Not asked for
+## Subsequently implemented
 
-- Approval bridge / `PermissionRequested` round-trip — tracked separately
-  (`~/DextUI/UPSTREAM.md`); the day-1 guard uses profile switching instead.
-- Pack Runtime Protocol v1.1 `ui.request/ui.response` forms.
+- Approval bridge / `PermissionRequested` round-trip — implemented through the persistent NDJSON bridge.
+- Pack Runtime Protocol `ui.request/ui.response` forms and progress — implemented in core and now consumed end-to-end by agentlinkd and DextUI.
+
+## Still not asked for
+
 - Any change to `runtime_view`; it stays byte-identical.
 
 ## Coordination

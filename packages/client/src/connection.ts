@@ -282,6 +282,25 @@ export class Connection {
     this.sendRaw(cmd("permission.respond", { session: sessionId, request_id: requestId, choice, note }));
   }
 
+  /** Send only on the live socket; unlike ordinary commands this never enters
+   * the reconnect outbox because a pack-form value is sensitive and tied to
+   * one current core request. */
+  private sendLive(frame: Record<string, unknown>): boolean {
+    if (this.phase !== "live" || !this.ws || this.ws.readyState !== WebSocket.OPEN) return false;
+    try {
+      this.ws.send(JSON.stringify(frame));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Answer a pack form. Values are sent once and are never retained in the
+   * reconnect outbox. False means the UI should keep the form editable. */
+  uiRespond(sessionId: string, requestId: string, response: { status: "ok"; value?: unknown } | { status: "cancelled" }): boolean {
+    return this.sendLive(cmd("ui.respond", { session: sessionId, request_id: requestId, ...response }));
+  }
+
   interrupt(sessionId: string): void {
     this.sendRaw(cmd("interrupt", { session: sessionId }));
   }
@@ -701,6 +720,26 @@ export class Connection {
         if (d && typeof d.repo === "string") {
           this.self = d;
           this.opts.onSelfChanged?.(d);
+        }
+        break;
+      }
+      case "ui.response_pending": {
+        const d = env.data as { session?: string; request_id?: string } | undefined;
+        if (typeof d?.session === "string" && typeof d.request_id === "string") {
+          const store = this.session(d.session);
+          const failure: Envelope = { v: PROTOCOL_VERSION, session: d.session, ts: env.ts, event: "ui.response_failed", data: { id: d.request_id, message: "Another client is already sending an answer; retry if the form remains open" } };
+          store.apply(failure);
+          this.opts.onEvent?.(failure, store);
+        }
+        break;
+      }
+      case "ui.already_resolved": {
+        const d = env.data as { session?: string; request_id?: string } | undefined;
+        if (typeof d?.session === "string" && typeof d.request_id === "string") {
+          const store = this.session(d.session);
+          const resolved: Envelope = { v: PROTOCOL_VERSION, session: d.session, ts: env.ts, event: "ui.resolved", data: { id: d.request_id, status: "completed" } };
+          store.apply(resolved);
+          this.opts.onEvent?.(resolved, store);
         }
         break;
       }

@@ -35,7 +35,7 @@ Client → server:
 {"v":1, "cmd":"prompt.submit", "session":"sess_…", "text":"…"}
 ```
 
-Commands are fire-and-forget; effects arrive as events. Only two commands have direct replies: `hello` → `hello_ok`/`hello_fail`, and a losing `permission.respond` → `permission.already_resolved`.
+Commands are fire-and-forget; effects arrive as events. Direct replies are limited to `hello` → `hello_ok`/`hello_fail`, a losing `permission.respond` → `permission.already_resolved`, and stale/in-flight duplicate `ui.respond` commands → `ui.already_resolved`/`ui.response_pending`.
 
 ## Auth and pairing
 
@@ -112,13 +112,18 @@ Tool cards are keyed by `call_id`, and `name`/`summary` are **sticky**: an event
 | event | data | why it exists |
 |---|---|---|
 | `user_message` | `{text}` | prompts are journaled so reconnects/snapshots rebuild full transcripts |
-| `session.snapshot` | `{meta, blocks[], pending_permissions[], last_seq, working?, turn_started_at?, turn_usage?, session_usage?, context_chars?, diagnostics?, compacting?, failed?, provider?, thinking_effort?, model_locked?}` | bootstrap/resync projection at the existing journal tail; snapshots do not consume `seq`. `meta.pending_permissions` (like the digest's `pending[]`) derives from the same live permission state, so approvals are discoverable from the session list without subscribing |
+| `session.snapshot` | `{meta, blocks[], pending_permissions[], pending_ui_request?, ui_progress?, last_seq, working?, turn_started_at?, turn_usage?, session_usage?, context_chars?, diagnostics?, compacting?, failed?, provider?, thinking_effort?, model_locked?}` | bootstrap/resync projection at the existing journal tail; snapshots do not consume `seq`. Pending tool approvals and pack forms derive from live bridge state, so they are recoverable after reconnect without entering the journal |
 | `session.state` | `{status, detail?}` | `starting` when a cold session's child is spawning, `live`, `cold`, `exited` |
 | `session.configured` | `{provider?, model?, thinking_effort?, model_locked}` | accepted per-session runtime configuration; sequenced before it is visible in the UI |
 | `permission.request` | `{request_id, call_id?, tool, summary, input?, diff?, risk}` | decision needed; `diff` is dext's mutation preview |
 | `permission.resolved` | `{request_id, choice, by}` | broadcast to all clients; first response wins |
 | `permission.already_resolved` | `{request_id}` | direct reply to the losing responder |
 | `permission.timeout` | `{request_id}` | host-side deadline hit; the agent saw a Deny |
+| `ui.request` | `{id, pack, request_id, method:"form", params, received_at}` | ephemeral pack form request; unsequenced and never journaled. `params.fields[]` supports text, textarea, number, boolean, select, and multiselect |
+| `ui.resolved` | `{id, status, by?}` | response metadata only, emitted after core acknowledges the response (or proves consumption by advancing the UI chain); the submitted value is never emitted, journaled, logged, or snapshotted |
+| `ui.response_failed` | `{id, message}` | core refused or did not acknowledge the response; the form remains pending and editable for retry |
+| `ui.progress` | `{id, pack, request_id, method:"progress", params, received_at}` | ephemeral progress presentation; stable `pack + params.id` replaces the prior presentation and agentlinkd acknowledges core immediately |
+| `ui.progress.cleared` | none | clear transient progress at the turn boundary, interruption, or bridge exit |
 
 ### Secrets rule
 
@@ -142,6 +147,7 @@ Tool cards are keyed by `call_id`, and `name`/`summary` are **sticky**: an event
 | `steering.inject` | `{session, text}` | mid-turn input. Hosts with a live steering channel inject in-stream; queueing hosts (agentlinkd) ack with a `steering_received` journal event and deliver the text automatically as the next turn's prompt |
 | `interrupt` | `{session}` | soft cancel → `interrupted`; hard kill is `session.close` |
 | `permission.respond` | `{session, request_id, choice:"once"|"always"|"deny", note?}` | resolves one pending request |
+| `ui.respond` | `{session, request_id, status:"ok", value?}` or `{session, request_id, status:"cancelled"}` | answers one pending pack form; first core-accepted response wins. Sensitive values require a live socket and never enter the reconnect outbox. The value is written directly to Dext's NDJSON bridge and is never persisted or broadcast |
 | `slash` | `{session, raw}` | forwarded verbatim into dext's slash handler; `/compact` requires an idle persistent bridge and projects native progress/history events; output returns as `slash`/`structured_slash` events |
 | `ping` | `{}` | |
 
@@ -157,6 +163,8 @@ Tool cards are keyed by `call_id`, and `name`/`summary` are **sticky**: an event
 
 **Approval.** `permission.request` → (any client) `permission.respond` → host applies first response, broadcasts `permission.resolved`, replies `permission.already_resolved` to losers. Host deadline (default 600 s, configurable) → `permission.timeout` + the child receives Deny. The agent always sees a resolution; it never hangs on a closed laptop.
 
+**Pack UI.** At boot agentlinkd separately probes for the UI frame names, so a legacy NDJSON-capable core does not falsely advertise `pack_ui`. On a compatible persistent child, agentlinkd also waits for `ready.ui_protocol:1` plus the `ui.capabilities`/`ui.response` frame names, then advertises `form` and `progress` to Dext before invoking a pack. Core `ui.request` events become unsequenced session events: forms join the global Needs you queue and block until a browser sends `ui.respond`; progress is acknowledged once by agentlinkd and shown transiently. A form closes only after core's correlated `input_ack` accepts the response (or a following request proves it was consumed); rejection/ack timeout emits `ui.response_failed` and preserves the form for retry. A seq-resume re-emits current ephemeral state, while a full snapshot carries `pending_ui_request` and `ui_progress`. Submitted values require a currently live socket and travel browser → agentlinkd → Dext stdin only. They never enter the reconnect outbox and are not copied to AgentLink events, journals, snapshots, logs, digest data, or model history by the host.
+
 **Context compaction.** `slash {raw:"/compact"}` is routed through the persistent NDJSON control channel while the session is idle. The host immediately journals `compact_start` so all clients show one compacting state, then relays core's authoritative `history_context_updated` and terminal `compact_end`/`compact_failed` events. The client keeps the completed compaction as one collapsed transcript block (`before → after`; summary/error only on disclosure) and switches the CTX meter to core's post-compaction token estimate. Prompt/steering submission is refused while compaction runs; interrupt remains available. `/compact status|auto|<percent>` is passed through without synthesizing a run.
 
 **Cold session.** `session.open {id}` → `session.state:"starting"` → child spawn + resume → `session.snapshot` → `session.state:"live"`. Hosts cap live children and reap idle ones; cold sessions cost nothing.
@@ -165,7 +173,7 @@ Tool cards are keyed by `call_id`, and `name`/`summary` are **sticky**: an event
 
 ## Capabilities
 
-Advertised in `hello_ok`: `approvals`, `steering`, `interrupt`, `slash`, `multi_session`, `usage`, `thinking`, `model_select`, `effort_select`, `todos_read`, `files_read`, `files_write`, `session_manage`, `packs`, `checkpoints`, `seats`, `push`. A host without `approvals` never sends `permission.request`; a client without approval UI must not subscribe to sessions that require them. Model/effort controls require both their capability and option data. Extensions are namespaced: `x-<host>.<thing>`.
+Advertised in `hello_ok`: `approvals`, `steering`, `interrupt`, `slash`, `multi_session`, `usage`, `thinking`, `model_select`, `effort_select`, `todos_read`, `files_read`, `files_write`, `session_manage`, `packs`, `pack_ui`, `checkpoints`, `seats`, `push`. A host without `approvals` never sends `permission.request`; a host without `pack_ui` never sends pack form/progress events. A client without approval or form UI must not subscribe to sessions that require those decisions. Model/effort controls require both their capability and option data. Extensions are namespaced: `x-<host>.<thing>`.
 
 ### Extension: connectors (`x-agentlinkd.connectors.*`, capability `connectors`)
 

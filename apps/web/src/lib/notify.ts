@@ -3,7 +3,7 @@
 // coalesced per-frame view, so a background tab still notifies promptly.
 
 import type { SessionStore } from "@dextui/client";
-import type { Envelope, PermissionRequestEvent, TurnEndEvent } from "@dextui/protocol";
+import type { Envelope, PackUiRequestEvent, PermissionRequestEvent, TurnEndEvent } from "@dextui/protocol";
 import { activate, app } from "./state.svelte";
 import { fmtTokens } from "./markdown";
 
@@ -51,6 +51,13 @@ export function notifyEvent(env: Envelope, store: SessionStore): void {
     case "permission.request": {
       const p = env.data as PermissionRequestEvent;
       fire(`Approval needed · ${p.tool}`, p.summary.slice(0, 80), `${sid}:${p.request_id}`, sid, {
+        requireInteraction: true,
+      });
+      return;
+    }
+    case "ui.request": {
+      const request = env.data as Extract<PackUiRequestEvent, { method: "form" }>;
+      fire(`Input needed · ${request.pack}`, request.params.title.slice(0, 80), `${sid}:ui:${request.id}`, sid, {
         requireInteraction: true,
       });
       return;

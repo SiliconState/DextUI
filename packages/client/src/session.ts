@@ -13,6 +13,7 @@ import type {
   HistoryContextUpdatedEvent,
   HttpRetryEvent,
   PackStartEvent,
+  PackUiRequestEvent,
   PermissionRequestEvent,
   PermissionResolvedEvent,
   RuntimeControlAppliedEvent,
@@ -39,6 +40,9 @@ export interface PendingPermission extends PermissionRequestEvent {
   received_at: number;
 }
 
+export type PendingPackUi = Extract<PackUiRequestEvent, { method: "form" }>;
+export type PackUiProgress = Extract<PackUiRequestEvent, { method: "progress" }>;
+
 /** A projected block plus a client-stable identity for keyed rendering. */
 export type ViewBlock = Block & { id: number };
 
@@ -51,6 +55,13 @@ export interface SessionState {
   blocks: ViewBlock[];
   toolIndex: Map<string, number>;
   pending: Map<string, PendingPermission>;
+  /** One form can block a core runtime; progress is transient and keyed stably. */
+  pendingUi?: PendingPackUi;
+  /** Last response failure for the current form; values are never retained. */
+  uiResponseError?: string;
+  /** Changes for every failure, including repeated identical messages. */
+  uiResponseErrorRev: number;
+  uiProgress: Map<string, PackUiProgress>;
   working: boolean;
   turnStartedAt?: number;
   model?: string;
@@ -110,6 +121,8 @@ export class SessionStore {
       blocks: [],
       toolIndex: new Map(),
       pending: new Map(),
+      uiResponseErrorRev: 0,
+      uiProgress: new Map(),
       working: false,
       compacting: false,
       failed: false,
@@ -245,6 +258,10 @@ export class SessionStore {
         });
         const now = e.ts ?? Date.now();
         this.state.pending = new Map(s.pending_permissions.map((p) => [p.request_id, { ...p, received_at: now }]));
+        this.state.pendingUi = s.pending_ui_request;
+        this.state.uiResponseError = undefined;
+        this.state.uiResponseErrorRev += 1;
+        this.state.uiProgress = new Map((s.ui_progress ?? []).map((p) => [`${p.pack}:${p.params.id}`, p]));
         this.bump({
           title: s.meta.title,
           cwd: s.meta.cwd,
@@ -410,6 +427,32 @@ export class SessionStore {
         this.emit();
         return;
       }
+      case "ui.request": {
+        this.bump({ pendingUi: d as PendingPackUi, uiResponseError: undefined, uiResponseErrorRev: this.state.uiResponseErrorRev + 1 });
+        return;
+      }
+      case "ui.resolved": {
+        const r = d as { id: string };
+        if (this.state.pendingUi?.id === r.id) this.bump({ pendingUi: undefined, uiResponseError: undefined, uiResponseErrorRev: this.state.uiResponseErrorRev + 1 });
+        else this.emit();
+        return;
+      }
+      case "ui.response_failed": {
+        const failure = d as { id: string; message: string };
+        if (this.state.pendingUi?.id === failure.id) this.bump({ uiResponseError: failure.message, uiResponseErrorRev: this.state.uiResponseErrorRev + 1 });
+        else this.emit();
+        return;
+      }
+      case "ui.progress": {
+        const p = d as PackUiProgress;
+        this.state.uiProgress = new Map(this.state.uiProgress);
+        this.state.uiProgress.set(`${p.pack}:${p.params.id}`, p);
+        this.emit();
+        return;
+      }
+      case "ui.progress.cleared":
+        this.bump({ uiProgress: new Map() });
+        return;
       // --- meta ---
       case "usage_update": {
         const u = d as UsageUpdateEvent;

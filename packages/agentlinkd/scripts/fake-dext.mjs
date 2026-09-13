@@ -74,7 +74,7 @@ if (process.argv[2] === "--help") {
   // Answers the host's bridge probe. `--input ndjson` is advertised only when
   // the test opts in, so default harness runs stay on the one-shot path.
   process.stdout.write(
-    `usage: dext [options]\n  -p <prompt>\n${process.env.FAKE_DEXT_NDJSON === "1" ? "  --input ndjson\n" : ""}`,
+    `usage: dext [options]\n  -p <prompt>\n${process.env.FAKE_DEXT_NDJSON === "1" ? "  --input ndjson (ui.capabilities ui.response; emits ui.request)\n" : ""}`,
   );
   process.exit(0);
 }
@@ -91,8 +91,18 @@ if (process.argv.includes("--input") && process.argv[process.argv.indexOf("--inp
   // change); echoed on turn_start so host tests can assert the argv contract.
   const resumeArg = process.argv.find((a) => a === "--resume" || a.startsWith("--resume=")) ?? null;
   const resume = resumeArg === null ? null : resumeArg === "--resume" ? "latest" : resumeArg.slice("--resume=".length);
-  out("ready", { input: "ndjson", session_id: "fake-ndjson-1", model: process.env.DEXT_MODEL || "alpha", provider: process.env.DEXT_PROVIDER || "fake-a" });
+  out("ready", {
+    input: "ndjson",
+    session_id: "fake-ndjson-1",
+    model: process.env.DEXT_MODEL || "alpha",
+    provider: process.env.DEXT_PROVIDER || "fake-a",
+    ui_protocol: 1,
+    frames: ["user", "steer", "control", "interrupt", "permission", "ui.capabilities", "ui.response", "close"],
+  });
   let busy = false;
+  let uiMethods = [];
+  let waitingUi = null;
+  let rejectUiOnce = false;
   let buf = "";
   const endTurn = (failed = false) => {
     out("usage_update", { turn: usage, session: usage });
@@ -102,6 +112,27 @@ if (process.argv.includes("--input") && process.argv[process.argv.indexOf("--inp
   const runTurn = (text) => {
     busy = true;
     out("turn_start", { pid: process.pid, resume });
+    if (text.includes("UI_FORM")) {
+      if (!uiMethods.includes("form") || !uiMethods.includes("progress")) {
+        out("error", "host did not advertise pack UI methods");
+        endTurn(true);
+        return;
+      }
+      waitingUi = "ui-progress-1";
+      out("ui.request", { id: waitingUi, pack: "fake-pack", request_id: "progress-1", method: "progress", params: { id: "work", title: "Preparing form", message: "Loading choices", current: 1, total: 2, state: "running" } });
+      return;
+    }
+    if (text.includes("UI_REJECT")) {
+      if (!uiMethods.includes("form")) {
+        out("error", "host did not advertise pack UI methods");
+        endTurn(true);
+        return;
+      }
+      waitingUi = "ui-form-reject";
+      rejectUiOnce = true;
+      out("ui.request", { id: waitingUi, pack: "fake-pack", request_id: "reject", method: "form", params: { title: "Retry form", fields: [{ id: "name", label: "Name", type: "text" }] } });
+      return;
+    }
     if (text.includes("IMAGE_APPROVE")) {
       out("tool_call_start", { call_id: "image-1", name: "read_image", summary: "read_image: uploads/shot.png (pixels will be sent to the model provider)" });
       out("permission_request", { id: "image-perm-1", tool: "read_image", input: { path: "uploads/shot.png" }, summary: '{"path":"uploads/shot.png"}' });
@@ -130,9 +161,53 @@ if (process.argv.includes("--input") && process.argv[process.argv.indexOf("--inp
         continue;
       }
       buf = buf.slice(i + 1);
-      if (f.type === "user") runTurn(String(f.text ?? ""));
-      else if (f.type === "steer") out("steering_received", { messages: [f.text], preview: String(f.text).slice(0, 80) });
+      const ack = (route, detail) => out("input_ack", { type: String(f.type ?? ""), route, seq: f.seq ?? null, ...(detail ? { detail } : {}) });
+      if (f.type === "ui.capabilities") {
+        uiMethods = Array.isArray(f.methods) ? f.methods : [];
+        ack("ui_capabilities_set");
+      }
+      else if (f.type === "ui.response") {
+        if (f.id === "ui-form-reject" && rejectUiOnce) {
+          rejectUiOnce = false;
+          ack("invalid", "UI response queue full or closed");
+          continue;
+        }
+        if (f.id !== waitingUi) {
+          ack("invalid", "ui.response: id is stale or already answered");
+          continue;
+        }
+        ack("ui_response_forwarded");
+        if (f.id === "ui-progress-1") {
+          waitingUi = "ui-form-1";
+          out("ui.request", {
+            id: waitingUi,
+            pack: "fake-pack",
+            request_id: "profile",
+            method: "form",
+            params: {
+              title: "Profile",
+              description: "Tell the fake pack what to use.",
+              submit_label: "Continue",
+              fields: [
+                { id: "name", label: "Name", type: "text", required: true, placeholder: "Ada" },
+                { id: "notes", label: "Notes", type: "textarea" },
+                { id: "count", label: "Count", type: "number", default: 2 },
+                { id: "confirm", label: "Confirm", type: "boolean" },
+                { id: "color", label: "Color", type: "select", options: ["blue", "green"] },
+                { id: "tags", label: "Tags", type: "multiselect", options: [{ value: "a", label: "Alpha" }, { value: "b", label: "Beta" }] },
+              ],
+            },
+          });
+        } else {
+          waitingUi = null;
+          out("text_block_complete", f.status === "ok" ? "fake pack received the form" : "fake pack form cancelled");
+          endTurn(false);
+        }
+      }
+      else if (f.type === "user") { ack("submitted"); runTurn(String(f.text ?? "")); }
+      else if (f.type === "steer") { ack("steering_queued"); out("steering_received", { messages: [f.text], preview: String(f.text).slice(0, 80) }); }
       else if (f.type === "control" && String(f.command ?? "").startsWith("/compact")) {
+        ack("runtime_control_queued");
         const command = String(f.command ?? "");
         if (command === "/compact") {
           setTimeout(() => out("compact_start"), 20);
@@ -147,6 +222,7 @@ if (process.argv.includes("--input") && process.argv[process.argv.indexOf("--inp
         }
       }
       else if (f.type === "permission") {
+        ack("permission_forwarded");
         const image = f.id === "image-perm-1";
         out("permission_resolved", { id: f.id, tool: image ? "read_image" : "write_file", choice: f.choice });
         if (image && f.choice !== "deny") {
@@ -160,8 +236,9 @@ if (process.argv.includes("--input") && process.argv[process.argv.indexOf("--inp
         }
         endTurn(false);
       } else if (f.type === "interrupt") {
+        ack("interrupted");
         if (busy) endTurn(true);
-      } else if (f.type === "close") process.exit(0);
+      } else if (f.type === "close") { ack("close"); process.exit(0); }
     }
   });
   process.stdin.on("end", () => process.exit(0));

@@ -1,6 +1,7 @@
 // bridge.mjs: one persistent `dext --input ndjson --output stream-json` child
 // per session. The host writes JSON frames to stdin (user | steer | control |
-// interrupt | permission | close) and reads stream-json events from stdout.
+// interrupt | permission | ui.capabilities | ui.response | close) and reads
+// stream-json events from stdout.
 //
 // dext's interactive loop routes each frame by its own busy state: user text
 // while a turn runs is *real* steering (folded into the next model request,
@@ -12,12 +13,29 @@
 import { spawn } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
 
-export const BRIDGE_FRAMES = ["user", "steer", "control", "interrupt", "permission", "close"];
+export const BRIDGE_FRAMES = ["user", "steer", "control", "interrupt", "permission", "ui.capabilities", "ui.response", "close"];
+
+/** Pack UI is negotiated by the ready payload, independently of NDJSON support. */
+export function supportsPackUi(ready) {
+  return ready?.ui_protocol === 1
+    && Array.isArray(ready.frames)
+    && ready.frames.includes("ui.capabilities")
+    && ready.frames.includes("ui.response");
+}
 
 /** `dext --help` advertises `--input ndjson` from the stdin-bridge patch on. */
 export function probeNdjsonSupport(dextOutput) {
   const help = dextOutput(["--help"]);
   return typeof help === "string" && help.includes("--input ndjson");
+}
+
+/** Pack UI support is separately discoverable on bridge-capable cores. */
+export function probePackUiSupport(dextOutput) {
+  const help = dextOutput(["--help"]);
+  return typeof help === "string"
+    && help.includes("ui.capabilities")
+    && help.includes("ui.response")
+    && help.includes("ui.request");
 }
 
 /** Build argv for a bridged child; `resume` replays the seat's session —
@@ -148,6 +166,8 @@ export function spawnBridge({ bin, args, cwd, env, maxBuffer = 4 * 1024 * 1024, 
     control: (command, seq) => write({ type: "control", command, ...(seq !== undefined ? { seq } : {}) }),
     interrupt: () => write({ type: "interrupt" }),
     permission: (id, choice) => write({ type: "permission", id, choice }),
+    uiCapabilities: (methods) => write({ type: "ui.capabilities", methods }),
+    uiResponse: (id, response, seq) => write({ type: "ui.response", id, ...response, ...(seq !== undefined ? { seq } : {}) }),
     /** Graceful stop: close frame + EOF; dext autosaves and exits. */
     close: () => {
       write({ type: "close" });

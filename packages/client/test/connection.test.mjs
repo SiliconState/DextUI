@@ -458,6 +458,21 @@ test("live ping is sent on the interval and stops after close", (t) => {
   assert.equal(ws.frames("ping").length, 1);
 });
 
+test("pack form responses require a live socket and never replay after reconnect", (t) => {
+  const { conn } = setup(t);
+  const ws1 = goLive(conn);
+  assert.equal(conn.uiRespond("s1", "ui-1", { status: "ok", value: { name: "Ada" } }), true);
+  assert.deepEqual(ws1.frames("ui.respond"), [{ v: 1, cmd: "ui.respond", session: "s1", request_id: "ui-1", status: "ok", value: { name: "Ada" } }]);
+
+  ws1.drop();
+  assert.equal(conn.uiRespond("s1", "ui-2", { status: "ok", value: { secret: "never queued" } }), false);
+  mock.timers.tick(1000);
+  const ws2 = FakeWebSocket.instances.at(-1);
+  ws2.open();
+  ws2.receive(helloOk({ instance: "host-A" }));
+  assert.equal(ws2.frames("ui.respond").length, 0, "sensitive form values are not held in the reconnect outbox");
+});
+
 // ---------- delivery acks (nonce → cmd_ack) ----------
 
 test("prompt/steer/slash are nonce-tagged; cmd_ack resolves exactly once", (t) => {

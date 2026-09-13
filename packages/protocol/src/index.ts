@@ -148,6 +148,8 @@ export interface SessionMeta {
   last_seq: number;
   unread: number;
   pending_permissions: number;
+  /** Pending human pack forms; separate from tool approvals. */
+  pending_ui_requests?: number;
 }
 
 /** Host-advertised slash command (composer completion is host-driven). */
@@ -843,6 +845,49 @@ export interface PermissionResolvedEvent {
   by: string;
 }
 
+export type PackUiFieldType = "text" | "textarea" | "number" | "boolean" | "select" | "multiselect";
+export type PackUiScalar = string | number | boolean;
+export interface PackUiOption { value: PackUiScalar; label: string }
+export interface PackUiField {
+  id: string;
+  label: string;
+  type: PackUiFieldType;
+  required?: boolean;
+  default?: unknown;
+  options?: PackUiOption[];
+  placeholder?: string;
+  description?: string;
+}
+export interface PackUiFormParams {
+  title: string;
+  description?: string;
+  submit_label: string;
+  fields: PackUiField[];
+}
+export interface PackUiProgressParams {
+  id: string;
+  title: string;
+  message?: string;
+  current?: number;
+  total?: number;
+  state: "running" | "completed" | "error";
+}
+export type PackUiRequestEvent =
+  | { id: string; pack: string; request_id: string; method: "form"; params: PackUiFormParams; received_at: number }
+  | { id: string; pack: string; request_id: string; method: "progress"; params: PackUiProgressParams; received_at: number };
+
+/** Only metadata: response values are never emitted or persisted. */
+export interface PackUiResolvedEvent {
+  id: string;
+  status: "ok" | "cancelled" | "completed" | "disconnected";
+  by?: string;
+}
+
+export interface PackUiResponseFailedEvent {
+  id: string;
+  message: string;
+}
+
 /** Projection unit shared by snapshots and client stores. */
 export type Block =
   | { kind: "text"; text: string; complete: boolean; startedAt?: number; endedAt?: number }
@@ -874,6 +919,9 @@ export interface SnapshotEvent {
   meta: SessionMeta;
   blocks: Block[];
   pending_permissions: PermissionRequestEvent[];
+  /** Ephemeral bridge state, included only so a reconnect can recover the form/progress UI. */
+  pending_ui_request?: Extract<PackUiRequestEvent, { method: "form" }>;
+  ui_progress?: Extract<PackUiRequestEvent, { method: "progress" }>[];
   last_seq: number;
   /** Live turn state is projection metadata, not a journal event. */
   working?: boolean;
@@ -1004,6 +1052,13 @@ export interface HostEventMap {
   "permission.resolved": PermissionResolvedEvent;
   "permission.already_resolved": { request_id: string };
   "permission.timeout": { request_id: string };
+  /** Ephemeral and unsequenced in production; never folded into transcript blocks. */
+  "ui.request": Extract<PackUiRequestEvent, { method: "form" }>;
+  "ui.resolved": PackUiResolvedEvent;
+  /** Core refused the response; the form stays pending and editable. */
+  "ui.response_failed": PackUiResponseFailedEvent;
+  "ui.progress": Extract<PackUiRequestEvent, { method: "progress" }>;
+  "ui.progress.cleared": undefined;
   /** Journaled after todo_write in bridge mode; clients refetch GET /sessions/:id/todos. */
   "todos.changed": TodosResponse;
 }
@@ -1053,6 +1108,10 @@ export interface ControlEventMap {
   "x-agentlinkd.crew.control": CrewControlEvent;
   /** Delivery acknowledgement for a client command sent with a `nonce`. */
   cmd_ack: { nonce: string; cmd: string; ok: boolean; duplicate?: boolean; message?: string };
+  /** Direct reply when another client already answered or cancelled a pack form. */
+  "ui.already_resolved": { session?: string; request_id: string };
+  /** Direct reply while another client's answer awaits core acknowledgement. */
+  "ui.response_pending": { session: string; request_id: string };
   /** Task list replacement (`x-agentlinkd.tasks.list` reply and `.changed` broadcast). */
   "x-agentlinkd.tasks.list": TasksListReply;
   "x-agentlinkd.tasks.changed": TasksListReply;
@@ -1100,6 +1159,8 @@ export const CAPABILITIES = [
   "session_manage",
   /** Host advertises a pack catalog and runs `/pack run <name> <task>`. */
   "packs",
+  /** Pack Runtime Protocol forms/progress over the persistent bridge. */
+  "pack_ui",
   /** Host projects crew runs (`hello_ok.crews`, `x-agentlinkd.crew.*`). */
   "crew",
 ] as const;

@@ -65,6 +65,7 @@ const CAPABILITIES = [
   // x-agentlinkd.packs.credentials.set over an in-memory value store —
   // values never echo back, only the names-only status event.
   "pack_credentials",
+  "pack_ui",
 ];
 
 // In-memory connectors + provider auth so the picker's Connected section and
@@ -198,6 +199,8 @@ function makeSession({ title, fixture, approvalFlow, live }) {
     generation: 0,
     journal: [],
     pending: new Map(),
+    pendingUi: null,
+    uiProgress: new Map(),
     approvalCounter: 0,
     plan: null,
     pos: 0,
@@ -238,6 +241,7 @@ function metaOf(s) {
     last_seq: s.seq,
     unread: 0,
     pending_permissions: s.pending.size,
+    pending_ui_requests: s.pendingUi ? 1 : 0,
   };
 }
 
@@ -263,6 +267,19 @@ function publish(env) {
   scheduleList();
 }
 
+function publishEphemeral(s, event, data) {
+  const env = { v: 1, session: s.id, ts: Date.now(), event };
+  if (data !== undefined) env.data = data;
+  publish(env);
+}
+
+function clearPackUi(s, status = "cancelled") {
+  if (s.pendingUi) publishEphemeral(s, "ui.resolved", { id: s.pendingUi.id, status });
+  s.pendingUi = null;
+  if (s.uiProgress.size > 0) publishEphemeral(s, "ui.progress.cleared");
+  s.uiProgress.clear();
+}
+
 function snapshotEnvelope(s) {
   // Point-in-time projection at the current journal tail; snapshots are not
   // journal entries and therefore do not consume sequence numbers.
@@ -277,6 +294,8 @@ function snapshotEnvelope(s) {
       meta: metaOf(s),
       blocks: fold(s.journal),
       pending_permissions: [...s.pending.values()],
+      pending_ui_request: s.pendingUi ?? undefined,
+      ui_progress: [...s.uiProgress.values()],
       last_seq: s.seq,
       working: s.working,
       turn_started_at: s.turnStartedAt ?? undefined,
@@ -668,6 +687,7 @@ function sendAck(client, frame) {
 function manageSession(s, remove, by) {
   clearTimeout(s.timer);
   s.pending.clear();
+  clearPackUi(s);
   s.plan = null;
   s.working = false;
   s.turnStartedAt = null;
@@ -795,6 +815,8 @@ function handleCommand(client, frame) {
       const since = frame.since_seq;
       if (typeof since === "number" && since >= 0 && since <= s.seq) {
         for (const env of s.journal) if (env.seq > since) client.send(JSON.stringify(env));
+        if (s.pendingUi) client.send(JSON.stringify({ v: 1, session: s.id, ts: Date.now(), event: "ui.request", data: s.pendingUi }));
+        for (const progress of s.uiProgress.values()) client.send(JSON.stringify({ v: 1, session: s.id, ts: Date.now(), event: "ui.progress", data: progress }));
       } else {
         client.send(JSON.stringify(snapshotEnvelope(s)));
       }
@@ -890,6 +912,7 @@ function handleCommand(client, frame) {
       s.plan = null;
       s.status = "cold";
       flushPending(s);
+      clearPackUi(s);
       // Subscribers track status from events, not the list — tell them.
       publish(journalData(s, "session.state", { status: "cold" }));
       return;
@@ -951,7 +974,43 @@ function handleCommand(client, frame) {
       if (!s.title || s.title.startsWith("New session") || s.title.startsWith("Fixture:")) {
         s.title = frame.text.slice(0, 60);
       }
-      if (/\bthinking preview demo\b/i.test(frame.text)) {
+      if (/\bpack ui demo\b/i.test(frame.text)) {
+        s.working = true;
+        s.turnStartedAt = Date.now();
+        publish(journalData(s, "turn_start"));
+        const progress = {
+          id: `mock-progress-${s.id}`,
+          pack: "demo-pack",
+          request_id: "prepare",
+          method: "progress",
+          params: { id: "setup", title: "Preparing form", message: "Loading choices", current: 1, total: 2, state: "running" },
+          received_at: Date.now(),
+        };
+        s.uiProgress.set(`${progress.pack}:${progress.params.id}`, progress);
+        publishEphemeral(s, "ui.progress", progress);
+        const request = {
+          id: `mock-form-${s.id}`,
+          pack: "demo-pack",
+          request_id: "profile",
+          method: "form",
+          params: {
+            title: "Profile",
+            description: "Tell the demo pack what to use.",
+            submit_label: "Continue",
+            fields: [
+              { id: "name", label: "Name", type: "text", required: true, placeholder: "Ada" },
+              { id: "notes", label: "Notes", type: "textarea" },
+              { id: "count", label: "Count", type: "number", default: 2 },
+              { id: "confirm", label: "Confirm", type: "boolean" },
+              { id: "color", label: "Color", type: "select", options: [{ value: "blue", label: "Blue" }, { value: "green", label: "Green" }] },
+              { id: "tags", label: "Tags", type: "multiselect", options: [{ value: "a", label: "Alpha" }, { value: "b", label: "Beta" }] },
+            ],
+          },
+          received_at: Date.now(),
+        };
+        s.pendingUi = request;
+        publishEphemeral(s, "ui.request", request);
+      } else if (/\bthinking preview demo\b/i.test(frame.text)) {
         beginTurn(s, echoPlan(frame.text.trim().slice(0, 4000)));
       } else if (/\bAttached images? candidates? for native read_image\b/i.test(frame.text) && /\bread_image\(path\)/i.test(frame.text)) {
         beginTurn(s, echoPlan(frame.text.trim().slice(0, 4000)));
@@ -991,8 +1050,9 @@ function handleCommand(client, frame) {
         s.plan = null;
         publish(journalData(s, "interrupted"));
       }
-      // A dead turn must not leave approval cards hanging.
+      // A dead turn must not leave approval cards or pack forms hanging.
       flushPending(s);
+      clearPackUi(s);
       return;
     }
 
@@ -1007,6 +1067,33 @@ function handleCommand(client, frame) {
         return;
       }
       resolveApproval(client, s, frame.request_id, frame.choice);
+      return;
+    }
+
+    case "ui.respond": {
+      const s = sessions.get(frame.session);
+      if (!s) {
+        sendError(client, "no_session", `unknown session ${frame.session}`);
+        return;
+      }
+      if (!s.pendingUi || s.pendingUi.id !== frame.request_id) {
+        sendControl(client, "ui.already_resolved", { session: s.id, request_id: String(frame.request_id ?? "") });
+        return;
+      }
+      if (frame.status !== "ok" && frame.status !== "cancelled") {
+        sendError(client, "bad_request", "status must be ok|cancelled");
+        return;
+      }
+      const id = s.pendingUi.id;
+      s.pendingUi = null;
+      // Never include frame.value in any emitted or journaled record.
+      publishEphemeral(s, "ui.resolved", { id, status: frame.status, by: client.id });
+      s.uiProgress.clear();
+      publishEphemeral(s, "ui.progress.cleared");
+      publish(journalData(s, "text_block_complete", frame.status === "ok" ? "Demo pack received the form." : "Demo pack form cancelled."));
+      publish(journalData(s, "turn_end", { usage: usage(8, 8), failed: false }));
+      s.working = false;
+      s.turnStartedAt = null;
       return;
     }
 

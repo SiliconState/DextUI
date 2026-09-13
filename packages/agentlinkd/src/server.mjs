@@ -44,7 +44,8 @@ import { createScheduler } from "./triggers.mjs";
 import { TASK_STATUSES, createTasksAdapter } from "./tasks.mjs";
 import { fetchToFile, receiveUpload, uploadDirFor } from "./uploads.mjs";
 import { withDisplayContext } from "./display-context.mjs";
-import { bridgeArgs, probeNdjsonSupport, spawnBridge, toBridgeChoice, toPermissionRequest } from "./bridge.mjs";
+import { bridgeArgs, probeNdjsonSupport, probePackUiSupport, spawnBridge, supportsPackUi, toBridgeChoice, toPermissionRequest } from "./bridge.mjs";
+import { normalizeUiRequest, progressKey, validUiResponse } from "./pack-ui.mjs";
 
 const here = path.dirname(url.fileURLToPath(import.meta.url));
 const repoRoot = path.join(here, "..", "..", "..");
@@ -112,6 +113,7 @@ const MAX_PROMPT_CHARS = 1_000_000;
 const MAX_STDOUT_BUFFER = 16 * 1024 * 1024;
 const STEERING_MAX_MESSAGES = 10;
 const STEERING_MAX_CHARS = 100_000;
+const PACK_UI_METHODS = ["form", "progress"];
 
 if (!Number.isInteger(PORT) || PORT < 0 || PORT > 65535) throw new Error(`invalid --port '${PORT}'`);
 if (!TOKEN) throw new Error("pairing token must not be empty");
@@ -255,7 +257,9 @@ const MODEL_CATALOG = discoverModels();
 // steering is live, `/effort` applies mid-turn, model changes survive history
 // (respawn with --resume), and permission_request events get real per-action
 // answers. Without it every turn is a one-shot `-p` child (runTurn below).
-const BRIDGE = probeNdjsonSupport(dextOutput);
+const DEXT_HELP = dextOutput(["--help"]);
+const BRIDGE = probeNdjsonSupport(() => DEXT_HELP);
+const PACK_UI = BRIDGE && probePackUiSupport(() => DEXT_HELP);
 const DEFAULT_MODEL = discoverActiveModel(MODEL_CATALOG);
 if (DEFAULT_MODEL.provider && DEFAULT_MODEL.model) {
   let group = MODEL_CATALOG.find((g) => g.provider === DEFAULT_MODEL.provider);
@@ -398,6 +402,7 @@ const CAPABILITIES = [
   // names, stored under DEXT_HOME (0600) and injected into dext children.
   // Names-only status rides on PackInfo.credentials; values never come back.
   "pack_credentials",
+  ...(PACK_UI ? ["pack_ui"] : []),
 ];
 
 // Root of the folder picker — and of every session folder a client may name.
@@ -832,9 +837,12 @@ function makeSession({ cwd, approval }) {
     steeringQueue: [],
     turns: 0,
     child: null,
-    // Bridge mode: the persistent ndjson child and the approval it is blocked on.
+    // Bridge mode: the persistent ndjson child and anything it is blocked on.
     bridge: null,
     pendingPermission: null,
+    pendingUi: null,
+    uiAnswer: null,
+    uiProgress: new Map(),
     compacting: false,
     compactRequested: false,
     dextSessionId: null,
@@ -1058,6 +1066,10 @@ function restoreSessions() {
       killed: false,
       compacting: false,
       compactRequested: false,
+      pendingPermission: null,
+      pendingUi: null,
+      uiAnswer: null,
+      uiProgress: new Map(),
       indexEntry: null,
       epoch: 0,
       deleted: false,
@@ -1107,9 +1119,10 @@ function metaOf(s) {
     updated_at: s.journal.length > 0 ? s.journal[s.journal.length - 1].ts : s.createdAt,
     last_seq: s.seq,
     unread: 0,
-    // A blocked bridge approval is discoverable from the list alone: clients
-    // (and auto-resubscribe logic) must not need the journal to see it.
+    // A blocked bridge approval or pack form is discoverable from the list alone:
+    // clients need not already have the session transcript subscribed.
     pending_permissions: s.pendingPermission ? 1 : 0,
+    pending_ui_requests: s.pendingUi ? 1 : 0,
   };
 }
 
@@ -1134,6 +1147,40 @@ function publish(env) {
   scheduleList();
 }
 
+/** Session-routed but intentionally unsequenced and unjournaled. Pack UI
+ * answers and transient progress must never enter transcript persistence. */
+function publishEphemeral(s, event, data) {
+  const env = { v: 1, session: s.id, ts: Date.now(), event };
+  if (data !== undefined) env.data = data;
+  publish(env);
+}
+
+let uiAnswerSeq = 0;
+
+function commitUiAnswer(s) {
+  const answer = s.uiAnswer;
+  if (!answer) return false;
+  if (answer.timer) clearTimeout(answer.timer);
+  s.uiAnswer = null;
+  if (s.pendingUi?.id === answer.id) s.pendingUi = null;
+  publishEphemeral(s, "ui.resolved", { id: answer.id, status: answer.status, by: answer.clientId });
+  return true;
+}
+
+function clearPackUi(s, status = "cancelled") {
+  if (s.uiAnswer?.timer) clearTimeout(s.uiAnswer.timer);
+  s.uiAnswer = null;
+  if (s.pendingUi) {
+    const id = s.pendingUi.id;
+    s.pendingUi = null;
+    publishEphemeral(s, "ui.resolved", { id, status });
+  }
+  if (s.uiProgress.size > 0) {
+    s.uiProgress.clear();
+    publishEphemeral(s, "ui.progress.cleared");
+  }
+}
+
 function snapshotEnvelope(s) {
   // Snapshot is a point-in-time projection at the current journal tail. It
   // MUST NOT consume a new seq: it is sent to one subscriber, so incrementing
@@ -1149,6 +1196,8 @@ function snapshotEnvelope(s) {
       meta: metaOf(s),
       blocks: fold(s.journal),
       pending_permissions: s.pendingPermission ? [s.pendingPermission] : [],
+      pending_ui_request: s.pendingUi ?? undefined,
+      ui_progress: [...s.uiProgress.values()],
       last_seq: s.seq,
       working: s.working,
       turn_started_at: s.turnStartedAt ?? undefined,
@@ -1199,7 +1248,7 @@ function bridgeEnv(s) {
 
 /** Spawn (or reuse) this session's bridged child. Resolves once dext is ready. */
 function ensureBridge(s) {
-  if (s.bridge && !s.bridge.exited) return s.bridge.whenReady().then(() => s.bridge);
+  if (s.bridge && !s.bridge.exited) return s.bridge.whenConfigured ?? s.bridge.whenReady().then(() => s.bridge);
   const epoch = s.epoch;
   let errTail = "";
   const args = bridgeArgs({ cwd: s.cwd, approval: s.approval, effort: s.thinkingEffort, seat: s.seat, resume: resumeTarget(s) });
@@ -1209,7 +1258,8 @@ function ensureBridge(s) {
     handleBridgeEvent(s, v);
   };
   const onExit = (code, sig) => {
-    if (s.bridge === bridge) s.bridge = null;
+    const ownsBridge = s.bridge === bridge;
+    if (ownsBridge) s.bridge = null;
     if (s.child === bridge?.child) s.child = null;
     if (s.deleted || s.epoch !== epoch) return;
     if (s.compacting || s.compactRequested) {
@@ -1224,6 +1274,7 @@ function ensureBridge(s) {
       publish(journalData(s, "permission.resolved", { request_id: s.pendingPermission.request_id, choice: "deny", by: "exit" }));
       s.pendingPermission = null;
     }
+    if (ownsBridge) clearPackUi(s, "disconnected");
     if (s.working && bridge.turnSeq === s.turnSeq) {
       // Only the bridge that owns the latest dispatched turn may fail it. A
       // recycled child exiting while its replacement already carries the next
@@ -1262,7 +1313,14 @@ function ensureBridge(s) {
   }
   s.bridge = bridge;
   s.child = bridge.child; // stopForPurge / signalChild keep working unchanged
-  return bridge.whenReady().then(() => bridge);
+  bridge.whenConfigured = bridge.whenReady().then((ready) => {
+    bridge.packUi = PACK_UI && supportsPackUi(ready);
+    if (bridge.packUi && !bridge.uiCapabilities(PACK_UI_METHODS)) {
+      throw new Error("dext stdin closed before pack UI capabilities were advertised");
+    }
+    return bridge;
+  });
+  return bridge.whenConfigured;
 }
 
 /** Core event → journal. Turn/permission bookkeeping lives here in bridge mode. */
@@ -1276,6 +1334,28 @@ function handleBridgeEvent(s, v) {
       persistIndex();
       return;
     case "input_ack":
+      // Form answers are committed only after core confirms correlation. A
+      // successful stdin write is not enough: the child can still reject a
+      // stale id or a full response channel.
+      if (d?.type === "ui.response" && s.uiAnswer && d.seq === s.uiAnswer.seq) {
+        const answer = s.uiAnswer;
+        if (d.route === "ui_response_forwarded") {
+          commitUiAnswer(s);
+        } else {
+          if (answer.timer) clearTimeout(answer.timer);
+          s.uiAnswer = null;
+          if (String(d.detail ?? "").includes("stale or already answered")) {
+            if (s.pendingUi?.id === answer.id) s.pendingUi = null;
+            publishEphemeral(s, "ui.resolved", { id: answer.id, status: "completed" });
+          } else {
+            publishEphemeral(s, "ui.response_failed", {
+              id: answer.id,
+              message: typeof d.detail === "string" && d.detail ? d.detail.slice(0, 500) : "Dext did not accept the form response",
+            });
+          }
+        }
+        return;
+      }
       // Withheld/invalid frames are the only acks worth showing.
       if (d && (d.route === "withheld" || d.route === "invalid" || d.route === "unsupported_busy_slash")) {
         if (s.compactRequested || s.compacting) {
@@ -1315,6 +1395,10 @@ function handleBridgeEvent(s, v) {
       SELF.tick();
       break;
     case "turn_end":
+      // Turn completion proves core consumed an in-flight form response even if
+      // its reader-thread input_ack is still queued behind turn events.
+      commitUiAnswer(s);
+      clearPackUi(s, "completed");
       s.working = false;
       s.turnStartedAt = null;
       s.turns += 1;
@@ -1388,6 +1472,33 @@ function handleBridgeEvent(s, v) {
       publish(journalData(s, "permission.resolved", { request_id: id, choice: d?.choice ?? "deny", by }));
       return;
     }
+    case "ui.request": {
+      // Core can consume a response and emit the next request before the stdin
+      // reader's input_ack reaches us. Any next request is itself authoritative
+      // proof that the prior response was accepted, even if the new request is
+      // malformed for this host.
+      if (s.uiAnswer) commitUiAnswer(s);
+      const normalized = normalizeUiRequest(d);
+      if (normalized.error) {
+        const id = typeof d?.id === "string" ? d.id : "";
+        if (id && s.bridge?.packUi) s.bridge.uiResponse(id, { status: "error", code: "invalid_request", message: normalized.error });
+        return;
+      }
+      const req = normalized.request;
+      if (req.method === "progress") {
+        s.uiProgress.set(progressKey(req), req);
+        publishEphemeral(s, "ui.progress", req);
+        if (!s.bridge?.uiResponse(req.id, { status: "ok" })) clearPackUi(s, "disconnected");
+        return;
+      }
+      if (s.pendingUi) {
+        s.bridge?.uiResponse(req.id, { status: "error", code: "busy", message: "another pack form is already pending" });
+        return;
+      }
+      s.pendingUi = req;
+      publishEphemeral(s, "ui.request", req);
+      return;
+    }
     case "tool_call_result":
       if (d?.name === "todo_write") {
         publish(journalData(s, v.event, d));
@@ -1447,6 +1558,7 @@ function runBridgedTurn(s, prompt) {
 function recycleBridge(s) {
   const bridge = s.bridge;
   if (!bridge || bridge.exited) return;
+  clearPackUi(s, "cancelled");
   s.bridge = null;
   bridge.close();
   setTimeout(() => { if (!bridge.exited) bridge.kill("SIGKILL"); }, 5000);
@@ -1653,6 +1765,7 @@ function signalChild(child, signal) {
 }
 
 function killChild(s, interrupted = true) {
+  if (interrupted) clearPackUi(s, "cancelled");
   if (s.bridge && !s.bridge.exited) {
     const bridge = s.bridge;
     s.killed = interrupted;
@@ -1752,6 +1865,10 @@ function finishCleanup(s, by) {
   removeJournalFile(s);
   s.journal = [];
   s.pending.clear();
+  s.pendingPermission = null;
+  s.pendingUi = null;
+  s.uiAnswer = null;
+  s.uiProgress.clear();
   s.steeringQueue = [];
   s.working = false;
   s.turnStartedAt = null;
@@ -2329,6 +2446,11 @@ async function handleCommand(client, frame) {
       const firstRetainedSeq = s.journal.length > 0 ? s.journal[0].seq : s.seq + 1;
       if (typeof since === "number" && since >= 0 && since >= firstRetainedSeq && since <= s.seq) {
         for (const env of s.journal) if (env.seq > since) client.send(JSON.stringify(env));
+        // Pack UI is intentionally absent from the journal. Re-emit current
+        // ephemeral state after a seq resume so a refreshed client cannot miss
+        // a blocking form or active progress presentation.
+        if (s.pendingUi) client.send(JSON.stringify({ v: 1, session: s.id, ts: Date.now(), event: "ui.request", data: s.pendingUi }));
+        for (const progress of s.uiProgress.values()) client.send(JSON.stringify({ v: 1, session: s.id, ts: Date.now(), event: "ui.progress", data: progress }));
       } else {
         client.send(JSON.stringify(snapshotEnvelope(s)));
       }
@@ -2613,6 +2735,49 @@ async function handleCommand(client, frame) {
         return;
       }
       s.pendingPermission.answeredBy = client.id;
+      return;
+    }
+
+    case "ui.respond": {
+      const s = sessions.get(frame.session);
+      if (!s) {
+        sendError(client, "no_session", `unknown session ${frame.session}`);
+        return;
+      }
+      const id = typeof frame.request_id === "string" ? frame.request_id : "";
+      const response = validUiResponse(frame);
+      if (!id || !response) {
+        if (id && s.pendingUi?.id === id) {
+          publishEphemeral(s, "ui.response_failed", { id, message: "The form response is invalid or exceeds 64 KiB" });
+        }
+        sendError(client, "bad_request", "ui.respond needs request_id and status ok|cancelled (ok may include value)");
+        return;
+      }
+      if (!s.pendingUi || s.pendingUi.id !== id) {
+        sendControl(client, "ui.already_resolved", { session: s.id, request_id: id });
+        return;
+      }
+      if (s.uiAnswer) {
+        sendControl(client, "ui.response_pending", { session: s.id, request_id: id });
+        return;
+      }
+      const seq = `ui-answer-${++uiAnswerSeq}`;
+      const answer = { seq, id, status: response.status, clientId: client.id, timer: null };
+      s.uiAnswer = answer;
+      if (!s.bridge?.packUi || s.bridge.exited || !s.bridge.uiResponse(id, response, seq)) {
+        s.uiAnswer = null;
+        publishEphemeral(s, "ui.response_failed", { id, message: "No live Dext request accepted the form response" });
+        sendError(client, "not_live", "no pack is waiting for this response");
+        return;
+      }
+      answer.timer = setTimeout(() => {
+        if (s.uiAnswer !== answer) return;
+        s.uiAnswer = null;
+        publishEphemeral(s, "ui.response_failed", { id, message: "Dext did not acknowledge the form response; it is safe to retry" });
+      }, 5000);
+      // Keep the form pending until core's correlated input_ack confirms that
+      // this exact response entered its one-slot UI channel. Response values are
+      // never copied into host state, events, journals, snapshots, or logs.
       return;
     }
 

@@ -2,6 +2,7 @@
   // Global approval queue: every pending permission across all sessions,
   // oldest first, at the top of the rail. Compact rows only — the full card
   // (diff + note) still lives in the active session's approval dock.
+  import type { PendingPackUi, PendingPermission } from "@dextui/client";
   import { queue, queueTotal, activate, respondGlobal } from "../lib/state.svelte";
   import { crewEscalations, crewDur, crewIdle, openRun, shortRun } from "../lib/crew.svelte";
 
@@ -14,6 +15,13 @@
   // Crew escalations: the one crew decision. [open] only. Sensitive image
   // approvals are review-only here; a/s/d remain for ordinary permissions.
   const escalations = $derived(crewEscalations());
+  type Decision =
+    | { kind: "permission"; at: number; sessionId: string; sessionTitle: string; pending: PendingPermission }
+    | { kind: "form"; at: number; sessionId: string; sessionTitle: string; pending: PendingPackUi };
+  const decisions = $derived.by((): Decision[] => [
+    ...queue.entries.map((entry): Decision => ({ kind: "permission", at: entry.pending.received_at, sessionId: entry.sessionId, sessionTitle: entry.sessionTitle, pending: entry.pending })),
+    ...queue.uiEntries.map((entry): Decision => ({ kind: "form", at: entry.pending.received_at, sessionId: entry.sessionId, sessionTitle: entry.sessionTitle, pending: entry.pending })),
+  ].sort((a, b) => a.at - b.at));
 
   // Coarse relative stamps ("3m") only need a slow clock, and only while rows exist.
   $effect(() => {
@@ -67,63 +75,73 @@
     </button>
     {#if open}
       <div class="queue-list">
-        {#each queue.entries as e (e.sessionId + ":" + e.pending.request_id)}
-          <div
-            class="queue-row"
-            data-agent-id={`queue.${e.sessionId}.${e.pending.request_id}`}
-            data-state="awaiting_approval"
-          >
-            <button
-              class="queue-goto"
-              data-agent-id={`queue.${e.sessionId}.${e.pending.request_id}.open`}
-              title="Open session"
-              onclick={() => go(e.sessionId)}
+        {#each decisions as decision (`${decision.kind}:${decision.sessionId}:${decision.kind === "form" ? decision.pending.id : decision.pending.request_id}`)}
+          {#if decision.kind === "form"}
+            <div class="queue-row count" data-agent-id={`queue.ui.${decision.sessionId}.${decision.pending.id}`} data-state="awaiting_answer">
+              <span class="st-yellow">?</span>
+              <span class="q-tool">{decision.pending.pack}</span>
+              <span class="dim truncate">{decision.pending.params.title}</span>
+              <span class="faint q-meta">{decision.sessionTitle} · {age(decision.pending.received_at)}</span>
+              <button class="act accent" data-agent-id={`queue.ui.${decision.sessionId}.${decision.pending.id}.open`} onclick={() => go(decision.sessionId)}>[Open form]</button>
+            </div>
+          {:else}
+            <div
+              class="queue-row"
+              data-agent-id={`queue.${decision.sessionId}.${decision.pending.request_id}`}
+              data-state="awaiting_approval"
             >
-              <span class="st-yellow">⚠</span>
-              <span class="q-tool">{e.pending.tool === "read_image" ? "Share image pixels" : e.pending.tool}</span>
-              <span class="dim truncate">{e.pending.summary}</span>
-              <span class="faint q-meta">{e.sessionTitle} · {age(e.pending.received_at)}</span>
-            </button>
-            <span class="queue-acts">
-              {#if e.pending.tool === "read_image"}
-                <button
-                  class="act accent"
-                  data-agent-id={`queue.${e.sessionId}.${e.pending.request_id}.review`}
-                  title="Open the full pixel-sharing disclosure before deciding"
-                  onclick={() => go(e.sessionId)}
-                >[review]</button>
-                <button
-                  class="act err"
-                  data-agent-id={`queue.${e.sessionId}.${e.pending.request_id}.deny`}
-                  aria-label="Do not share image pixels"
-                  title="Do not send this image to the model provider"
-                  onclick={() => respondGlobal(e.sessionId, e.pending.request_id, "deny")}
-                >[d]</button>
-              {:else}
-                <button
-                  class="act ok"
-                  data-agent-id={`queue.${e.sessionId}.${e.pending.request_id}.once`}
-                  aria-label="Approve once"
-                  title="Approve once"
-                  onclick={() => respondGlobal(e.sessionId, e.pending.request_id, "once")}
-                >[a]</button>
-                <button
-                  class="act accent"
-                  data-agent-id={`queue.${e.sessionId}.${e.pending.request_id}.always`}
-                  aria-label="Approve always"
-                  title="Approve always"
-                  onclick={() => respondGlobal(e.sessionId, e.pending.request_id, "always")}
-                >[s]</button>
-                <button
-                  class="act err"
-                  data-agent-id={`queue.${e.sessionId}.${e.pending.request_id}.deny`}
-                  aria-label="Deny"
-                  title="Deny"
-                  onclick={() => respondGlobal(e.sessionId, e.pending.request_id, "deny")}
-                >[d]</button>
-              {/if}
-            </span>
-          </div>
+              <button
+                class="queue-goto"
+                data-agent-id={`queue.${decision.sessionId}.${decision.pending.request_id}.open`}
+                title="Open session"
+                onclick={() => go(decision.sessionId)}
+              >
+                <span class="st-yellow">⚠</span>
+                <span class="q-tool">{decision.pending.tool === "read_image" ? "Share image pixels" : decision.pending.tool}</span>
+                <span class="dim truncate">{decision.pending.summary}</span>
+                <span class="faint q-meta">{decision.sessionTitle} · {age(decision.pending.received_at)}</span>
+              </button>
+              <span class="queue-acts">
+                {#if decision.pending.tool === "read_image"}
+                  <button
+                    class="act accent"
+                    data-agent-id={`queue.${decision.sessionId}.${decision.pending.request_id}.review`}
+                    title="Open the full pixel-sharing disclosure before deciding"
+                    onclick={() => go(decision.sessionId)}
+                  >[review]</button>
+                  <button
+                    class="act err"
+                    data-agent-id={`queue.${decision.sessionId}.${decision.pending.request_id}.deny`}
+                    aria-label="Do not share image pixels"
+                    title="Do not send this image to the model provider"
+                    onclick={() => respondGlobal(decision.sessionId, decision.pending.request_id, "deny")}
+                  >[d]</button>
+                {:else}
+                  <button
+                    class="act ok"
+                    data-agent-id={`queue.${decision.sessionId}.${decision.pending.request_id}.once`}
+                    aria-label="Approve once"
+                    title="Approve once"
+                    onclick={() => respondGlobal(decision.sessionId, decision.pending.request_id, "once")}
+                  >[a]</button>
+                  <button
+                    class="act accent"
+                    data-agent-id={`queue.${decision.sessionId}.${decision.pending.request_id}.always`}
+                    aria-label="Approve always"
+                    title="Approve always"
+                    onclick={() => respondGlobal(decision.sessionId, decision.pending.request_id, "always")}
+                  >[s]</button>
+                  <button
+                    class="act err"
+                    data-agent-id={`queue.${decision.sessionId}.${decision.pending.request_id}.deny`}
+                    aria-label="Deny"
+                    title="Deny"
+                    onclick={() => respondGlobal(decision.sessionId, decision.pending.request_id, "deny")}
+                  >[d]</button>
+                {/if}
+              </span>
+            </div>
+          {/if}
         {/each}
         {#each escalations as r (r.id)}
           <div class="queue-row count" data-agent-id={`queue.crew.${r.id}`} data-state="awaiting_answer">

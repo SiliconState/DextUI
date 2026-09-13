@@ -234,6 +234,19 @@ agent-browser click '[data-agent-id="artifact.state.request"]' >/dev/null
 wait_js 'document.querySelector(`[data-agent-id="artifact.state.status"] pre`)?.textContent.includes(`"load":"8"`)' || { echo "FAIL: restored state did not round-trip"; FAIL=1; }
 agent-browser press Escape >/dev/null
 
+note "pack UI: progress auto-acks and form answers stay out of chat"
+agent-browser fill '[data-agent-id="composer.input"]' 'pack ui demo' >/dev/null
+agent-browser press Enter >/dev/null
+wait_js '!!document.querySelector(`[data-agent-id="pack-ui.form"][data-state="awaiting_answer"]`) && !!document.querySelector(`[data-agent-id="pack-ui.progress"]`) && !!document.querySelector(`[data-agent-id^="queue.ui."]`) && document.querySelector(`[data-agent-id="pack-ui.form"]`)?.textContent.includes("does not add them to chat")' || { echo "FAIL: pack form/progress did not render"; agent-browser eval 'JSON.stringify({active:localStorage.getItem("dextui.activeSession"),events:window.__agentlink?.byEvent,form:!!document.querySelector(`[data-agent-id="pack-ui.form"]`),progress:!!document.querySelector(`[data-agent-id="pack-ui.progress"]`),queue:!!document.querySelector(`[data-agent-id^="queue.ui."]`),composer:document.querySelector(`[data-agent-id="composer.input"]`)?.value,tail:[...document.querySelectorAll(`[data-agent-id="block.text"],[data-agent-id="block.user"]`)].slice(-4).map(x=>x.textContent?.slice(0,120))})' || true; FAIL=1; }
+agent-browser click '[data-agent-id="pack-ui.submit"]' >/dev/null
+wait_js 'document.querySelector(`[data-agent-id="pack-ui.error"]`)?.textContent.includes("Name is required")' || { echo "FAIL: pack form required validation"; FAIL=1; }
+agent-browser fill '[data-agent-id="pack-ui.field.name"]' 'Ada' >/dev/null
+agent-browser fill '[data-agent-id="pack-ui.field.notes"]' 'private form answer' >/dev/null
+agent-browser eval '(()=>{document.querySelector(`[data-agent-id="pack-ui.field.confirm"]`).click();const s=document.querySelector(`[data-agent-id="pack-ui.field.color"]`);s.value="1";s.dispatchEvent(new Event("change",{bubbles:true}));const m=document.querySelector(`[data-agent-id="pack-ui.field.tags"]`);m.options[0].selected=true;m.options[1].selected=true;m.dispatchEvent(new Event("change",{bubbles:true}));return true})()' >/dev/null
+agent-browser click '[data-agent-id="pack-ui.submit"]' >/dev/null
+wait_js '!document.querySelector(`[data-agent-id="pack-ui.form"]`) && !document.querySelector(`[data-agent-id="pack-ui.progress"]`) && [...document.querySelectorAll(`[data-agent-id="block.text"]`)].at(-1)?.textContent.includes("Demo pack received the form")' || { echo "FAIL: pack form response did not complete"; FAIL=1; }
+wait_js '!document.body.textContent.includes("private form answer")' || { echo "FAIL: pack form answer leaked into rendered chat"; FAIL=1; }
+
 note "tool activity: structural work folds, Bash stays rich, every edit remains inspectable"
 agent-browser fill '[data-agent-id="composer.input"]' 'tool folding demo' >/dev/null
 agent-browser press Enter >/dev/null

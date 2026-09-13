@@ -115,6 +115,7 @@ test("bridge: live steering, permission round-trip, capability flags", { timeout
   const a = await h.client();
   assert.ok(a.hello.data.capabilities.includes("steering.live"), "bridge mode must advertise steering.live");
   assert.ok(a.hello.data.capabilities.includes("approvals"), "bridge mode must advertise approvals");
+  assert.ok(a.hello.data.capabilities.includes("pack_ui"), "bridge mode advertises the host pack UI surface");
   assert.ok(a.hello.data.capabilities.includes("slash.compact"), "bridge mode must advertise native compaction");
   assert.ok(a.hello.data.commands.some((command) => command.cmd === "/compact"), "composer command catalog includes /compact");
   const id = await open(a);
@@ -202,6 +203,75 @@ test("bridge: live steering, permission round-trip, capability flags", { timeout
   assert.equal(imageResult.data.ok, true);
   assert.match(imageResult.data.content, /pixels are available to the model only in this turn/);
   await a.wait((e) => e.session === id && e.event === "turn_end", at);
+});
+
+test("bridge: pack forms round-trip ephemerally, progress auto-acks, first browser wins", { timeout: 60000 }, async (t) => {
+  const h = await harness(t);
+  const a = await h.client();
+  const b = await h.client();
+  const id = await open(a);
+  a.send("session.subscribe", { id });
+  b.send("session.subscribe", { id });
+  const at = a.events.length;
+  a.send("prompt.submit", { session: id, text: "UI_FORM demo" });
+  const progress = await a.wait((e) => e.session === id && e.event === "ui.progress", at);
+  assert.equal(progress.data.params.id, "work");
+  const form = await a.wait((e) => e.session === id && e.event === "ui.request", at);
+  assert.equal(form.seq, undefined, "forms are unsequenced and unjournaled");
+  assert.equal(form.data.method, "form");
+  assert.equal(form.data.params.fields.length, 6);
+  const listed = await a.wait((e) => e.event === "session.list" && e.data.sessions.some((s) => s.id === id && s.pending_ui_requests === 1), at);
+  assert.ok(listed);
+
+  // A seq resume must replay ephemeral state even though neither event is in the journal.
+  const resumedAt = b.events.length;
+  b.send("session.subscribe", { id, since_seq: form.seq ?? 1 });
+  await b.wait((e) => e.session === id && e.event === "ui.request" && e.data.id === form.data.id, resumedAt);
+
+  const secret = "answer-must-not-be-persisted";
+  a.send("ui.respond", { session: id, request_id: form.data.id, status: "ok", value: { name: secret } });
+  // The host does not claim success merely because Node accepted a stdin write:
+  // core's correlated input_ack is the commit point.
+  assert.equal(a.events.slice(at).some((e) => e.session === id && e.event === "ui.resolved"), false);
+  const resolved = await a.wait((e) => e.session === id && e.event === "ui.resolved", at);
+  assert.equal(resolved.data.status, "ok");
+  assert.equal(JSON.stringify(resolved).includes(secret), false);
+  // A simultaneous stale response cannot reach core.
+  b.send("ui.respond", { session: id, request_id: form.data.id, status: "cancelled" });
+  await b.wait((e) => e.event === "ui.already_resolved" && e.data.request_id === form.data.id, resumedAt);
+  await a.wait((e) => e.session === id && e.event === "turn_end", at);
+
+  const journal = fs.readFileSync(path.join(h.state, "journals", `${id}.jsonl`), "utf8");
+  assert.equal(journal.includes(secret), false, "answer value never reaches the journal");
+  assert.equal(journal.includes('"event":"ui.request"'), false, "form metadata is ephemeral too");
+  const snapAt = a.events.length;
+  a.send("session.subscribe", { id });
+  const snapshot = await a.wait((e) => e.session === id && e.event === "session.snapshot", snapAt);
+  assert.equal(snapshot.data.pending_ui_request, undefined);
+  assert.deepEqual(snapshot.data.ui_progress, []);
+  assert.equal(JSON.stringify(snapshot).includes(secret), false);
+});
+
+test("bridge: a core-refused form response stays pending and can be retried", { timeout: 30000 }, async (t) => {
+  const h = await harness(t);
+  const a = await h.client();
+  const id = await open(a);
+  a.send("session.subscribe", { id });
+  const at = a.events.length;
+  a.send("prompt.submit", { session: id, text: "UI_REJECT demo" });
+  const form = await a.wait((e) => e.session === id && e.event === "ui.request", at);
+  a.send("ui.respond", { session: id, request_id: form.data.id, status: "ok", value: { name: "retry me" } });
+  const failed = await a.wait((e) => e.session === id && e.event === "ui.response_failed", at);
+  assert.match(failed.data.message, /queue full or closed/);
+  assert.equal(a.events.slice(at).some((e) => e.session === id && e.event === "ui.resolved"), false);
+  const snapAt = a.events.length;
+  a.send("session.subscribe", { id });
+  const snapshot = await a.wait((e) => e.session === id && e.event === "session.snapshot", snapAt);
+  assert.equal(snapshot.data.pending_ui_request.id, form.data.id, "refused response must not dismiss the recoverable form");
+  a.send("ui.respond", { session: id, request_id: form.data.id, status: "ok", value: { name: "retry me" } });
+  const retryResolved = await a.wait((e) => e.session === id && e.event === "ui.resolved" && e.data.id === form.data.id, snapAt);
+  assert.equal(retryResolved.data.status, "ok", "the preserved form can be retried after core rejection");
+  await a.wait((e) => e.session === id && e.event === "turn_end", snapAt);
 });
 
 test("bridge: browser disconnect does not interrupt the active turn or recycle its child", { timeout: 30000 }, async (t) => {

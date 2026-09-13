@@ -146,6 +146,56 @@ test("pending Map is replaced (new reference) on request/resolve/timeout", () =>
   assert.equal(p4.size, 0);
 });
 
+test("pack UI form and progress stay ephemeral and recover from snapshots", () => {
+  const store = new SessionStore("sess_t");
+  const progress = {
+    id: "ui-progress",
+    pack: "demo",
+    request_id: "p1",
+    method: "progress",
+    params: { id: "work", title: "Working", current: 1, total: 2, state: "running" },
+    received_at: 1000,
+  };
+  const form = {
+    id: "ui-form",
+    pack: "demo",
+    request_id: "profile",
+    method: "form",
+    params: { title: "Profile", submit_label: "Continue", fields: [{ id: "name", label: "Name", type: "text", required: true }] },
+    received_at: 1001,
+  };
+  store.apply({ v: 1, session: "sess_t", ts: 1000, event: "ui.progress", data: progress });
+  store.apply({ v: 1, session: "sess_t", ts: 1001, event: "ui.request", data: form });
+  assert.equal(store.state.pendingUi.id, "ui-form");
+  assert.equal(store.state.uiProgress.get("demo:work").params.current, 1);
+  assert.equal(store.state.lastSeq, 0, "ephemeral events do not advance journal sequence");
+  assert.equal(store.state.blocks.length, 0, "ephemeral UI does not enter transcript blocks");
+  store.apply({ v: 1, session: "sess_t", ts: 1002, event: "ui.response_failed", data: { id: "ui-form", message: "retry" } });
+  assert.equal(store.state.pendingUi.id, "ui-form", "failed response keeps the form pending");
+  assert.equal(store.state.uiResponseError, "retry");
+  const failureRev = store.state.uiResponseErrorRev;
+  store.apply({ v: 1, session: "sess_t", ts: 1003, event: "ui.response_failed", data: { id: "ui-form", message: "retry" } });
+  assert.ok(store.state.uiResponseErrorRev > failureRev, "identical retry failures still notify the UI");
+  store.apply({ v: 1, session: "sess_t", ts: 1004, event: "ui.resolved", data: { id: "ui-form", status: "ok" } });
+  store.apply({ v: 1, session: "sess_t", ts: 1005, event: "ui.progress.cleared" });
+  assert.equal(store.state.pendingUi, undefined);
+  assert.equal(store.state.uiProgress.size, 0);
+
+  store.apply({
+    v: 1,
+    session: "sess_t",
+    seq: 4,
+    ts: 1006,
+    event: "session.snapshot",
+    data: {
+      meta: { id: "sess_t", title: "T", cwd: "/w", status: "live", pending_permissions: 0, unread: 0, last_seq: 4 },
+      blocks: [], pending_permissions: [], pending_ui_request: form, ui_progress: [progress], last_seq: 4,
+    },
+  });
+  assert.equal(store.state.pendingUi.id, "ui-form");
+  assert.equal(store.state.uiProgress.size, 1);
+});
+
 test("lastSeq tracks the envelope seq", () => {
   const store = new SessionStore("sess_t");
   assert.equal(store.state.lastSeq, 0);
