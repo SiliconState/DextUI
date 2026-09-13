@@ -1,7 +1,8 @@
 {
   "version": 1,
   "command": "bin/receipts-runtime",
-  "timeout_seconds": 120,
+  "timeout_seconds": 3600,
+  "ui_protocol": 1,
   "max_continuations": 0,
   "tools": [
     {
@@ -46,6 +47,18 @@
           "category": { "type": "string" }
         },
         "required": ["vendor", "category"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "review_text_receipts",
+      "description": "Verify pending text receipts (txt/md) in DextUI forms: vendor/date/amount prefilled from each file's own text — fix anything wrong, then add or leave for later. Adds record the file as source; images/PDFs still need reading.",
+      "risk": "write",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "folder": { "type": "string", "description": "sub-folder relative to the workspace root; default is the root" }
+        },
         "additionalProperties": false
       }
     },

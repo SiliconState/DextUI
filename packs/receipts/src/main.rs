@@ -229,6 +229,172 @@ fn list_files(st: &Store, folder: &str) -> Result<Value, String> {
     Ok(json!({ "folder": if folder.is_empty() { "." } else { folder }, "files": files, "pending": pending }))
 }
 
+/// review_text_receipts: verify the guessed vendor/date/amount of pending text
+/// receipts (txt/md) in DextUI forms, prefilled from the file's own text.
+/// Adds go straight into the ledger with the file as source; "leave for later"
+/// is session state so review loops terminate without touching the ledger.
+const FILE_BATCH: usize = 3;
+const FILE_MAX_FORMS: usize = 10;
+
+fn host_forms(req: &Request) -> bool {
+    req.context.as_ref().map(|c| c.ui_methods.iter().any(|m| m == "form" || m == "*")).unwrap_or(false)
+}
+
+fn cut(s: &str, n: usize) -> String { s.chars().take(n).collect() }
+
+/// Session review state (round-tripped via Response.state): the folder being
+/// walked and the files the user chose to leave for later.
+fn review_state(req: &Request) -> (String, Vec<String>) {
+    let st = req.state.clone().unwrap_or(Value::Null);
+    let folder = st.get("review").and_then(|r| r.get("folder")).and_then(|f| f.as_str()).unwrap_or_default().to_string();
+    let skip = st.get("review").and_then(|r| r.get("skip")).and_then(|s| s.as_array())
+        .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).take(256).collect())
+        .unwrap_or_default();
+    (folder, skip)
+}
+
+fn review_state_json(folder: &str, skip: &[String]) -> Value {
+    json!({ "review": { "folder": folder, "skip": skip } })
+}
+
+/// Pending text receipts (txt/md, unrecorded, not skipped this session), with
+/// their guesses, in list_files order.
+fn pending_texts(st: &Store, folder: &str, skip: &[String]) -> Result<Vec<(String, Value)>, String> {
+    let v = list_files(st, folder)?;
+    let mut out = Vec::new();
+    for f in v["files"].as_array().cloned().unwrap_or_default() {
+        let file = f["file"].as_str().unwrap_or_default().to_string();
+        let ext = Path::new(&file).extension().map(|x| x.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
+        if f["recorded"].as_bool() != Some(false) || !["txt", "md"].contains(&ext.as_str()) || skip.iter().any(|s| s == &file) {
+            continue;
+        }
+        let guess = f.get("guess").cloned().unwrap_or(json!({ "vendor": "", "date": "", "amount": null }));
+        out.push((file, guess));
+    }
+    Ok(out)
+}
+
+fn snippet(st: &Store, file: &str) -> String {
+    let p = match confined(&st.root, file) { Ok(p) => p, Err(_) => return String::new() };
+    let text = read_text(&p, 512 * 1024).ok().flatten().unwrap_or_default();
+    cut(&text.lines().map(str::trim).filter(|l| !l.is_empty()).take(3).collect::<Vec<_>>().join(" · "), 160)
+}
+
+fn file_form(round: usize, batch: &[(String, Value)], rules: &std::collections::BTreeMap<String, String>, st: &Store) -> Value {
+    let mut fields = Vec::new();
+    for (i, (file, guess)) in batch.iter().enumerate() {
+        let i = i + 1;
+        let g = |k: &str| guess.get(k).and_then(|v| v.as_str()).unwrap_or_default().to_string();
+        let vendor = g("vendor");
+        let amount = guess.get("amount").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+        fields.push(json!({
+            "id": format!("s{i}"),
+            "label": cut(file, 80),
+            "type": "select",
+            "options": [
+                { "value": format!("add|{file}"), "label": "Add to the ledger" },
+                { "value": format!("skip|{file}"), "label": "Leave for later" },
+            ],
+            "default": format!("add|{file}"),
+            "description": snippet(st, file),
+        }));
+        for (suffix, label, val, ph) in [
+            ("d", "date", g("date"), "YYYY-MM-DD"),
+            ("v", "vendor", vendor.clone(), "who was paid"),
+            ("a", "amount", amount, "e.g. 12.50"),
+            ("c", "category", category_for(&vendor, "", rules), ""),
+        ] {
+            let mut field = json!({ "id": format!("{suffix}{i}"), "label": format!("{} — {label}", cut(file, 40)), "type": "text" });
+            if !ph.is_empty() { field["placeholder"] = Value::String(ph.to_string()); }
+            if !val.is_empty() { field["default"] = Value::String(val); }
+            fields.push(field);
+        }
+    }
+    json!({
+        "title": "Verify text receipts",
+        "description": format!("Batch {round}. Defaults are guessed from the file text — fix anything wrong. Add records it in the ledger with the file as source; cancelling keeps earlier batches."),
+        "submit_label": "Apply",
+        "fields": fields,
+    })
+}
+
+/// The tool entry point: first form, or a fallback summary on hosts without forms.
+fn review_files(st: &Store, input: &Value, req: &Request) -> Response {
+    let (state_folder, skip) = review_state(req);
+    let folder = { let f = s(input, "folder"); if f.is_empty() { state_folder } else { f } };
+    let pending = match pending_texts(st, &folder, &skip) { Ok(p) => p, Err(e) => return Response::error(e) };
+    if pending.is_empty() {
+        let rows = st.rows().unwrap_or_default();
+        let (content, md) = summary_view(st, &rows, None);
+        return Response::ok(format!("No pending text receipts to review. {content}")).view("Receipts — where things stand", md);
+    }
+    if !host_forms(req) {
+        return Response::ok(format!("{} text receipt file(s) pending and this host cannot render review forms. Use list_receipt_files to see each file's guessed vendor/date/amount, verify it, then add with add_receipt (date, vendor, amount, category, source=<file>).", pending.len()));
+    }
+    let batch: Vec<(String, Value)> = pending.iter().take(FILE_BATCH).cloned().collect();
+    let params = file_form(1, &batch, &st.rules(), st);
+    Response::ok(format!("Reviewing {} pending text receipt(s), {} per form.", pending.len(), batch.len()))
+        .ui_request("files-1", METHOD_FORM, params)
+        .with_state(review_state_json(&folder, &skip))
+}
+
+/// Host answered a verify form: apply the adds and skips, then ask the next or finish.
+fn files_answer(st: &Store, req: &Request, round: &UiRound) -> Response {
+    if round.method != METHOD_FORM {
+        return Response::error(format!("unexpected UI response method '{}'", round.method));
+    }
+    let Some(n) = round.request_id.strip_prefix("files-").and_then(|n| n.parse::<usize>().ok()) else {
+        return Response::error(format!("unexpected UI request id '{}'", round.request_id));
+    };
+    let (folder, mut skip) = review_state(req);
+    let pending = match pending_texts(st, &folder, &skip) { Ok(p) => p, Err(e) => return Response::error(e) };
+    let stopped = |why: &str| {
+        Response::ok(format!("Review stopped ({why}) — files already added stay in the ledger. {} text receipt(s) still pending; run review_text_receipts to continue.", pending.len()))
+    };
+    let UiAnswer::Ok { value } = &round.response else {
+        return stopped(match &round.response { UiAnswer::Cancelled => "cancelled", UiAnswer::Error { code, .. } => code, UiAnswer::Ok { .. } => unreachable!() });
+    };
+    // Each s<i> value is "add|<file>" or "skip|<file>", so answers stay valid
+    // even if the directory order shifts between form and submit.
+    let obj = value.as_object().cloned().unwrap_or_default();
+    let mut lines: Vec<String> = Vec::new();
+    for (key, choice) in &obj {
+        let Some(idx) = key.strip_prefix('s') else { continue };
+        let Some(choice) = choice.as_str() else { continue };
+        let Some((action, file)) = choice.split_once('|') else { continue };
+        if file.is_empty() || !pending.iter().any(|(f, _)| f == file) { continue; }
+        if action != "add" {
+            if !skip.iter().any(|s| s == file) && skip.len() < 256 {
+                skip.push(file.to_string());
+                lines.push(format!("{} left for later", cut(file, 60)));
+            }
+            continue;
+        }
+        let gi = |suffix: &str| obj.get(&format!("{suffix}{idx}")).and_then(|v| v.as_str()).map(str::to_string).unwrap_or_default();
+        let input = json!({ "date": gi("d"), "vendor": gi("v"), "amount": gi("a"), "category": gi("c"), "source": file });
+        match add_receipt(st, &input) {
+            Ok(resp) => lines.push(format!("{} → {}", cut(file, 60), cut(resp.content.split(". ").next().unwrap_or(&resp.content), 120))),
+            Err(e) => lines.push(format!("{} → not added: {e}", cut(file, 60))),
+        }
+    }
+    let head = if lines.is_empty() { "No files recorded this batch.".to_string() } else { lines.join("; ") };
+    let pending = match pending_texts(st, &folder, &skip) { Ok(p) => p, Err(e) => return Response::error(e) };
+    let finish = |head: &str, pending: usize, skip: Vec<String>, folder: &str| -> Response {
+        let rows = st.rows().unwrap_or_default();
+        let (content, md) = summary_view(st, &rows, None);
+        let tail = if pending == 0 { String::new() } else { format!(" {pending} file(s) left for later; run review_text_receipts again to continue.") };
+        Response::ok(format!("{head}{tail} {content}")).view("Receipts — where things stand", md).with_state(review_state_json(folder, &skip))
+    };
+    if pending.is_empty() || n >= FILE_MAX_FORMS {
+        return finish(&head, pending.len(), skip, &folder);
+    }
+    let batch: Vec<(String, Value)> = pending.iter().take(FILE_BATCH).cloned().collect();
+    let params = file_form(n + 1, &batch, &st.rules(), st);
+    Response::ok(format!("{head} {} file(s) left.", pending.len()))
+        .ui_request(format!("files-{}", n + 1), METHOD_FORM, params)
+        .with_state(review_state_json(&folder, &skip))
+}
+
 struct Receipts;
 
 impl Runtime for Receipts {
@@ -240,7 +406,7 @@ impl Runtime for Receipts {
         let rows = st.rows().unwrap_or_default();
         let (content, md) = summary_view(&st, &rows, None);
         Response::ok(format!(
-            "receipts ready in {} — ledger has {} rows ({}). Tools: list_receipt_files, add_receipt, set_category_rule, receipts_summary, export_ledger. Categories: {}.",
+            "receipts ready in {} — ledger has {} rows ({}). Tools: list_receipt_files, add_receipt, set_category_rule, receipts_summary, export_ledger, review_text_receipts (verify pending text receipts in quick forms). Categories: {}.",
             st.root.display(),
             rows.len(),
             content,
@@ -270,12 +436,17 @@ impl Runtime for Receipts {
                 Response::ok(content).view(format!("Receipts — {}", if month.is_empty() { "summary".to_string() } else { month }), md)
             }),
             "export_ledger" => export(&st, input),
+            "review_text_receipts" => Ok(review_files(&st, input, req)),
             other => Err(format!("unknown tool '{other}'")),
         };
         match r {
             Ok(resp) => resp,
             Err(e) => Response::error(e),
         }
+    }
+    fn ui_response(&mut self, req: &Request, round: &UiRound) -> Response {
+        let st = match Store::open(&req.cwd) { Ok(s) => s, Err(e) => return Response::error(e) };
+        files_answer(&st, req, round)
     }
 }
 

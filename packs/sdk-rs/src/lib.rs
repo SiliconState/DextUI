@@ -9,5 +9,6 @@
 pub mod protocol;
 pub mod util;
 
-pub use protocol::{run, Effect, Request, Response, Runtime};
+pub use protocol::{run, handle, safe_ui_token, Effect, Request, Response, Runtime, UiAnswer, UiAsk, UiRound,
+    METHOD_FORM, METHOD_PROGRESS, UI_PARAMS_CAP, UI_ROUND_LIMIT};
 pub use util::*;

@@ -1,7 +1,8 @@
 {
   "version": 1,
   "command": "bin/reconcile-runtime",
-  "timeout_seconds": 120,
+  "timeout_seconds": 3600,
+  "ui_protocol": 1,
   "max_continuations": 0,
   "tools": [
     { "name": "import_statement", "description": "Import a bank statement CSV (relative path in the folder). Columns are detected: date, description/memo/payee, and either amount or debit+credit. Replaces the previous statement and runs a first match.", "risk": "write",
@@ -9,6 +10,8 @@
     { "name": "reconcile", "description": "Match statement lines to ledger receipts and paid invoices by exact amount within a date window (default 3 days), then description similarity. Shows what is unexplained on either side.", "risk": "write",
       "input_schema": { "type": "object", "properties": { "window_days": { "type": "integer", "minimum": 0, "maximum": 30 } }, "additionalProperties": false } },
     { "name": "explain_line", "description": "Manually match a statement line to a book entry (ref like receipt#12 or invoice:INV-0003) or record a note explaining it (bank fee, transfer, personal).", "risk": "write",
-      "input_schema": { "type": "object", "properties": { "line": { "type": "string" }, "ref": { "type": "string" }, "note": { "type": "string" } }, "required": ["line"], "additionalProperties": false } }
+      "input_schema": { "type": "object", "properties": { "line": { "type": "string" }, "ref": { "type": "string" }, "note": { "type": "string" } }, "required": ["line"], "additionalProperties": false } },
+    { "name": "review_unexplained", "description": "Review statement lines the matcher could not explain, in DextUI forms: pick the matching receipt/invoice, explain with a note, or leave it. Answers apply per submitted batch; cancelling keeps earlier batches. Falls back to a plain list on hosts without forms.", "risk": "write",
+      "input_schema": { "type": "object", "properties": { "window_days": { "type": "integer", "minimum": 0, "maximum": 60, "description": "date window for candidate book entries; default 14" } }, "additionalProperties": false } }
   ]
 }
