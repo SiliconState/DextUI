@@ -12,6 +12,10 @@ use std::io::Read;
 
 pub const PROTOCOL_VERSION: u32 = 1;
 pub const REQUEST_CAP: usize = 256 * 1024;
+/// dext caps pack runtime stdout (the whole serialized response) at 256 KiB
+/// (`RUNTIME_RESPONSE_CAP`); over that the JSON frame is cut and the tool call
+/// fails, so [`write_response`] bounds the envelope, not just each field.
+pub const RESPONSE_CAP: usize = 256 * 1024;
 /// dext caps: content 128 KiB, view markdown 128 KiB, state 64 KiB, 16 effects.
 pub const CONTENT_CAP: usize = 128 * 1024;
 pub const VIEW_CAP: usize = 128 * 1024;
@@ -32,6 +36,20 @@ pub fn safe_ui_token(value: &str) -> bool {
         && value
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.'))
+}
+
+/// `String::truncate` is byte-indexed and panics when the cut lands inside a
+/// multi-byte UTF-8 character (packs emit `→`, `…`, `—` constantly). Always cut
+/// on a char boundary; the result is at most `max_bytes` long.
+fn truncate_chars(s: &mut String, max_bytes: usize) {
+    if s.len() <= max_bytes {
+        return;
+    }
+    let mut end = max_bytes;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    s.truncate(end);
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -153,10 +171,10 @@ impl Response {
     /// Add a `view` effect (a `runtime_view` card in DextUI). Title ≤ 256 chars.
     pub fn view(mut self, title: impl Into<String>, markdown: impl Into<String>) -> Self {
         let mut title: String = title.into();
-        title.truncate(256);
+        truncate_chars(&mut title, 256);
         let mut markdown: String = markdown.into();
         if markdown.len() > VIEW_CAP {
-            markdown.truncate(VIEW_CAP - 64);
+            truncate_chars(&mut markdown, VIEW_CAP - 64);
             markdown.push_str("\n\n_(view truncated)_");
         }
         if self.effects.len() < EFFECT_LIMIT {
@@ -165,8 +183,13 @@ impl Response {
         self
     }
     pub fn steer(mut self, text: impl Into<String>) -> Self {
+        let mut text: String = text.into();
+        if text.len() > CONTENT_CAP {
+            truncate_chars(&mut text, CONTENT_CAP - 64);
+            text.push_str("\n…(truncated)");
+        }
         if self.effects.len() < EFFECT_LIMIT {
-            self.effects.push(Effect::Steer { text: text.into() });
+            self.effects.push(Effect::Steer { text });
         }
         self
     }
@@ -192,7 +215,7 @@ impl Response {
     /// [`CONTENT_CAP`] and a final hard truncate guarantees the invariant.
     fn clamp(mut self) -> Self {
         if self.content.len() > CONTENT_CAP - 256 {
-            self.content.truncate(CONTENT_CAP - 256);
+            truncate_chars(&mut self.content, CONTENT_CAP - 256);
             self.content.push_str("\n…(truncated)");
         }
         if let Some(state) = &self.state {
@@ -212,9 +235,40 @@ impl Response {
             }
         }
         if self.content.len() > CONTENT_CAP {
-            self.content.truncate(CONTENT_CAP);
+            truncate_chars(&mut self.content, CONTENT_CAP);
         }
         self
+    }
+}
+
+/// Bound the whole response for the wire: per-field caps first
+/// ([`Response::clamp`]), then the serialized envelope. Content, state, and
+/// ui params can each sit under their own cap yet sum past dext's 256 KiB
+/// stdout cap, which cuts the JSON frame mid-parse. Shrink content — the one
+/// field where prose loss is acceptable — and keep state and `ui_request`,
+/// which drive resume flows.
+fn fit(mut resp: Response) -> Response {
+    resp = resp.clamp();
+    const BUDGET: usize = RESPONSE_CAP - 1024; // println adds a trailing newline
+    loop {
+        let len = serde_json::to_string(&resp).map(|s| s.len()).unwrap_or(usize::MAX);
+        if len <= BUDGET {
+            return resp;
+        }
+        let over = len.saturating_sub(BUDGET).max(64);
+        let target = resp.content.len().saturating_sub(over + 64);
+        if target == 0 {
+            // Content is spent (mathematically unreachable — state + params +
+            // framing stay under the cap with empty content — but never risk an
+            // unbounded loop): shed the optional payloads and stop.
+            resp.content = "response too large".into();
+            resp.state = None;
+            resp.ui_request = None;
+            resp.effects.clear();
+            return resp;
+        }
+        truncate_chars(&mut resp.content, target);
+        resp.content.push_str("\n…(response truncated to fit the size cap)");
     }
 }
 
@@ -237,13 +291,22 @@ pub fn read_request() -> Result<Request, String> {
 
 /// Print a response as the single stdout line dext reads.
 pub fn write_response(resp: Response) {
-    let resp = resp.clamp();
+    let resp = fit(resp);
     match serde_json::to_string(&resp) {
         Ok(s) => println!("{s}"),
-        Err(e) => println!(
-            "{{\"version\":1,\"content\":\"response serialization failed: {}\",\"is_error\":true,\"effects\":[]}}",
-            e.to_string().replace('"', "'")
-        ),
+        Err(e) => {
+            // Build the fallback through serde_json too: hand-escaping only
+            // quotes breaks the frame on newlines or backslashes.
+            let fallback = serde_json::json!({
+                "version": 1,
+                "content": format!("response serialization failed: {e}"),
+                "is_error": true,
+                "effects": []
+            });
+            println!("{}", serde_json::to_string(&fallback).unwrap_or_else(|_| {
+                "{\"version\":1,\"content\":\"response serialization failed\",\"is_error\":true,\"effects\":[]}".to_string()
+            }));
+        }
     }
 }
 
@@ -390,5 +453,39 @@ mod tests {
         assert!(resp.content.len() <= CONTENT_CAP);
         assert!(resp.content.contains("dropped"));
         assert!(resp.content.contains("…(truncated)"));
+    }
+
+    #[test]
+    fn truncation_is_char_safe_for_multibyte_text() {
+        // "→" is 3 bytes; byte-indexed String::truncate(10) would panic here.
+        let mut s = "→".repeat(10);
+        truncate_chars(&mut s, 10);
+        assert_eq!(s, "→→→"); // floor to the boundary: 9 bytes
+        // Multibyte content at the cap: must not panic and must stay valid.
+        let resp = Response::ok(format!("{}é", "→".repeat(CONTENT_CAP / 3))).clamp();
+        assert!(resp.content.len() <= CONTENT_CAP);
+        assert!(resp.content.chars().all(|c| c == '→' || c == 'é' || c == '\n' || "…(truncated)".contains(c)));
+        // Multibyte view title at the 256-byte cut.
+        let resp = Response::ok("").view("é".repeat(200), "md").clamp();
+        let Effect::View { title, .. } = &resp.effects[0] else { panic!() };
+        assert!(title.len() <= 256 && title.chars().all(|c| c == 'é'));
+    }
+
+    #[test]
+    fn fit_bounds_the_whole_serialized_envelope() {
+        // Each field under its own cap, yet the sum crosses dext's 256 KiB
+        // stdout cap: content must absorb the cut, state and ui_request stay.
+        let state = serde_json::json!({ "blob": "s".repeat(65_520) }); // ~65 532 serialized ≤ STATE_CAP
+        let params = serde_json::json!({ "b": "p".repeat(65_520) }); // ~65 532 serialized ≤ UI_PARAMS_CAP
+        let resp = fit(
+            Response::ok("x".repeat(CONTENT_CAP))
+                .with_state(state)
+                .ui_request("review-1-w14", METHOD_FORM, params),
+        );
+        let wire = serde_json::to_string(&resp).unwrap();
+        assert!(wire.len() <= RESPONSE_CAP - 1024, "envelope {} over budget", wire.len());
+        assert!(resp.state.is_some(), "state drives resume and must survive");
+        assert!(resp.ui_request.is_some(), "the pending form must survive");
+        assert!(resp.content.contains("response truncated"));
     }
 }
