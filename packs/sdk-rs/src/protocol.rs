@@ -85,6 +85,11 @@ pub struct UiRound {
     pub response: UiAnswer,
 }
 
+/// Wire shape pinned to dext core's `UiResponse` (`src/events.rs`): internally
+/// tagged by `status` — `Ok` carries `value` and `Error` carries `code`/
+/// `message` at the TOP level (there is no `data` envelope). Do not switch to
+/// adjacent tagging; `protocol::tests::ui_response_round_trips_through_handle`
+/// pins these exact frames.
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum UiAnswer {
@@ -182,10 +187,12 @@ impl Response {
     pub fn progress(id: impl Into<String>, params: Value) -> Self {
         Response::ok("").ui_request(id, METHOD_PROGRESS, params)
     }
-    /// Bound content/state/ui params to dext's caps so the response is never rejected.
+    /// Bound content/state/ui params to dext's caps so the response is never
+    /// rejected. Notes are appended inside a 256-byte headroom below
+    /// [`CONTENT_CAP`] and a final hard truncate guarantees the invariant.
     fn clamp(mut self) -> Self {
-        if self.content.len() > CONTENT_CAP {
-            self.content.truncate(CONTENT_CAP - 32);
+        if self.content.len() > CONTENT_CAP - 256 {
+            self.content.truncate(CONTENT_CAP - 256);
             self.content.push_str("\n…(truncated)");
         }
         if let Some(state) = &self.state {
@@ -203,6 +210,9 @@ impl Response {
             } else {
                 self.ui_request = Some(ask);
             }
+        }
+        if self.content.len() > CONTENT_CAP {
+            self.content.truncate(CONTENT_CAP);
         }
         self
     }
@@ -367,5 +377,18 @@ mod tests {
 
         let resp = Response::ok("").ui_request("bad id!", METHOD_FORM, serde_json::json!({})).clamp();
         assert!(resp.ui_request.is_none());
+    }
+
+    #[test]
+    fn clamp_never_exceeds_the_content_cap_even_with_drop_notes() {
+        // Oversized content AND a dropped ui request: the drop note must land
+        // inside the headroom, and the response must still fit dext's cap.
+        let resp = Response::ok("x".repeat(CONTENT_CAP + 512))
+            .ui_request("bad id!", METHOD_FORM, serde_json::json!({}))
+            .clamp();
+        assert!(resp.ui_request.is_none());
+        assert!(resp.content.len() <= CONTENT_CAP);
+        assert!(resp.content.contains("dropped"));
+        assert!(resp.content.contains("…(truncated)"));
     }
 }

@@ -57,7 +57,7 @@
       "input_schema": {
         "type": "object",
         "properties": {
-          "folder": { "type": "string", "description": "sub-folder relative to the workspace root; default is the root" }
+          "folder": { "type": "string", "description": "sub-folder relative to the workspace root; empty = the root. Omit to continue the folder from the current session." }
         },
         "additionalProperties": false
       }

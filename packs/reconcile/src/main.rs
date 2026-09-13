@@ -234,8 +234,15 @@ fn parse_review_id(id: &str) -> Option<(usize, i64)> {
 
 fn review_form(round: usize, batch: &[Line], cands: &[(String, String, String, i64)], used: &std::collections::HashSet<String>, explained: usize, total: usize, window: i64, symbol: &str) -> Value {
     let mut fields = Vec::new();
+    // One book entry explains at most one line: once a ref is offered to a
+    // line (and preselected as its default), later lines in the SAME batch
+    // must not offer or default to it again — otherwise two same-amount lines
+    // could both submit it on one Apply. Cross-batch safety comes from the
+    // saved matches feeding the next batch's `used` set.
+    let mut offered = used.clone();
     for l in batch {
-        let ranked = ranked_candidates(cands, used, l, window);
+        let ranked = ranked_candidates(cands, &offered, l, window);
+        if let Some(top) = ranked.first() { offered.insert(top.0.clone()); }
         let mut options: Vec<Value> = ranked
             .iter()
             .map(|c| json!({ "value": c.0, "label": format!("{} · {} · {} · {}", c.0, c.1, cut(&c.2, 60), Money(c.3).fmt(symbol)) }))
@@ -313,8 +320,12 @@ fn review_answer(st: &Store, round: &UiRound) -> Response {
     };
     // Apply exactly the fields the form carried (l<id> select, n<id> note).
     let obj = value.as_object().cloned().unwrap_or_default();
-    let valid_ref = |choice: &str, line: &Line| st.candidates().iter().any(|c| c.0 == choice && c.3 == line.amount);
+    let cands = st.candidates();
+    // A book entry explains at most one line: a ref already claimed by an
+    // earlier line of this batch is refused even when amount/date would fit,
+    // so a crafted submission cannot double-book one receipt/invoice.
     let mut matches = matches_now.clone();
+    let mut claimed: std::collections::HashSet<String> = matches.values().map(|m| m.r#ref.clone()).filter(|r| !r.is_empty()).collect();
     let mut applied: Vec<String> = Vec::new();
     for (key, choice) in &obj {
         let Some(line_id) = key.strip_prefix('l') else { continue };
@@ -335,7 +346,8 @@ fn review_answer(st: &Store, round: &UiRound) -> Response {
             }
             matches.insert(line_id.to_string(), Match { kind: "manual".into(), r#ref: String::new(), note: note.clone() });
             applied.push(format!("line {line_id} explained ({})", cut(&note, 60)));
-        } else if valid_ref(choice, line) {
+        } else if !claimed.contains(choice) && cands.iter().any(|c| c.0 == choice && c.3 == line.amount) {
+            claimed.insert(choice.to_string());
             let kind = if choice.starts_with("receipt") { "receipt" } else { "invoice" };
             matches.insert(line_id.to_string(), Match { kind: kind.into(), r#ref: choice.to_string(), note: String::new() });
             applied.push(format!("line {line_id} → {choice}"));

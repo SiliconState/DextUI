@@ -74,7 +74,7 @@ function seed(t) {
     [iso(5), "PAYMENT FROM BLUE BAKERY", "450.00"],
     [iso(2), "TRANSFER TO SAVINGS", "-500.00"],
     [iso(2), "WIDGETS STORE PURCHASE", "-30.00"],
-    [iso(1), "COFFEE SHOP", "-3.20"],
+    [iso(1), "GADGET SHOP", "-30.00"],
     [iso(1), "SNACKS", "-7.77"],
     [iso(1), "PARKING", "-15.00"],
     [iso(1), "LOTTERY TICKET", "-2.00"],
@@ -106,42 +106,49 @@ test("reconcile review: emits host-valid forms with ranked defaults, applies bat
   assert.equal(first.ui_request.method, "form");
   assert.equal(first.ui_request.id, "review-1-w14");
 
-  // Form 1 covers the first 5 unexplained lines; only the widgets line has a
-  // candidate, so it defaults to receipt#4 and the rest to "leave".
+  // Form 1 covers the first 5 unexplained lines. Widgets AND gadget match
+  // receipt#4 ($30, 8/9 days old) — the ref is offered to widgets only; the
+  // same-amount sibling must default to "leave" without it as an option.
   const fields = Object.fromEntries(first.ui_request.params.fields.map((f) => [f.id, f]));
   assert.deepEqual(first.ui_request.params.fields.filter((f) => f.type === "select").map((f) => f.id), ["l3", "l6", "l7", "l8", "l9"]);
   assert.equal(fields.l7.default, "receipt#4");
   assert.equal(fields.l7.options[0].value, "receipt#4");
+  assert.equal(fields.l8.default, "__skip__");
+  assert.ok(fields.l8.options.every((o) => o.value !== "receipt#4"), "same-batch sibling must not be offered an already-defaulted ref");
   assert.equal(fields.l3.default, "__skip__");
   assert.match(fields.n3.label, /note/i);
 
-  // Answer batch 1: note the fee, leave the transfer/coffee/snacks, accept the
-  // widgets match. Batch 2 (parking, lottery) is cancelled.
-  const r1 = answer("reconcile", cwd, { request_id: first.ui_request.id, method: "form", response: { status: "ok", value: { l3: "__note__", n3: "bank monthly fee", l6: "__skip__", l7: "receipt#4", l8: "__skip__", l9: "__skip__" } } });
+  // Answer batch 1: note the fee, accept the widgets match, leave the
+  // transfer/snacks — and craft a duplicate receipt#4 claim on the gadget
+  // line, which the claimed-ref guard must refuse (it was never offered there).
+  const r1 = answer("reconcile", cwd, { request_id: first.ui_request.id, method: "form", response: { status: "ok", value: { l3: "__note__", n3: "bank monthly fee", l6: "__skip__", l7: "receipt#4", l8: "receipt#4", l9: "__skip__" } } });
   assert.equal(r1.is_error, false);
   assert.match(r1.content, /line 3 explained \(bank monthly fee\)/);
   assert.match(r1.content, /line 7 → receipt#4/);
+  assert.doesNotMatch(r1.content, /line 8 →/);
   assert.match(r1.content, /line 6 left unexplained/);
   const afterBatch1 = matches();
-  assert.deepEqual(Object.keys(afterBatch1).sort(), ["1", "2", "3", "4", "5", "6", "7", "8", "9"].sort());
+  assert.deepEqual(Object.keys(afterBatch1).sort(), ["1", "2", "3", "4", "5", "6", "7", "9"].sort());
+  assert.equal(afterBatch1["8"], undefined);
   assert.equal(afterBatch1["3"].kind, "manual");
   assert.equal(afterBatch1["6"].kind, "skipped");
   assert.equal(afterBatch1["7"].ref, "receipt#4");
   assert.equal(r1.ui_request.id, "review-2-w14");
-  assert.deepEqual(r1.ui_request.params.fields.filter((f) => f.type === "select").map((f) => f.id), ["l10", "l11"]);
+  // The refused gadget line is re-asked with the untouched rest.
+  assert.deepEqual(r1.ui_request.params.fields.filter((f) => f.type === "select").map((f) => f.id), ["l8", "l10", "l11"]);
 
   const r2 = answer("reconcile", cwd, { request_id: r1.ui_request.id, method: "form", response: { status: "cancelled" } });
   assert.equal(r2.is_error, false);
   assert.equal(r2.ui_request, undefined);
   assert.match(r2.content, /Review stopped \(cancelled\)/);
-  assert.match(r2.content, /2 line\(s\) still unexplained/);
-  assert.deepEqual(Object.keys(matches()).length, 9); // batch 2 was NOT applied
+  assert.match(r2.content, /3 line\(s\) still unexplained/);
+  assert.equal(Object.keys(matches()).length, 8); // batch 2 was NOT applied
 
   // Resume: a fresh review asks only for the leftovers; finishing renders the
   // reconciliation view with skipped lines counted separately.
   const resume = tool("reconcile", cwd, "review_unexplained", {});
-  assert.deepEqual(resume.ui_request.params.fields.filter((f) => f.type === "select").map((f) => f.id), ["l10", "l11"]);
-  const done = drive("reconcile", cwd, resume, () => ({ status: "ok", value: { l10: "__note__", n10: "parking cash", l11: "__skip__" } })).final;
+  assert.deepEqual(resume.ui_request.params.fields.filter((f) => f.type === "select").map((f) => f.id), ["l8", "l10", "l11"]);
+  const done = drive("reconcile", cwd, resume, () => ({ status: "ok", value: { l8: "__skip__", l10: "__note__", n10: "parking cash", l11: "__skip__" } })).final;
   assert.equal(done.is_error, false);
   assert.match(done.content, /Review complete\./);
   assert.match(done.content, /7 of 11 lines matched/);
@@ -248,4 +255,26 @@ test("receipts review: falls back to guidance on hosts without forms", (t) => {
   assert.equal(resp.ui_request, undefined);
   assert.match(resp.content, /2 text receipt file\(s\) pending/);
   assert.match(resp.content, /list_receipt_files/);
+});
+
+test("receipts review: explicit folder (even empty) wins over the session's remembered folder", (t) => {
+  ensureBuilt();
+  const { cwd } = seedFiles(t);
+  fs.mkdirSync(path.join(cwd, "sub"));
+  fs.writeFileSync(path.join(cwd, "sub", "inner.txt"), "Inner Shop\nTotal: $9.99\n");
+  // Review the sub-folder, leave its file for later → the session remembers folder "sub".
+  const sub = tool("receipts", cwd, "review_text_receipts", { folder: "sub" });
+  assert.equal(sub.ui_request.id, "files-1");
+  assert.equal(sub.state.review.folder, "sub");
+  const r1 = answer("receipts", cwd, { request_id: "files-1", method: "form", response: { status: "ok", value: { s1: "skip|sub/inner.txt" } } }, sub.state);
+  assert.deepEqual(r1.state.review.skip, ["sub/inner.txt"]);
+  // Omitted folder continues the session's folder: nothing pending there.
+  const continued = call("receipts", cwd, "tool", { tool: "review_text_receipts", input: {}, state: r1.state });
+  assert.equal(continued.ui_request, undefined);
+  assert.match(continued.content, /No pending text receipts/);
+  // Explicit "" is the root — the remembered folder must not hijack it.
+  const root = call("receipts", cwd, "tool", { tool: "review_text_receipts", input: { folder: "" }, state: r1.state });
+  assert.equal(root.ui_request.id, "files-1");
+  assert.deepEqual(root.ui_request.params.fields.filter((f) => f.type === "select").map((f) => f.id), ["s1", "s2"]);
+  assert.equal(root.ui_request.params.fields.find((f) => f.id === "s1").default, "add|hardware.txt");
 });

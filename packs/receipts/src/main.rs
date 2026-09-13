@@ -321,7 +321,14 @@ fn file_form(round: usize, batch: &[(String, Value)], rules: &std::collections::
 /// The tool entry point: first form, or a fallback summary on hosts without forms.
 fn review_files(st: &Store, input: &Value, req: &Request) -> Response {
     let (state_folder, skip) = review_state(req);
-    let folder = { let f = s(input, "folder"); if f.is_empty() { state_folder } else { f } };
+    // An explicit folder — even "" (the root) — always wins; the session's
+    // remembered folder is only a fallback when the tool call omits the key
+    // entirely. Otherwise the schema's "default is the root" promise would
+    // break for a session that previously reviewed a sub-folder.
+    let folder = match input.get("folder") {
+        Some(v) => v.as_str().unwrap_or_default().to_string(),
+        None => state_folder,
+    };
     let pending = match pending_texts(st, &folder, &skip) { Ok(p) => p, Err(e) => return Response::error(e) };
     if pending.is_empty() {
         let rows = st.rows().unwrap_or_default();
