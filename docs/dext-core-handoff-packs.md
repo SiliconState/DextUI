@@ -1,4 +1,4 @@
-# dext-core handoff — packs as product (from DextUI)
+# dext-core handoff: packs as product (from DextUI)
 
 From: `dextui` (author of origin: DextUI, commit `f6f0982` on `~/DextUI` master)
 To: `dext-repo`
@@ -6,7 +6,7 @@ Date: 2026-09-05
 Context: `~/dextui-workspace/dextui-packs-day1.md` (proposal) and
 `~/DextUI/docs/packs-day1-assessment.md` (what I verified, what I changed, why).
 
-## What DextUI already does — nothing below blocks it
+## What DextUI already does: nothing below blocks it
 
 agentlinkd now discovers the pack catalog by parsing `dext pack list --verbose`,
 reads flat `ui-*` keys from each `PACK.md` front matter, runs `/pack run
@@ -48,7 +48,7 @@ carries them, and authors get validation instead of silent typos.
 (`parse_front_matter`; the `_ => {}` arm already ignores these keys, so this is
 backward compatible in both directions).
 
-**Grammar** — flat `key: value`, same line grammar as `name`/`description`;
+**Grammar**: flat `key: value`, same line grammar as `name`/`description`;
 `_` and `-` interchangeable in keys, case-insensitive:
 
 | key | type | rule |
@@ -79,11 +79,11 @@ report on this repo"). Only dext knows when a pack actually became active.
 
 **Where.** `src/events.rs:44` (next to `RuntimeView`); emit at
 `main.rs:17520` immediately after `inferred_pack` resolves and before
-`pack_prompt` is built — one event per activation, before any `runtime_view`.
+`pack_prompt` is built, one event per activation, before any `runtime_view`.
 
 **Shape.** Tag `pack_start`, data `{ "name": "<pack.name>", "task_preview": "<first 80 chars of task>" }`.
 Pass-through in `--output stream-json` like every other `AgentEvent` (no host
-change needed — AgentLink forwards dext events verbatim). `DEXT_NO_PACK`
+change needed, AgentLink forwards dext events verbatim). `DEXT_NO_PACK`
 suppression path emits nothing.
 
 **Acceptance.** `dext -p --output stream-json <<< "run hello-chart"` emits
@@ -99,7 +99,7 @@ suppression path emits nothing.
 **Where.** `src/packs.rs:364` (`create_pack`) and `main.rs:23674` (`"create" | "new"` arm).
 
 **Behaviour.** Resolve `<pack>` with the existing selector logic; copy the
-directory (regular files only — refuse symlinks, same posture as
+directory (regular files only, refuse symlinks, same posture as
 `read_pack_file`), rewrite `name:` in the copied `PACK.md` to `<name>`, do not
 copy `.env*` or anything matching the privacy redaction rules, print the same
 two lines `create` prints today. Error if target exists. `--project` still
@@ -126,8 +126,8 @@ will change `runTurn` in `~/DextUI/packages/agentlinkd/src/server.mjs`
 
 ## Subsequently implemented
 
-- Approval bridge / `PermissionRequested` round-trip — implemented through the persistent NDJSON bridge.
-- Pack Runtime Protocol `ui.request/ui.response` forms and progress — implemented in core and now consumed end-to-end by agentlinkd and DextUI.
+- Approval bridge / `PermissionRequested` round-trip, implemented through the persistent NDJSON bridge.
+- Pack Runtime Protocol `ui.request/ui.response` forms and progress, implemented in core and now consumed end-to-end by agentlinkd and DextUI.
 
 ## Still not asked for
 

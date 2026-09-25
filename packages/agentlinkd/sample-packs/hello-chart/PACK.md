@@ -29,7 +29,7 @@ path works before a new user has to trust anything slower.
 {"type":"bar","title":"Hello from a pack","labels":["packs","run","edit","share"],"values":[4,3,2,1],"unit":"","dataset":"hello"}
 ```
 
-3. After the fence, one line: "Hover, drag a bar, or click sort — this chart is
+3. After the fence, one line: "Hover, drag a bar, or click sort, this chart is
    live. Try `/pack list` to see what else is installed."
 
 ## Output

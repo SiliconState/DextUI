@@ -1,6 +1,6 @@
 ---
 name: taxprep
-description: Quarterly tax estimate and an accountant-ready package from your books — revenue received, deductible expenses by category, taxable amount, checklist. Arithmetic from your own rules, not tax advice.
+description: Quarterly tax estimate and an accountant-ready package from your books, revenue received, deductible expenses by category, taxable amount, checklist. Arithmetic from your own rules, not tax advice.
 ui-title: Tax prep
 ui-starter-prompt: Estimate this quarter's tax from my books and build the package my accountant needs
 ui-artifact: html
@@ -22,9 +22,9 @@ Inputs: `.receipts/ledger.csv` (expenses) and `.invoices/register.csv` (payments
 1. First run: ask for jurisdiction (a label), the flat rate (%) to apply, the fiscal
    year start month, and which categories are not deductible → `set_tax_config`.
    **Never guess a rate or a rule.** If the user does not know, say so and leave the
-   rate at 0 — the package is still useful to the accountant.
+   rate at 0, the package is still useful to the accountant.
 2. `estimate` for the quarter; read the taxable amount and the checklist. If any
-   expenses are Uncategorised, fix those first (receipts pack) — they cannot be
+   expenses are Uncategorised, fix those first (receipts pack), they cannot be
    classified.
 3. `build_package` writes `expenses.csv`, `invoices.csv`, `summary.md`, `summary.json`
    into `.taxprep/package-<quarter>/`. Point the user at the folder.

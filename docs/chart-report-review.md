@@ -1,4 +1,4 @@
-# Chart and market-report review — 2026-09-08
+# Chart and market-report review: 2026-09-08
 
 ## Scope and evidence
 

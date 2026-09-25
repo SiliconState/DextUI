@@ -1,6 +1,6 @@
 ---
 name: reconcile
-description: Match a bank statement to your books — receipts and paid invoices — and list exactly what does not line up on either side. Rust runtime does the matching; the agent explains the leftovers with you.
+description: Match a bank statement to your books, receipts and paid invoices, and list exactly what does not line up on either side. Rust runtime does the matching; the agent explains the leftovers with you.
 ui-title: Bank reconciliation
 ui-starter-prompt: Import my bank statement CSV from this folder and show me what does not match my receipts and invoices
 ui-artifact: table
