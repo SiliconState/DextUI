@@ -1,6 +1,6 @@
 # DextUI
 
-A web front end for the `dext` coding agent — consumer-friendly for people who
+A web front end for the `dext` coding agent, consumer-friendly for people who
 delegate work, agent-drivable for the agents doing it. DextUI is one half of an
 event-sourced pair: a host journals every session event with a monotonic `seq`;
 the app folds that journal into a live, terminal-native UI. dext does the
