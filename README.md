@@ -8,9 +8,9 @@ thinking; DextUI presents, supervises, and gets out of the way.
 
 Two hosts speak the same AgentLink v1 protocol:
 
-- **`agentlinkd`** — the real host. Spawns dext per session and bridges the
+- **`agentlinkd`**: the real host. Spawns dext per session and bridges the
   event stream to the browser. Real sessions, real models, real cost.
-- **`mock-server`** — fixture replay for development. No API key, no cost.
+- **`mock-server`**: fixture replay for development. No API key, no cost.
 
 ## Contents
 
