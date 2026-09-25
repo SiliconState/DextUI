@@ -116,8 +116,9 @@ Agents authoring workspace `.html` artifacts SHOULD follow this contract: self-c
 ## Repo map
 
 ```
-PROTOCOL.md            AgentLink v1 wire contract (the keystone)
-UPSTREAM.md            dext bridge-mode PR spec
+docs/PROTOCOL.md       AgentLink v1 wire contract (the keystone)
+docs/DESIGN.md         design notes, contracts, repo map, milestones (this file)
+docs/UPSTREAM.md       dext bridge-mode PR spec
 packages/protocol      TS types + envelope helpers (zero deps)
 packages/client        connection + per-session state machine + seq resume + chart renderer (zero deps)
   test/                node:test suites: fold equivalence, store contract, reconnect
@@ -127,7 +128,6 @@ packages/agentlinkd    zero-dep Node host for real dext (one-shot bridge, on-dis
 apps/web               Svelte 5 PWA, hand-rolled terminal design system (the reference client)
   src/ext/             auto-registered extensions (fences, panels, Finder/slash commands, flow nodes)
 packs/                 consumer packs: sdk-rs, pack-sdk-ts, receipts, invoice, reconcile, cashflow, taxprep, followups, flows/
-.crew/                 project-local crew agents + specs used to build this repo
 ```
 
 ## Milestones

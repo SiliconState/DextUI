@@ -14,3 +14,5 @@ packages/agentlinkd/.flows-test-*/
 packs/target/
 packs/*/ui/panel.html
 .crew/
+patches/
+recall.md

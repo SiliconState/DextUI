@@ -1,5 +1,10 @@
 # UPSTREAM: `dext bridge` — PR spec
 
+> The `git format-patch` series implementing this spec (`patches/dext/0001…0005`
+> in earlier revisions of this repo) travels with the dext core checkout and is
+> not shipped here. In-code comments citing `patches/dext/NNNN` refer to that
+> series.
+
 The only change DextUI needs from dext: a single-session, bidirectional machine interface over stdio NDJSON. Deliberately small — one new module plus dispatch wiring. No sockets, no server, no new tools, no prompt changes. Dext keeps its one-local-binary posture; multi-session supervision lives downstream in DextUI's host, which spawns one `dext bridge` child per session.
 
 ## Interface
