@@ -29,3 +29,23 @@ chains them. Tests: `scripts/packs-runtime.test.mjs` (receipts, invoice, panels)
 
 The packs run under dext's Pack Runtime (`runtime.json`); every tool returns
 a view card so DextUI shows charts/tables and the agent narrates them.
+
+## Gallery metadata (optional)
+
+DextUI reads flat `ui-*` keys from a pack's `PACK.md` front matter (dext's
+parser ignores unknown keys, so this is backward compatible):
+
+```yaml
+---
+name: report
+description: Generate self-contained interactive HTML reports …
+ui-starter-prompt: Summarise this workspace as an HTML report
+ui-artifact: html            # html | chart | table | markdown | file | none
+ui-time-to-first-artifact: 45
+ui-requires: [approval:auto-write]   # also: chromium, lightpanda, connector:<name>
+ui-gallery: true
+ui-tags: [research, summary]
+ui-title: Report               # plain-language card title
+ui-personas: [everyone]        # accountant | business | developer; empty = all
+---
+```

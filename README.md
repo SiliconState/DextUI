@@ -1,32 +1,59 @@
 # DextUI
 
-A web front end for the `dext` coding agent, consumer-friendly for people who
-delegate work, agent-drivable for the agents doing it. DextUI is one half of an
-event-sourced pair: a host journals every session event with a monotonic `seq`;
+A web front end for the [dext](https://github.com/SiliconState/Dext) coding
+agent, consumer-friendly for people delegating work, agent-drivable for the
+agents doing it. The host journals every session event with a monotonic `seq`;
 the app folds that journal into a live, terminal-native UI. dext does the
 thinking; DextUI presents, supervises, and gets out of the way.
 
-Two hosts speak the same AgentLink v1 protocol:
+![A DextUI session — markdown, interactive charts and artifacts in one stream](docs/screenshots/hero-session.png)
 
-- **`agentlinkd`**: the real host. Spawns dext per session and bridges the
-  event stream to the browser. Real sessions, real models, real cost.
-- **`mock-server`**: fixture replay for development. No API key, no cost.
+## Quickstart
 
-## Contents
+```bash
+npm install
+npm run build
+npm run serve -- --cwd=$HOME/my-project --approval=auto-read
+```
 
-- [Repository layout](#repository-layout)
-- [Quickstart — real dext](#quickstart--real-dext)
-- [Quickstart — mock (no API key)](#quickstart--mock-no-api-key)
-- [Host flags and in-session commands](#host-flags-and-in-session-commands)
-- [Features](#features)
-- [Packs](#packs)
-- [Flows](#flows-drag-and-drop-workflows)
-- [Shared task workspace](#shared-task-workspace)
-- [Self-editing (workbench)](#self-editing-workbench)
-- [Agent affordances](#agent-affordances)
-- [Legacy one-shot host limits](#legacy-one-shot-host-limits)
-- [Development and verification](#development-and-verification)
-- [Documentation](#documentation)
+Open http://127.0.0.1:8788 and pair with the printed token. Every prompt runs a
+real dext turn in `--cwd`; follow-ups resume the same session.
+
+No API key? `npm run mock` starts a fixture host on http://127.0.0.1:8787
+(token `dev-token`).
+
+After pulling changes: web-only needs `npm run build` plus a tab reload (the
+host serves `apps/web/dist` from disk); host changes need an `agentlinkd`
+restart.
+
+Useful flags: `--port` · `--token` · `--dext` (auto-detects the binary) ·
+`--approval` · `--state-dir` (journals; default `~/.dextui/agentlinkd`) ·
+`--crew` · `--safe` (serve the last-known-good build).
+
+## Highlights
+
+- **Multi-session rail** — cold/wake restore, rename, true-purge delete,
+  `Ctrl+[`/`]` cycling
+- **One action queue** — every pending approval across all sessions, `a`/`s`/`d`
+  keyboard decisions, desktop notifications
+- **Steering, interrupt, `/compact`** — queue input mid-turn, stop cleanly,
+  compact context against a core-verified meter
+- **Real rendering** — markdown, interactive charts, inline images, a sandboxed
+  HTML artifact sheet, attachments with a consent-labeled `read_image` handoff
+- **Pack gallery home** — persona onboarding and starter prompts; packs run as
+  first-class turns ([packs/README.md](packs/README.md))
+- **Flows** — a drag-and-drop canvas that compiles to crew runs, with
+  schedule/watch/mesh/webhook triggers ([docs/PROTOCOL.md](docs/PROTOCOL.md))
+- **Shared tasks** — one durable `.task.json` both you and the agent hold;
+  rev-checked, `done` requires a passing check
+- **Crew runs** — rail ticker, run sheet and escalation queue when a `crew`
+  binary is present ([docs/crew-live-monitoring.md](docs/crew-live-monitoring.md))
+- **Self-editing workbench** — staged build/swap/rollback and idle restart of
+  the host itself ([docs/DESIGN.md](docs/DESIGN.md))
+- **Agent-drivable** — stable `data-agent-id` hooks on every control, a bounded
+  `GET /__agent` scene digest
+
+![The pack gallery — DextUI's home screen](docs/screenshots/hero-gallery.png)
 
 ## Repository layout
 
@@ -35,540 +62,31 @@ Two hosts speak the same AgentLink v1 protocol:
 | `apps/web` | Svelte 5 PWA, hand-rolled terminal design system (no CSS framework) |
 | `packages/protocol` | AgentLink v1 types + envelope helpers (`@dextui/protocol`) |
 | `packages/client` | Framework-free `Connection` + `SessionStore` (WS, seq-resume, reconnect) |
-| `packages/agentlinkd` | Real host: dext bridge, seat resume, on-disk journals (`--state-dir`) |
+| `packages/agentlinkd` | Real host: dext bridge, seat resume, on-disk journals |
 | `packages/mock-server` | Fixture-replay mock host — no API key needed |
-| `packs/` | Consumer packs ("Rust core, TS panel") + SDKs — see [packs/README.md](packs/README.md) |
-| `docs/` | [Protocol](docs/PROTOCOL.md), [design notes](docs/DESIGN.md), [upstream spec](docs/UPSTREAM.md), reviews, screenshots |
+| `packs/` | Consumer packs ("Rust core, TS panel") + SDKs |
+| `docs/` | Protocol, design notes, upstream spec, reviews, screenshots |
 
-## Quickstart — real dext
-
-```bash
-npm install
-npm run build            # protocol -> client -> web
-npm run serve -- --cwd=$HOME/my-project --approval=auto-read
-```
-
-Open http://127.0.0.1:8788 and pair with the printed token (or pass
-`--token=...`). Every prompt runs a real dext turn in `--cwd`; follow-up prompts
-resume the same session via a dedicated dext seat.
-
-After pulling host changes, **restart the running `agentlinkd`** (e.g.
-`systemctl --user restart dext-agentlinkd`): the process keeps the code it
-started with, and the web app reads host capabilities once per connection — an
-old host hides every control it can't honor (the session rail says so). Web-only
-changes need just `npm run build` plus a tab reload; the host serves
-`apps/web/dist` from disk.
-
-## Quickstart — mock (no API key)
+## Verification
 
 ```bash
-npm run mock             # fixture host on http://127.0.0.1:8787, token dev-token
+npm test                 # unit + fold-equivalence suites, then a real-browser
+                         # smoke (visibly skips where agent-browser is absent)
+npm run smoke            # mock host end-to-end
+npm run smoke:agentlinkd # real-host surface against a fake dext
 ```
-
-The mock replays real recorded dext streams, synthesizes approval flows, and
-answers `markdown table demo` with a rich-markdown turn.
-
-## Host flags and in-session commands
-
-Flags: `--port` (8788) · `--token` (random, printed) · `--dext` (auto-detects
-`~/Dext/target/release/dext`, falls back to PATH) · `--cwd` (session working
-dir — must be owner-safe, not under /tmp) · `--approval`
-(`auto-read|auto-write|never|always`, default `auto-read`) · `--static` (built
-PWA dir) · `--state-dir` (on-disk journals + session index; default
-`~/.dextui/agentlinkd`) · `--crew` (crew binary; default `crew` on PATH, or
-`CREW_BIN`) · `--gallery=<file>` / `DEXTUI_GALLERY` (gallery curation override)
-· `--dirs-root=` (folder-picker root) · `--safe` (serve the last-known-good
-build).
-
-In-session: `/help` · `/approval <profile>` (applies from the next turn) ·
-`/pack run <name> <task>` · `/pack list` · `/pack inspect <name>` ·
-`/pack create <shelf>/<name>` · `/compact` · `/tasks` · `/flows` ·
-`/ui build|rollback|restart` (workbench).
-
-## Features
-
-### Sessions
-
-- **Multi-session index** with status glyphs and pending badges; the desktop
-  sidebar minimizes (`Ctrl/Cmd+B`, persisted), narrow screens use an off-canvas
-  drawer; `Ctrl+[` / `Ctrl+]` cycles sessions.
-- **Full lifecycle per session**: rename (`F2`), close/wake, clear (fresh agent
-  context, keeps the shell), and true-purge delete — the host stops the child,
-  then removes the journal, the index entry, the dext seat's transcripts and
-  records, and the client's local drafts/history. `Ctrl+Backspace` deletes the
-  active session; bulk "delete closed / delete all" run behind an explicit
-  confirmation. Failed purges never fake success: the session stays, the intent
-  is retried at host boot, and ids are never recycled.
-- **Cold/wake restore**: journals persist under `--state-dir`; a host restart
-  restores sessions cold from disk and they wake on `session.open` or the next
-  prompt.
-- **Status line** in dext's TUI idiom:
-  `● cwd | title │ model │ effort │ approval │ Ctx [██████░░░░] │ ↑↓ $`.
-- **Responsive working surface**: chat/history stay left-anchored and fill the
-  main pane; the composer keeps its full-window prompt behavior; document
-  height is fixed to the viewport and only scrollback scrolls.
-
-### Approvals and the action queue
-
-- **Global action queue**: every pending approval across all sessions in one
-  rail (oldest first) with in-place `a`/`s`/`d` for ordinary tools,
-  review-first navigation for sensitive image sharing, a status-line badge,
-  finder actions, and a document-title counter for background tabs.
-- **Keyboard-first approvals** (mock/upstream): `a` / `s` / `d`, note, diff
-  preview — sensitive image reads open their full disclosure card before a
-  cross-session decision.
-- **Desktop notifications** (opt-in): approval requests, turn completion with
-  usage/cost, failures — only while the tab is hidden, deduped across reconnect
-  replays.
-- **Finder** (`⌘K`/`Ctrl+K`): fzf-style — approvals first, then sessions,
-  settings, stop, sign out.
-
-### Thinking, steering, context
-
-- **Active reasoning preview**: live thinking stays compact but readable at
-  four lines; completed reasoning folds into its existing disclosure block.
-- **Steering without stopping**: input sent while a turn runs queues on the
-  host and auto-runs as the next turn at the boundary — `steering_received`
-  markers acknowledge immediately, `^c` keeps the queue for the next prompt.
-- **Native context compaction**: `/compact` runs through dext's persistent
-  bridge between turns. The transcript shows one quiet progress row, keeps the
-  completed summary collapsed behind disclosure, and switches the CTX meter to
-  core's authoritative post-compaction estimate; prompts and controls that
-  could race are disabled until completion, while stop remains available.
-
-### Composer and controls
-
-- **Composer ergonomics**: per-session prompt history (shell semantics: `↑`
-  from the first line, edit forks the draft, `[↑n]` recall marker), per-session
-  drafts, host-driven `/` completion with legacy capability fallback,
-  hero-typing spawns a seeded session.
-- **Per-session model + reasoning controls**: native web selectors populated
-  from core's provider catalog. The catalog refreshes on connection,
-  model-picker focus and opening Providers; credentials or models added through
-  core appear without restarting the host. With the NDJSON bridge,
-  model/provider changes apply between turns while preserving history;
-  reasoning effort can change mid-turn. Dext remains the only credential
-  holder; no separate provider key or model list is stored in the UI.
-- **Todo panel**: reads dext's own todo files per session through the host
-  (`todos_read`-gated) — source badge, path, `○ ◐ ●` status glyphs; refreshes
-  on activation and `turn_end`.
-- **Themes**: dark / dim / light / system (follows OS live), persisted.
-- **Shortcuts overlay** (`?`): every binding in one dialog; overlays trap focus
-  and restore it on close.
-- **Capability negotiation**: steer/approve controls appear only when the host
-  advertises them (`hello_ok.capabilities`).
-- Interrupt (`^c` stop), block inspector drawer, toasts, offline-capable PWA.
-
-### Rendering: markdown, charts, artifacts, attachments
-
-- **Real markdown**: GFM tables, nested lists, headings, blockquotes, fences,
-  safe links — real DOM elements, escaped by construction; pre-drawn box-art
-  passes through verbatim in x-scrolling `<pre>`.
-- **Interactive charts**: a ` ```chart ` fence carrying a JSON spec (`bar`,
-  `hbar`, `line`, `spark`, `donut`; multi-`series`, `x`/`y` axis captions, up to
-  180 points for lines / 31 for categorical) renders as a live chart — hover
-  tooltips, drag points/bars for what-ifs with recomputed stats, click-sort,
-  wheel-zoom + pan, legend toggles, donut isolate; charts sharing a `dataset`
-  id cross-highlight each other.
-- **Chart domains and ranking**: `"domain":[-3,3]` (two finite numbers,
-  increasing) for bar, hbar and line axes; `"sort":"desc"|"asc"` for signed bar
-  rankings. Bar outliers retain their real-value labels while clipping to the
-  plot; line segments clip without flattening values; drag axes and ranked rows
-  stay frozen until release. Related charts sharing a `dataset` id keep the same
-  source label ordering. Tables immediately followed by bar/hbar charts form a
-  tape grid: below a 1000px message-container width it stacks; tape charts keep
-  a 500px minimum content width and scroll locally.
-- **Images and HTML artifacts**: local images render inline.
-  `![title](dashboard.html)` leaves a compact history launcher and opens the
-  report in a wide, sandboxed right-side artifact sheet; report code never
-  receives the pairing token or network access (theming contract in
-  [docs/DESIGN.md](docs/DESIGN.md)).
-- **File attachments** (`files_write`): `+` by the composer (or
-  drag/drop/paste) uploads into `<cwd>/uploads/`; `⤓` safely fetches a public
-  URL. Images (including AVIF/BMP/TIFF/HEIC), PDF, text/config data, and common
-  Office/ODF documents are served back with type-safe preview/download. PNG,
-  JPEG and WebP up to core's 20 MiB source cap hand off explicitly to
-  `read_image(path)` (maximum two successful images per user turn); the approval
-  dock labels this as pixel sharing and explains provider disclosure, and the
-  completed tool card shows `image → context`. Unsupported formats, oversized
-  images and text-only models keep explicit conversion/OCR guidance. Core
-  sanitizes, resizes, strips metadata, and sends pixels only for the approved
-  turn.
-
-### Crew runs
-
-When a `crew` binary is on PATH (or `--crew=`), the host advertises `crew`,
-watches `~/.dext/crew/runs` plus every project's `.crew/runs`, and pushes run
-summaries (`hello_ok.crews`, `x-agentlinkd.crew.changed` — ids and counts,
-never worker prose). Three tiers, one projection:
-
-- a statusline **ticker** while a run is live;
-- a **crews** rail section beneath the queue (attention-sorted, 3 + `n more`,
-  unmounts when empty);
-- a **run sheet** overlay with step groups, one-line worker rows, a single
-  bounded log tail (80 lines), deliverable links (realpath-confined to the
-  run's chain dir), `[x] stop` while live, and an answer composer while paused.
-
-Escalations (`status=paused` + a worker `result.escalation`) are the only crew
-decision: `[open]`-only rows in the Action Queue, counted in the title badge,
-notified while hidden; `a`/`s`/`d` skip them. Answering runs crew's two-step
-`resume --answer` then `run --manifest` on the host; first answer wins
-(`crew_already_answered`). A user-stopped run renders dim, not red. Failures
-never badge. See [docs/crew-live-monitoring.md](docs/crew-live-monitoring.md).
-
-## Packs
-
-### Packs as product
-
-The host discovers dext's pack catalog (`dext pack list --verbose` + each
-`PACK.md`) and advertises it in `hello_ok.packs`:
-
-- The empty state is a **pack gallery** (hero "Build a connector" card +
-  curated cards + all packs), one key away (`g`); every card prefills the
-  composer with a starter prompt you review before it runs. The rail has a
-  collapsible packs section.
-- `/pack run <name> <task>` executes on the host as an explicit
-  `dext --pack <name>` turn (the composer's `/` menu lists every pack);
-  `/pack list|inspect|create` work too. Turns carry a pack badge, and
-  `runtime_view` cards get **run again · edit pack · make my own**.
-- A pack needing a stricter approval profile than the session's is refused with
-  `pack_requires_profile`; the toast offers a one-click `/approval` switch
-  (headless dext would otherwise deny its writes silently).
-- New pack directories are picked up live (`packs.changed`). Curated day-1
-  starter prompts live in `packages/agentlinkd/src/packs.mjs`
-  (`GALLERY_DEFAULTS`); pack authors override them with flat `ui-*` keys in
-  `PACK.md` front matter (below).
-- Current dext cores drive **pack forms and progress** over the persistent
-  NDJSON channel: agentlinkd negotiates `form`/`progress` after `ready`, forms
-  join the action queue and render as accessible field sheets, and stable
-  progress IDs update a transient status row. Form answers travel directly back
-  to the approved pack runtime — never into chat, journals, snapshots, logs, or
-  host digest data. Assessment and deviations from the proposal:
-  [docs/packs-day1-assessment.md](docs/packs-day1-assessment.md).
-
-### Pack gallery metadata
-
-DextUI reads optional, flat `ui-*` keys from a pack's `PACK.md` front matter
-(dext's parser ignores unknown keys, so this is backward compatible):
-
-```yaml
----
-name: report
-description: Generate self-contained interactive HTML reports …
-ui-starter-prompt: Summarise this workspace as an HTML report
-ui-artifact: html            # html | chart | table | markdown | file | none
-ui-time-to-first-artifact: 45
-ui-requires: [approval:auto-write]   # also: chromium, lightpanda, connector:<name>
-ui-gallery: true
-ui-tags: [research, summary]
----
-```
-
-The sample `hello-chart` pack (guaranteed sub-10 s chart, no tools) ships in
-`packages/agentlinkd/sample-packs/hello-chart/`. Install it into your shelves:
-
-```bash
-dext pack create samples/hello-chart && cp packages/agentlinkd/sample-packs/hello-chart/PACK.md ~/.dext/shelves/samples/packs/hello-chart/PACK.md
-```
-
-### Onboarding (who is this for?)
-
-The first visit asks one question — **I keep the books / I run a business / I
-build software** — and remembers the answer per browser (`dextui.persona`,
-changeable any time from the gallery header). It only decides what you see
-*first*: nothing is hidden; the rest folds under "Developer tools" (or
-"Business tools" for developers) and "All packs".
-
-- Cards show plain-language titles (`ui-title`, e.g. `crew` → **Team**, `mesh`
-  → **Inbox**) and requirements in words ("needs permission to write files").
-  Curation lives in `packages/agentlinkd/gallery.json`; a pack's own
-  `ui-title` / `ui-personas` front-matter keys win.
-- **Work in a folder.** With no session active, picking a card opens the folder
-  picker first: a HOME-confined browser (`hello_ok.home`,
-  `x-agentlinkd.dirs.{list,create}`; no dot-directories, no symlinks, nothing
-  outside the root is ever listed). "Use this folder" opens a session there
-  with `auto-write`, seeded with the card's prompt. Keyboard: `↑↓` move · `→`
-  open · `←` up · `⏎` use · `n` new folder.
-- Personas: `accountant` | `business` | `developer`; a pack lists who it is for
-  in `ui-personas` (`everyone` or empty = shown to all).
-
-### Consumer packs (business shelf)
-
-`packs/` holds six "Rust core, TS panel" packs for bookkeepers and small
-business owners — receipts, invoices, bank reconciliation, cash-flow forecast,
-tax prep, follow-ups — built and installed onto `~/.dext/shelves/business` by
-`packs/build.sh`. State is plain files in the user's folder; every tool returns
-a card (charts / sortable tables / live panel) the UI renders. See
-[packs/README.md](packs/README.md).
-
-## Flows (drag-and-drop workflows)
-
-Press `f` (or `/flows`, or Finder → "flows") to open the **flow builder**: a
-zero-dependency SVG canvas where a workflow is a small graph of typed steps.
-Flows are plain files — `<folder>/.dext/flows/<name>.flow.json` — you can edit,
-copy and version. **crew is the executor**: "run" compiles the flow to a crew
-chain spec (`.crew/specs/flow-<name>-<ts>.json`) and starts `crew run --spec`
-detached; progress, deliverables and checkpoints show up in the existing crew
-rail / run sheet / Action Queue. No second engine.
-
-| Node | What it does | Compiles to |
-|---|---|---|
-| Pack | run one of your tools on a task | worker step, `run <pack> — <task>` (dext's pack inference) |
-| Prompt | a helper does one step and writes a result | worker step with your prompt, optional agent/model |
-| Checkpoint (gate) | pause and ask you before continuing | worker writes `escalation.json` → run pauses → Action Queue; answering resumes |
-| Message | send a note via Inbox (mesh) | worker shells `mesh send <to>` with the resolved text |
-| Condition | continue only if clearly true, else ask | worker replies `PASS:` or escalates |
-
-Steps run in topological order (Kahn; declaration order breaks ties); each step
-sees `{previous}` (crew's own template variable) and writes `<node-id>.md` as
-its deliverable. Node types come from the extension registry
-(`apps/web/src/ext/flow`), so a pack can register its own node type.
-
-Canvas: drag nodes · drag the `○→` port onto another node to connect · click a
-node to edit its fields · wheel zooms, background drag pans · `spec` shows the
-exact crew spec a run would use. Validation (ids, types, cycles, caps) is
-host-side (`packages/agentlinkd/src/flows.mjs`) and errors come back verbatim.
-
-Sample: `packs/flows/month-end-close.flow.json` — scan receipts + who-owes-me →
-ledger clean? → summary → your approval → tell the accountant. Copy it into a
-folder's `.dext/flows/` to try it.
-
-### Triggers — what starts a flow besides ▶
-
-Triggers live on the flow file (`flow.triggers[]`, max 8) and are armed by the
-host's scheduler for every workspace it knows (the `--cwd`, every session's
-cwd, every folder the builder touched). The "starts when" strip in the builder
-edits them; the host validates on save and reports what is armed (`flows.list`
-/ `flows.changed` carry `triggers[]` with last-fire times).
-
-| Trigger | Config | How it fires |
-|---|---|---|
-| schedule | `every: 15..10080` minutes, or `daily_at: "HH:MM"` (+ `weekday: 0-6`) | 30 s tick, local time; last fire persisted in `<state-dir>/triggers.json` so a restart never double-fires a day |
-| watch | `path` relative folder (`.` = the workspace) | `fs.watch`, 5 s debounce, dot-dirs (`.dext`, `.receipts`…) ignored |
-| mesh | `node` to listen as, optional `from` | `mesh recv --node <node>` polled every 15 s; a matching message fires |
-| webhook | nothing stored | `POST /hooks/<token>`; the token is an HMAC of the pairing token + workspace + flow name — unguessable, never written, shown in the builder after save |
-
-Every fire goes through the same `startFlowRun` as the ▶ button (compile →
-`.crew/specs` → `crew run --spec` detached). Launches are **tracked spawn →
-exit**: the reply honestly says `starting`, and the outcome (`started` exit 0 /
-`failed` with exit code + stderr tail) is broadcast and shown in the flows
-list — spawn accepted ≠ run succeeded. Firing semantics: one launch in flight
-per flow (events while busy or cooling down coalesce into one pending fire), a
-failed launch is not a fire — it backs off exponentially (30 s → 30 min) and
-retries on later ticks, and schedules are idempotent per slot so a restart
-never refires the same `every` bucket or `daily_at` calendar date. `daily_at`
-slots move by calendar arithmetic, so DST cannot shift them. Wrong hook tokens
-count toward the auth lockout like wrong bearers.
-
-A flow is **one sequential chain** — every step has one outgoing and one
-incoming connection (the canvas enforces it at draw time, the host at save):
-the compiled crew chain's only data wire is `{previous}`. Parallel work goes in
-separate flows.
-
-Surface: capability `flows`;
-`x-agentlinkd.flows.{list,get,put,delete,compile,run}` (replies carry
-`triggers[]` and the last `launches[]`), broadcasts `x-agentlinkd.flows.changed`,
-`.run` (launch outcomes) and `.trigger` (`phase: pending|start|failed` +
-`retry_at`); `POST /hooks/<token>`. The mock host keeps flows in memory.
-
-## Shared task workspace
-
-A **task** is the one durable record around a piece of delegated work that BOTH
-sides hold: `<cwd>/.dext/tasks/<name>.task.json`. The host validates and
-confines every write (rev bump, atomic rename, symlinks refused); the agent
-writes the very same file with its own tools — the host watches the directory
-and broadcasts changes, so an agent-side edit reaches every open tab live.
-
-- **UI**: "t" or `/tasks` — list with status glyphs (`○ ▶ ⛔ ✓ ✗`), the record
-  editor (goal, acceptance one-per-line, blocked-on + answer, guardrails),
-  agent attribution (`· agent`) and rev per row.
-- **In-session slash**: `/task` lists; `/task plan <name> <goal>`,
-  `/task block <name> <question>`, `/task answer <name> <answer>`,
-  `/task check <name> <what>` (records evidence), `/task done <name>` (refused
-  without a passing check).
-- **Contract, enforced by the host on every write**: `rev` bumps per write and
-  a concurrent edit is refused `stale_rev` — the UI shows a fork notice and
-  offers reload, never a silent overwrite; `done` needs a passing check;
-  `blocked` needs the question a human must answer, and answering clears it.
-
-Surface: capability `tasks`; `x-agentlinkd.tasks.{list,get,put,delete}`;
-broadcast `x-agentlinkd.tasks.changed`. See [docs/PROTOCOL.md](docs/PROTOCOL.md)
-for the full record contract.
-
-## Self-editing (workbench)
-
-When `agentlinkd` runs from this checkout it advertises the `self_edit`
-capability: DextUI can rebuild and restart **itself**, whether the change comes
-from you (Finder → "rebuild UI") or from the agent in a **workbench session**
-(Finder → "open workbench — edit DextUI itself": a session whose cwd is this
-repo, `auto-write`, composer seeded with the contract below).
-
-Both drivers converge on the same primitives, so nothing is special-cased:
-
-| Path | Web change (`apps/web/**`) | Host change (`packages/agentlinkd/**`) |
-|---|---|---|
-| Human | Finder "rebuild UI" · `/ui build [--tests]` · `x-agentlinkd.ui.build` | Finder "restart host when idle" · `/ui restart [why]` |
-| Agent (bash, inside its turn) | `node packages/agentlinkd/scripts/ui-build.mjs` (`npm run ui:build`) | write `{"reason":"…"}` to `<state-dir>/restart.request` |
-
-- **Staged build → verify → atomic swap → LKG.** `ui-build.mjs` builds protocol
-  → client → svelte-check → vite into `apps/web/dist.staging`, then renames
-  `dist → dist.lkg` and `dist.staging → dist`. A failing step leaves the served
-  build untouched. `--tests` adds `npm test`; `--no-check` skips svelte-check;
-  `--rollback` (or `/ui rollback`, `npm run ui:rollback`) serves the previous
-  build again.
-- **The host notices, tabs reload.** agentlinkd watches `apps/web/dist` and
-  broadcasts `x-agentlinkd.ui.rebuilt` after *any* swap — including one the
-  agent ran from bash. Open tabs get a "reload" toast (hidden tabs reload on
-  their own). Each build writes `dist/build-id.txt`; a tab whose `__BUILD_ID__`
-  differs from the served one is offered a reload at hello.
-- **Restart when idle.** A restart request (command, slash, or the request
-  file) is refused-into-a-queue while any turn, crew run or build is live and
-  honored at the next idle boundary — which, for an agent editing the host, is
-  the end of its own turn. The host exits with status **75**; systemd's
-  `Restart=on-failure` brings it back (the shipped `dext-agentlinkd` unit uses
-  `Restart=on-failure`, `RestartSec=2` — keep it that way, `Restart=no` would
-  strand the UI after a self-restart). `--force` restarts now.
-- **`--safe`** serves `apps/web/dist.lkg` instead of `dist` so a broken build
-  can never lock you out of the UI that fixes it; a missing `dist/index.html`
-  falls back to the LKG automatically.
-- **Extensions, not surgery.** `apps/web/src/ext/<name>/index.ts` is
-  auto-imported; it registers fences (```lang → component), panels (above the
-  composer), Finder commands, client-side slash commands and flow-builder node
-  types. The reference extension `ext/csv` renders ```csv / ```tsv fences as
-  sortable tables. The workbench seed prompt tells the agent to prefer an
-  extension over editing core files.
-- Surface: `hello_ok.self`, `GET /__self` (auth),
-  `POST /__self/{build,rollback,restart,restart_cancel}`,
-  `x-agentlinkd.ui.{status,build,rollback}`,
-  `x-agentlinkd.host.{restart,restart_cancel}`, broadcasts
-  `x-agentlinkd.ui.build` (start/step/ok/fail), `x-agentlinkd.ui.rebuilt`,
-  `x-agentlinkd.host.restart` (pending/restarting/cancelled).
-
-## Agent affordances
-
-DextUI is designed to be drivable by other agents, not just humans:
-
-- Every actionable element carries a stable `data-agent-id` (e.g.
-  `composer.send`, `approval.<request_id>.once`, `session.<id>.open`)
-- New controls follow the same scheme: `queue.<session>.<request_id>.once`,
-  `queue.ui.<session>.<id>.open`, `pack-ui.field.<id>`, `pack-ui.submit`,
-  `queue.badge`, `todos.toggle`, `notify.toggle`, `shortcuts.close`,
-  `composer.histmark`, `session.<id>.actions`, `session.action.confirm`,
-  `packs.gallery`, `packs.card.<name>`, `packs.hero`, `rail.packs.<name>.run`,
-  `view.<pack>.rerun`, `toast.<id>.action`
-- `GET /packs` and `GET /packs/:name` (auth) expose the catalog and a shallow,
-  read-only file listing
-- Regions expose `data-state` (`awaiting_approval`, `working`, `idle`, `ready`,
-  `disabled`)
-- `GET /__agent` returns a bounded scene digest (auth required)
-- `window.__agentlink` counts received envelopes by event type — transport
-  debugging
-
-## Legacy one-shot host limits
-
-Current core builds support live approvals/steering, between-turn model
-switching, and negotiated pack forms/progress over the NDJSON bridge. The host
-probes for `--input ndjson`; only older binaries fall back to these limits:
-
-- **Model changes after history exists require a new UI session** — resumed
-  dext seats restore their persisted model. DextUI rejects the change instead
-  of mutating dext's global provider defaults or pretending it applied. Effort
-  remains configurable between turns.
-- **Queued steering, not live injection** — one-shot children have no live
-  stdin, so mid-turn input queues on the host and delivers automatically as the
-  next turn's prompt at the turn boundary (the composer stays enabled;
-  interrupting keeps the queue). True in-stream steering needs the upstream
-  dext bridge.
-- **No interactive approvals or pack UI** — tool policy is dext's own
-  `--approval` profile; pack runtimes receive no advertised `form`/`progress`
-  methods. Change approval per session with `/approval <profile>`.
-- **Journals persist under `--state-dir`** — a host restart restores the
-  session list cold from disk; dext seats hold the history, and a session wakes
-  on `session.open` or the next prompt.
-
-See [docs/UPSTREAM.md](docs/UPSTREAM.md) for the bridge architecture and the
-upstream handoff spec.
-
-## Development and verification
-
-```bash
-npm test                 # node:test — fold equivalence vs mock fold(), store
-                         # contract, connection lifecycle + delivery acks,
-                         # session purge/clear/reconnect against both hosts,
-                         # pack catalog parse/guard/--pack routing, flows
-                         # (one-chain contract, launch tracking), triggers
-                         # (serialization/slot idempotency), shared tasks
-                         # (rev/stale_rev/verified-done/symlink refusal) —
-                         # then builds the PWA and runs the browser smoke
-                         # (skips with a note where agent-browser is absent)
-npm run smoke            # mock host end-to-end (31 checks)
-npm run smoke:agentlinkd # real-host surface with a fake dext (50 checks:
-                         # restart/restore, seq replay, cold wake + auto-wake,
-                         # todos, auth lockout + 429, digest 4 KiB cap,
-                         # html artifacts + file ?t auth)
-npm run smoke:browser    # real-browser checks via agent-browser CLI (composer
-                         # wrap/cap, slash menu, themed charts, rename/delete
-                         # flows, pack gallery → prefill → run → badged card)
-npm run typecheck        # protocol → client → web
-npm run build            # protocol → client → web
-```
-
-### Bridge verification and thinking transactions
-
-With NDJSON-capable dext, agentlinkd keeps a warm child per session. The pipe
-reader preserves UTF-8 across chunks and enforces output limits per encoded
-line, not per chunk. Writes reject frames over 256 KiB or beyond a 1 MiB
-pending stdin budget before enqueueing; `false` means the frame was not
-accepted locally, while core `input_ack` events report core-side refusals.
-Correlation value `seq: 0` is retained.
-
-Both the live `SessionStore` (`session.ts`) and the journal snapshot fold
-(`fold.mjs`) apply `thinking_preview_discarded` and
-`thinking_preview_committed`. Thinking blocks remain provisional even after
-block completion until commit, so a retry removes all previews from that
-attempt without removing previously committed reasoning. Snapshots preserve the
-optional `provisional` flag for reconnect during an attempt; rollback rebuilds
-tool indexes. Local Chat's late thinking completion updates its existing block
-instead of duplicating reasoning or splitting text.
-
-Run the credential-free real-core integration gate in addition to `npm test`:
-
-```sh
-DEXT_CORE_BIN=/absolute/path/to/Dext/target/release/dext npm run test:core
-```
-
-This gate requires the binary explicitly (no silent skip). It uses isolated
-temporary state and a loopback mock provider to exercise real core
-retry/rollback through both projections, UTF-8 text, an approved file write,
-busy steering and overload refusal, interrupt, close, and EOF. Unit tests cover
-deterministic split-byte input, bounded writes, committed reasoning
-preservation, and mid-preview snapshot reconnect.
-
-### Replay a chart report without a model
-
-`npm test` includes chart geometry/validation tests and real-browser drag,
-cross-highlight, clipping and responsive-layout checks (the browser gate
-visibly skips if `agent-browser` is unavailable). To replay a report directly:
-
-```sh
-REPORT_FILE=/absolute/report.md REPORT_CHARTS=10 SCREENSHOT_DIR=/tmp/report-shots \
-  bash apps/web/scripts/chart-review-test.sh
-```
-
-See [docs/chart-report-review.md](docs/chart-report-review.md) for findings,
-methodology corrections and remaining verification limits.
 
 ## Documentation
 
 | Document | What it covers |
 |---|---|
-| [docs/PROTOCOL.md](docs/PROTOCOL.md) | AgentLink v1 wire format — WS `/ws` primary, REST for health/session lists/todos/agent digest, hello capability negotiation |
-| [docs/DESIGN.md](docs/DESIGN.md) | Design notes, artifact theming contract, repo map, milestones |
+| [docs/PROTOCOL.md](docs/PROTOCOL.md) | AgentLink v1 wire format — WS + REST, capability negotiation, flows/tasks contracts |
+| [docs/DESIGN.md](docs/DESIGN.md) | Design notes, theming contract, development gates, repo map, milestones |
 | [docs/UPSTREAM.md](docs/UPSTREAM.md) | `dext bridge` PR spec — the path to live steering and interactive approvals |
-| [packs/README.md](packs/README.md) | Consumer pack architecture (Rust core, TS panel) |
+| [packs/README.md](packs/README.md) | Consumer pack architecture and gallery metadata |
+| [docs/crew-live-monitoring.md](docs/crew-live-monitoring.md) | Crew run monitoring design |
+| [docs/packs-day1-assessment.md](docs/packs-day1-assessment.md) | Pack gallery assessment and proposal deviations |
 | [docs/chart-report-review.md](docs/chart-report-review.md) | Chart and market-report review: findings, methodology, limits |
-| [docs/packs-day1-assessment.md](docs/packs-day1-assessment.md) | Pack gallery day-1 assessment and proposal deviations |
-| [docs/crew-live-monitoring.md](docs/crew-live-monitoring.md) | Crew live-monitoring design |
 | [docs/dext-core-handoff-packs.md](docs/dext-core-handoff-packs.md) | Pack registry handoff notes for dext core |
 | [docs/workspace-DEXT.example.md](docs/workspace-DEXT.example.md) | Example workspace `DEXT.md` policy |
-| [docs/screenshots/](docs/screenshots) | Mock-host captures: approval flow, markdown table result, palette, desktop, mobile, model controls, responsive layouts |
+| [docs/screenshots/](docs/screenshots) | More UI captures (approvals, themes, mobile, responsive) |

@@ -137,3 +137,32 @@ packs/                 consumer packs: sdk-rs, pack-sdk-ts, receipts, invoice, r
 - **M2:** mobile loop — QR pairing, `--lan`, push on `permission.request`/`turn_end`, swipeable queue, haptics.
 - **M3:** depth — checkpoints/undo timeline, review mode, seats switcher, pack browser, usage dashboard; Tauri desktop.
 - **M4:** agent layer — `/__agent` hardening, MCP supervision surface, save-as-rule/save-as-pack accretion, fixture-driven visual regression via browser packs; Tauri mobile / PWABuilder store packaging.
+
+## Development gates
+
+Beyond `npm test` / `npm run typecheck` / `npm run build`:
+
+### Bridge verification and thinking transactions
+
+With NDJSON-capable dext, agentlinkd keeps a warm child per session. The pipe reader preserves UTF-8 across chunks and enforces output limits per encoded line, not per chunk. Writes reject frames over 256 KiB or beyond a 1 MiB pending stdin budget before enqueueing; `false` means the frame was not accepted locally, while core `input_ack` events report core-side refusals. Correlation value `seq: 0` is retained.
+
+Both the live `SessionStore` (`session.ts`) and the journal snapshot fold (`fold.mjs`) apply `thinking_preview_discarded` and `thinking_preview_committed`. Thinking blocks remain provisional even after block completion until commit, so a retry removes all previews from that attempt without removing previously committed reasoning. Snapshots preserve the optional `provisional` flag for reconnect during an attempt; rollback rebuilds tool indexes. Local Chat's late thinking completion updates its existing block instead of duplicating reasoning or splitting text.
+
+The credential-free real-core integration gate requires the binary explicitly (no silent skip):
+
+```sh
+DEXT_CORE_BIN=/absolute/path/to/Dext/target/release/dext npm run test:core
+```
+
+It uses isolated temporary state and a loopback mock provider to exercise real core retry/rollback through both projections, UTF-8 text, an approved file write, busy steering and overload refusal, interrupt, close, and EOF. Unit tests cover deterministic split-byte input, bounded writes, committed reasoning preservation, and mid-preview snapshot reconnect.
+
+### Replaying a chart report without a model
+
+`npm test` includes chart geometry/validation tests and real-browser drag, cross-highlight, clipping and responsive-layout checks (the browser gate visibly skips if `agent-browser` is unavailable). To replay a report directly:
+
+```sh
+REPORT_FILE=/absolute/report.md REPORT_CHARTS=10 SCREENSHOT_DIR=/tmp/report-shots \
+  bash apps/web/scripts/chart-review-test.sh
+```
+
+See [chart-report-review.md](chart-report-review.md) for findings, methodology corrections and remaining verification limits.
