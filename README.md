@@ -1,4 +1,4 @@
-# DextUI
+# <img src="apps/web/public/icon.svg" alt="" width="36" height="36" align="top"> DextUI
 
 A web front end for the [dext](https://github.com/SiliconState/Dext) coding
 agent, consumer-friendly for people delegating work, agent-drivable for the

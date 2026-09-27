@@ -30,7 +30,7 @@ function fire(
     const n = new Notification(title, {
       body,
       tag,
-      icon: "/icon.svg",
+      icon: "/icon-192.png",
       requireInteraction: opts.requireInteraction ?? false,
     });
     n.onclick = () => {

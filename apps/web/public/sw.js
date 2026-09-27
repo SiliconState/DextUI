@@ -26,7 +26,7 @@ self.addEventListener("activate", (event) => {
 // straight to the network and is never cached: an offline replay of
 // authenticated or transient content must be impossible by construction,
 // not by enumeration.
-const CACHEABLE = (p) => p === "/" || p === "/index.html" || p === "/manifest.webmanifest" || p === "/icon.svg" || p.startsWith("/assets/");
+const CACHEABLE = (p) => p === "/" || p === "/index.html" || p === "/manifest.webmanifest" || /^\/(icon[\w-]*|apple-touch-icon)\.(svg|png)$/.test(p) || p.startsWith("/assets/");
 
 self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") return;

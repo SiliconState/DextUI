@@ -142,7 +142,7 @@ function notifyEscalation(r: CrewRunSummary): void {
     const n = new Notification(`crew ${shortRun(r.id)} needs an answer`, {
       body: (r.escalation?.question ?? r.task).slice(0, 120),
       tag: `crew:${r.id}`,
-      icon: "/icon.svg",
+      icon: "/icon-192.png",
       requireInteraction: true,
     });
     n.onclick = () => {

@@ -1,5 +1,9 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-  <rect width="64" height="64" rx="14" fill="#0b0d12"/>
-  <path d="M18 22l12 10-12 10" fill="none" stroke="#6ea8fe" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M34 44h14" fill="none" stroke="#4ade80" stroke-width="5" stroke-linecap="round"/>
+  <title>DextUI</title>
+  <!-- A lowercase "d" whose bowl is a lens watching a live agent (the green
+       dot): dext does the work, DextUI presents and supervises it. -->
+  <rect width="64" height="64" rx="14" fill="#0b0d10"/>
+  <circle cx="32" cy="38" r="11" fill="none" stroke="#5ccfe6" stroke-width="5"/>
+  <path d="M43 15v34" fill="none" stroke="#5ccfe6" stroke-width="5" stroke-linecap="round"/>
+  <circle cx="32" cy="38" r="4" fill="#6fdd8b"/>
 </svg>
