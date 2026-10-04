@@ -146,7 +146,7 @@ if (process.argv.includes("--input") && process.argv[process.argv.indexOf("--inp
       out("text_block_complete", `fake ${text.trim()}`);
       out("thinking_effort_changed", { effort: "high" });
       endTurn(false);
-    }, text.includes("SLOW") ? 500 : 60);
+    }, Number(process.env.FAKE_DEXT_TURN_DELAY_MS) || (text.includes("SLOW") ? 500 : 60));
   };
   process.stdin.setEncoding("utf8");
   process.stdin.on("data", (d) => {
@@ -264,8 +264,8 @@ const effort = effortAt >= 0 ? process.argv[effortAt + 1] : "medium";
 const provider = process.env.DEXT_PROVIDER || "fake-a";
 const model = process.env.DEXT_MODEL || "alpha";
 
-emit("turn_start");
-await sleep(180);
+emit("turn_start", { pid: process.pid });
+await sleep(Number(process.env.FAKE_DEXT_TURN_DELAY_MS) || 180);
 emit("text_delta", "fake ");
 await sleep(180);
 const resumed = process.argv.some((a) => a === "--resume" || a.startsWith("--resume="));

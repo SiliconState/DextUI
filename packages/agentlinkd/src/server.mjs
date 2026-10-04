@@ -96,6 +96,9 @@ const DEFAULT_APPROVAL = argValue("approval", process.env.DEXT_APPROVAL ?? "auto
 // `--safe` serves the last-known-good build (apps/web/dist.lkg) so a broken
 // self-edit can never lock the operator out of the UI that fixes it.
 const SAFE_MODE = process.argv.includes("--safe");
+// Recovery is deliberately opt-in: it submits a new prompt, never replays tools.
+const AUTO_RESUME = argValue("auto-resume", process.env.AGENTLINKD_AUTO_RESUME ?? "false") === "true" || process.argv.includes("--auto-resume");
+const RESUME_PROMPT = "Continue the interrupted turn. Review recovery evidence before taking any action; do not repeat side effects unless their outcome is known.";
 const STATIC_RESOLVED = resolveStaticDir({ staticDir: argValue("static", path.join(repoRoot, "apps", "web", "dist")), repoRoot, safe: SAFE_MODE });
 const STATIC_DIR = STATIC_RESOLVED.dir;
 const STATE_DIR = path.resolve(
@@ -912,6 +915,9 @@ function indexEntryOf(s) {
     ...(s.cleanup ? { cleanup: s.cleanup } : {}),
     ...(s.steeringQueue.length > 0 ? { steeringQueue: [...s.steeringQueue] } : {}),
     turns: s.turns,
+    working: s.working && s.status === "live" && !s.killed,
+    turnNonce: s.turnNonce ?? null,
+    autoResumeAttempted: s.autoResumeAttempted ?? null,
     createdAt: s.createdAt,
     updatedAt: tail?.ts ?? s.createdAt,
   };
@@ -1015,10 +1021,11 @@ function terminateUnfinishedTurn(s) {
     journalData(s, "compact_failed", { message: "agentlinkd restarted while context compaction was running" });
     console.error(`agentlinkd: ${s.id} had unfinished compaction at restart; journaled as failed`);
   }
-  if (!open) return;
+  if (!open) return false;
   journalData(s, "error", "turn lost: agentlinkd restarted while dext was running");
   journalData(s, "turn_end", { usage: zeroUsage(), failed: true });
   console.error(`agentlinkd: ${s.id} had an unfinished turn at restart; journaled as failed`);
+  return true;
 }
 
 // Boot: load sessions.json, bring every session back cold, replay journals,
@@ -1056,6 +1063,8 @@ function restoreSessions() {
         : [],
       status: "cold",
       working: false,
+      turnNonce: typeof e.turnNonce === "string" && /^[A-Za-z0-9_-]{6,64}$/.test(e.turnNonce) ? e.turnNonce : null,
+      autoResumeAttempted: typeof e.autoResumeAttempted === "string" ? e.autoResumeAttempted : null,
       turnStartedAt: null,
       createdAt: Number.isInteger(e.createdAt) ? e.createdAt : Date.now(),
       seq: 0,
@@ -1079,7 +1088,10 @@ function restoreSessions() {
     sessions.set(s.id, s);
     restoreJournal(s);
     crewRootFor(s.cwd);
-    if (!s.cleanup) terminateUnfinishedTurn(s);
+    if (!s.cleanup) {
+      const interrupted = terminateUnfinishedTurn(s);
+      s.resumeInterrupted = AUTO_RESUME && e.working === true && interrupted && !!s.turnNonce && s.autoResumeAttempted !== s.turnNonce;
+    }
     s.indexEntry = JSON.stringify(indexEntryOf(s));
   }
   // Load the entire index BEFORE completing intents (completion rewrites it).
@@ -1090,6 +1102,25 @@ function restoreSessions() {
     }
   }
   if (sessions.size > 0) console.error(`agentlinkd: restored ${sessions.size} session(s) cold from ${STATE_DIR}`);
+}
+
+/** Fence the attempt BEFORE waking or submitting. Keep the original turn nonce
+ * across the resumed turn, so another host crash cannot resume its own resume.
+ * A failed fence or dispatch requires manual intervention, never a retry loop. */
+function resumeInterruptedTurns() {
+  for (const s of sessions.values()) {
+    if (!s.resumeInterrupted || s.cleanup) continue;
+    s.autoResumeAttempted = s.turnNonce;
+    try {
+      persistIndex(true, true);
+      submitPrompt(s, RESUME_PROMPT, `resume:${s.turnNonce}`, { recovery: true });
+      console.error(`agentlinkd: auto-resumed interrupted turn in ${s.id}`);
+    } catch (err) {
+      console.error(`agentlinkd: auto-resume refused for ${s.id}: ${err.message}`);
+    } finally {
+      s.resumeInterrupted = false;
+    }
+  }
 }
 
 // ---------- journal + publish ----------
@@ -1231,6 +1262,7 @@ function zeroUsage() {
  *  resumes that path explicitly; dext then records the seat in the new
  *  project, so plain `--resume` would work again from the next turn on. */
 function resumeTarget(s) {
+  if (s.resumeInterrupted) return findDextSessionDir(s) ?? true;
   if (s.turns <= 0) return false;
   if (!s.moved) return true;
   return findDextSessionDir(s) ?? true;
@@ -1528,10 +1560,16 @@ function warnMissingPackCredentials(s, packRun) {
   }));
 }
 
-function runBridgedTurn(s, prompt) {
-  s.working = true; // optimistic: Send disables at once; turn_start confirms
+function beginTurn(s, { nonce, recovery = false } = {}) {
+  if (!recovery) s.turnNonce = typeof nonce === "string" && NONCE_RE.test(nonce) ? nonce : crypto.randomBytes(16).toString("hex");
+  s.working = true;
   s.turnStartedAt = Date.now();
   s.killed = false;
+  persistIndex();
+}
+
+function runBridgedTurn(s, prompt, options) {
+  beginTurn(s, options); // optimistic: Send disables at once; turn_start confirms
   const packRun = parsePackSlash(prompt);
   const text = packRun?.sub === "run" && packByName(packRun.name) ? `/pack run ${packRun.name} ${packRun.task}` : prompt;
   warnMissingPackCredentials(s, packRun);
@@ -1566,11 +1604,9 @@ function recycleBridge(s) {
 
 // ---------- turn engine (fallback): one dext child per prompt ----------
 
-function runTurn(s, prompt) {
-  if (BRIDGE) return runBridgedTurn(s, prompt);
-  s.working = true;
-  s.turnStartedAt = Date.now();
-  s.killed = false;
+function runTurn(s, prompt, options) {
+  if (BRIDGE) return runBridgedTurn(s, prompt, options);
+  beginTurn(s, options);
   const epoch = s.epoch;
   let sawTurnEnd = false;
   let turnEndData;
@@ -1765,7 +1801,11 @@ function signalChild(child, signal) {
 }
 
 function killChild(s, interrupted = true) {
-  if (interrupted) clearPackUi(s, "cancelled");
+  if (interrupted) {
+    clearPackUi(s, "cancelled");
+    s.killed = true;
+    persistIndex(); // a deliberate stop must not become restart recovery
+  }
   if (s.bridge && !s.bridge.exited) {
     const bridge = s.bridge;
     s.killed = interrupted;
@@ -2259,7 +2299,7 @@ async function handlePackSlash(client, s, cmd) {
  *  sender's nonce (when present) is journaled with the user_message so nonce
  *  dedup is restart-durable: a replay after a host restart is still a
  *  duplicate, never a second run. */
-function submitPrompt(s, incoming, nonce) {
+function submitPrompt(s, incoming, nonce, options = {}) {
   let text = incoming;
   if (s.steeringQueue.length > 0) {
     // Queued steering that missed its boundary (interrupt/crash/restart)
@@ -2277,7 +2317,7 @@ function submitPrompt(s, incoming, nonce) {
     s.title = text.slice(0, 60);
     persistIndex();
   }
-  runTurn(s, text);
+  runTurn(s, text, { nonce, ...options });
 }
 
 // ---------- delivery dedup (nonce) ----------
@@ -4175,5 +4215,7 @@ server.listen(PORT, "127.0.0.1", () => {
   console.log(`  static:   ${STATIC_DIR} (${STATIC_RESOLVED.mode}${SAFE_MODE ? ", --safe" : ""})`);
   console.log(`  self-edit: ${SELF.enabled ? `on — /ui build, exit ${SELF.status().restart_exit_code} = restart` : "off (not a buildable checkout)"}`);
   console.log(`  approval: ${DEFAULT_APPROVAL} (per-session: /approval <profile>)`);
+  console.log(`  auto-resume: ${AUTO_RESUME ? "on (once per interrupted turn)" : "off"}`);
   console.log(`  models:   ${MODEL_CATALOG.reduce((n, g) => n + g.models.length, 0)} across ${MODEL_CATALOG.length} provider(s)`);
+  resumeInterruptedTurns();
 });
