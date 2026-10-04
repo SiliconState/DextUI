@@ -124,14 +124,14 @@ html[data-theme="dim"] {
   border: 0;
 }
 
-/* Touch targets: compact controls grow only on coarse pointers, where the
-   24px floor matters and the dense-terminal layout is not in play. */
-@media (pointer: coarse) {
-  .act,
-  .chip,
-  .queue-goto,
-  .queue-head {
-    min-height: 28px;
+/* Touch-first layouts get usable targets without loosening desktop density. */
+@media (pointer: coarse), (max-width: 600px) {
+  button, summary, .queue-goto, .queue-head {
+    min-height: 44px;
+    touch-action: manipulation;
+  }
+  input:not([type="checkbox"]):not([type="radio"]):not([type="file"]), textarea, select {
+    font-size: 16px !important; /* Prevent iOS focus zoom, including scoped component font resets. */
   }
 }
 
@@ -270,6 +270,11 @@ a {
     --page-gutter: clamp(0.65rem, 3vw, 1.25rem);
   }
   .shell {
+    position: relative;
+    top: var(--mobile-viewport-top, 0px);
+    height: var(--mobile-viewport-height, 100dvh);
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-inline: env(safe-area-inset-left, 0px) env(safe-area-inset-right, 0px);
     grid-template-columns: 1fr;
     grid-template-areas:
       "main"
@@ -286,8 +291,12 @@ a {
     overflow: visible;
     pointer-events: auto;
     position: fixed;
-    inset: 0 auto 0 0;
-    width: min(19rem, 86vw);
+    inset: var(--mobile-viewport-top, 0px) auto auto 0;
+    height: var(--mobile-viewport-height, 100dvh);
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+    padding-left: env(safe-area-inset-left, 0px);
+    width: min(22rem, 90vw);
     z-index: 30;
     transform: translateX(-100%);
     transition: transform 0.14s ease-out;
@@ -296,6 +305,9 @@ a {
   .shell > .index[data-state="open"] {
     transform: none;
   }
+  .shell > .statusline {
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
   .index-scrim {
     display: block;
     position: fixed;
@@ -303,6 +315,11 @@ a {
     z-index: 29;
     background: rgba(0, 0, 0, 0.55);
   }
+}
+
+@media (max-width: 600px) {
+  body { overflow: hidden; }
+  .shell > .todos-row { max-height: calc(var(--mobile-viewport-height, 100dvh) * 0.18); overflow-y: auto; }
 }
 
 /* ---------- text action (the only "button" style) ---------- */
@@ -451,4 +468,13 @@ a {
 }
 .faint {
   color: var(--faint);
+}
+
+@media (max-width: 600px) {
+  .insp {
+    top: var(--mobile-viewport-top, 0px);
+    bottom: auto;
+    height: var(--mobile-viewport-height, 100dvh);
+    padding-block: env(safe-area-inset-top, 0px) env(safe-area-inset-bottom, 0px);
+  }
 }

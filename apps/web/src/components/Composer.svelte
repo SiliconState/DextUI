@@ -1,5 +1,5 @@
 <script lang="ts">
-  // Inline ❯ prompt — the composer is a terminal input line, not a chat box.
+  // Desktop keeps the terminal prompt; phones use a compact, growing message bar.
   import type { SessionStore } from "@dextui/client";
   import type { HostCommand } from "@dextui/protocol";
   import { tick, untrack } from "svelte";
@@ -12,6 +12,10 @@
   let { store }: { store: SessionStore } = $props();
 
   let text = $state("");
+  let phone = $state(matchMedia("(max-width: 600px)").matches);
+  let attachmentMenu: HTMLDivElement | undefined = $state();
+  let attachmentMenuOpen = $state(false);
+  let attachmentToggle: HTMLElement | undefined = $state();
   let menuIdx = $state(0);
   // Escape hides the slash menu without touching the draft; any edit re-arms it.
   let menuHidden = $state(false);
@@ -113,7 +117,40 @@
   );
   // Shortcut glyph for the platform's primary modifier (⌘ on Apple, ^ elsewhere).
   const MOD = /Mac|iPhone|iPad|iPod/.test(navigator.platform || navigator.userAgent) ? "⌘" : "^";
+  $effect(() => {
+    const media = matchMedia("(max-width: 600px)");
+    const change = () => { phone = media.matches; attachmentMenuOpen = false; };
+    media.addEventListener("change", change);
+    return () => media.removeEventListener("change", change);
+  });
+  $effect(() => {
+    if (!attachmentMenuOpen) return;
+    const outside = (e: PointerEvent) => {
+      if (e.target instanceof Node && !attachmentMenu?.contains(e.target)) attachmentMenuOpen = false;
+    };
+    const escape = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        attachmentMenuOpen = false;
+        attachmentToggle?.focus({ preventScroll: true });
+      }
+    };
+    window.addEventListener("pointerdown", outside);
+    window.addEventListener("keydown", escape, true);
+    return () => {
+      window.removeEventListener("pointerdown", outside);
+      window.removeEventListener("keydown", escape, true);
+    };
+  });
   const placeholder = $derived.by(() => {
+    if (phone) {
+      if (view.status === "exited" || view.status === "cold") return "Session closed";
+      if (!live) return "Waking session…";
+      if (view.compacting) return "Compacting…";
+      if (view.working) return canSteer ? "Add a follow-up…" : "Working…";
+      return "Message Dext…";
+    }
     if (view.status === "exited") return `session closed — ${MOD}n for a new one`;
     if (view.status === "cold") return "session closed — use wake in the session menu";
     if (!live) return "waking session…";
@@ -131,10 +168,17 @@
   const MAX_ROWS = 8;
   function fit(el: HTMLTextAreaElement) {
     el.style.height = "auto";
-    const lh = parseFloat(getComputedStyle(el).lineHeight) || 21;
-    const cap = lh * MAX_ROWS + 4;
-    el.style.height = `${Math.min(el.scrollHeight, cap)}px`;
-    el.style.overflowY = el.scrollHeight > cap ? "auto" : "hidden";
+    const style = getComputedStyle(el);
+    const lh = parseFloat(style.lineHeight) || 21;
+    const padding = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
+    const border = parseFloat(style.borderTopWidth) + parseFloat(style.borderBottomWidth);
+    const mobileCap = matchMedia("(max-width: 600px)").matches
+      ? Math.max(lh + padding + border, Math.min(144, (window.visualViewport?.height ?? window.innerHeight) * 0.25))
+      : Infinity;
+    const cap = Math.min(lh * MAX_ROWS + padding + border, mobileCap);
+    const desired = el.scrollHeight + border;
+    el.style.height = `${Math.min(desired, cap)}px`;
+    el.style.overflowY = desired > cap ? "auto" : "hidden";
   }
   $effect(() => {
     const el = inputEl;
@@ -147,9 +191,17 @@
     const el = inputEl;
     if (!el) return;
     const ro = new ResizeObserver(() => fit(el));
+    const onResize = () => fit(el);
+    const viewport = window.visualViewport;
+    viewport?.addEventListener("resize", onResize);
+    window.addEventListener("resize", onResize);
     ro.observe(el);
     void document.fonts?.ready.then(() => fit(el));
-    return () => ro.disconnect();
+    return () => {
+      ro.disconnect();
+      viewport?.removeEventListener("resize", onResize);
+      window.removeEventListener("resize", onResize);
+    };
   });
 
   // Per-session draft persistence: restore on switch, save on leave/send.
@@ -168,6 +220,9 @@
     stash = "";
     menuHidden = false;
     menuIdx = 0;
+    attachmentMenuOpen = false;
+    urlOpen = false;
+    urlText = "";
     if (seed) {
       app.pendingDraft = "";
       requestAnimationFrame(() => inputEl?.focus());
@@ -289,6 +344,12 @@
     if (c && app.activeId) c.interrupt(app.activeId);
   }
 
+  // Touch-first phones use Return for a newline and the explicit Send button.
+  // Desktop and hardware modifier+Enter keep the existing send shortcut.
+  function touchReturn(e: KeyboardEvent): boolean {
+    return matchMedia("(max-width: 900px) and (pointer: coarse)").matches && !e.metaKey && !e.ctrlKey;
+  }
+
   function onKey(e: KeyboardEvent) {
     const el = e.currentTarget as HTMLTextAreaElement;
     // IME composition (CJK etc.): Enter/arrows belong to the composer window.
@@ -312,7 +373,7 @@
       }
       // Enter accepts the highlighted item; an exact match (even when longer
       // siblings are listed, e.g. `report` vs `report-mine`) falls through to send.
-      if (e.key === "Enter" && !e.shiftKey) {
+      if (e.key === "Enter" && !e.shiftKey && !touchReturn(e)) {
         const typed = text.trim().toLowerCase();
         const exact = slashList.some((c) => c.cmd.toLowerCase() === typed);
         const item = slashList[menuCur];
@@ -346,7 +407,7 @@
       stepSession(e.key === "[" ? -1 : 1);
       return;
     }
-    if (e.key === "Enter" && !e.shiftKey) {
+    if (e.key === "Enter" && !e.shiftKey && !touchReturn(e)) {
       e.preventDefault();
       send();
       return;
@@ -384,6 +445,7 @@
 
   function onInput() {
     menuHidden = false;
+    attachmentMenuOpen = false;
     exitHistory();
   }
 
@@ -427,9 +489,11 @@
   function submitUrl() {
     const u = urlText.trim();
     if (!u) return;
+    if (!canAttach || app.phase !== "live") return;
     attachUrl(app.activeId, u);
     urlText = "";
     urlOpen = false;
+    inputEl?.focus({ preventScroll: true });
   }
 </script>
 
@@ -472,7 +536,10 @@
       <span class="pg">⤓</span>
       <input
         class="c-url"
-        placeholder="https://… — the host downloads it into the workspace"
+        placeholder={phone ? "https://…" : "https://… — the host downloads it into the workspace"}
+        aria-label="Link to attach"
+        type="url"
+        inputmode="url"
         bind:this={urlInput}
         bind:value={urlText}
         onkeydown={(e) => {
@@ -526,6 +593,8 @@
       onkeydown={onKey}
       oninput={onInput}
       onpaste={onPaste}
+      aria-label="Message to Dext"
+      enterkeyhint="enter"
       rows="1"
       {placeholder}
       data-agent-id="composer.input"
@@ -534,23 +603,39 @@
     ></textarea>
     <span class="c-side">
       {#if canAttach}
-        <button class="act" data-agent-id="composer.attach" title="attach files (or drop / paste them here)" onclick={() => fileInput?.click()}>[+]</button>
-        <button class="act" data-agent-id="composer.attachurl" title="fetch a URL into the workspace" onclick={toggleUrl}>[⤓]</button>
+        <div class="mobile-attach" bind:this={attachmentMenu}>
+          <button class="attach-toggle" bind:this={attachmentToggle} aria-label="Attachment options" aria-expanded={attachmentMenuOpen} data-agent-id="composer.attach.menu" onclick={() => (attachmentMenuOpen = !attachmentMenuOpen)}>+</button>
+          {#if attachmentMenuOpen}
+            <div class="attach-options">
+              <button data-agent-id="composer.attach.files" onclick={() => { attachmentMenuOpen = false; fileInput?.click(); }}>Attach files</button>
+              <button data-agent-id="composer.attach.link" onclick={() => { attachmentMenuOpen = false; void toggleUrl(); }}>Attach a link</button>
+            </div>
+          {/if}
+        </div>
+        <button class="act desktop-attach" data-agent-id="composer.attach" aria-label="Attach files" title="attach files (or drop / paste them here)" onclick={() => fileInput?.click()}>[+]</button>
+        <button class="act desktop-attach" data-agent-id="composer.attachurl" aria-label="Attach from URL" title="fetch a URL into the workspace" onclick={toggleUrl}>[⤓]</button>
       {/if}
       {#if histIdx > 0}
         <span class="faint" data-agent-id="composer.histmark">[↑{histIdx}]</span>
       {/if}
       {#if view.working}
-        <button class="act err" data-agent-id="composer.stop" onclick={stop}>^c stop</button>
+        <button class="act err stop-control" data-agent-id="composer.stop" aria-label="Stop current work" title="Stop current work" onpointerdown={(e) => { if (phone) e.preventDefault(); }} onclick={stop}><span class="desktop-label">^c stop</span><span class="mobile-icon" aria-hidden="true">■</span></button>
       {/if}
       <button
-        class="act accent"
+        class="act accent send-control"
+        class:empty-working={view.working && !text.trim() && !atts.some((a) => a.status === "done")}
+        aria-label={view.working && canSteer ? "Queue follow-up" : "Send message"}
+        title={view.working && canSteer ? "Queue follow-up for the next turn" : "Send message"}
+        onpointerdown={(e) => { if (phone) e.preventDefault(); }}
         data-agent-id={view.working && canSteer ? "composer.steer" : "composer.send"}
         data-state={canSend ? "ready" : "disabled"}
         onclick={send}
         disabled={!canSend}
       >
-        [⏎] {view.working && canSteer ? "steer" : "send"}
+        <span class="desktop-label">[⏎] {view.working && canSteer ? "steer" : "send"}</span>
+        <svg class="mobile-icon" aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          {#if view.working && canSteer}<path d="M5 5v8a4 4 0 0 0 4 4h10m-5-5 5 5-5 5" />{:else}<path d="M12 19V5m-6 6 6-6 6 6" />{/if}
+        </svg>
       </button>
     </span>
   </div>
@@ -692,15 +777,36 @@
   .dim {
     color: var(--dim);
   }
-  @media (max-width: 560px) {
-    .c-row {
-      gap: 6px;
-    }
-    .c-side {
-      gap: 8px;
-    }
-    .c-side .act {
-      font-size: 11px;
-    }
+  .mobile-attach, .mobile-icon { display: none; }
+  @media (max-width: 600px) {
+    .c-root { padding: 6px; }
+    .c-row { display: flex; gap: 0; align-items: flex-end; border: 1px solid var(--line); border-radius: 4px; background: var(--bg1); }
+    .c-row:focus-within { border-color: var(--cyan); }
+    .pg, .desktop-label, .desktop-attach, .c-side > .faint { display: none; }
+    textarea { order: 1; min-height: 44px; font-size: 16px; padding: 9px 4px; border: 0; border-radius: 0; background: transparent; }
+    textarea:focus-visible { outline-offset: -2px; }
+    .c-side { display: contents; }
+    .mobile-attach { display: block; position: relative; order: 0; flex: 0 0 44px; }
+    .attach-toggle { display: flex; align-items: center; justify-content: center; width: 44px; height: 44px; font-size: 22px; color: var(--dim); border-radius: 3px; cursor: pointer; }
+    .attach-toggle[aria-expanded="true"] { background: var(--bg2); color: var(--cyan); }
+    .attach-options { position: absolute; bottom: 52px; left: 0; width: 176px; padding: 4px; background: var(--bg3); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 4px 16px #0003; z-index: 21; }
+    .attach-options button { display: block; width: 100%; padding: 8px 12px; }
+    .attach-options button:hover { background: var(--bg2); }
+    .c-side .stop-control, .c-side .send-control { display: flex; order: 2; flex: 0 0 44px; width: 44px; height: 44px; padding: 0; align-items: center; justify-content: center; border-radius: 3px; }
+    .c-side .send-control { order: 3; background: transparent; color: var(--cyan); }
+    .c-side .send-control:disabled { background: transparent; color: var(--faint); }
+    .c-side .send-control.empty-working { display: none; }
+    .mobile-icon { display: block; }
+    .stop-control .mobile-icon { font-size: 16px; }
+    .c-menu { left: 6px; right: 6px; max-height: min(320px, calc(var(--mobile-viewport-height, 100dvh) * 0.45)); }
+    .c-menu-row { min-height: 44px; flex-wrap: wrap; gap: 2px 8px; overflow-wrap: anywhere; }
+    .c-menu-row .dim { flex-basis: 100%; padding-left: 20px; font-size: 11px; }
+    .c-atts { padding-left: 0; max-height: 100px; overflow-y: auto; }
+    .c-att { min-width: 0; }
+    .c-attx, .c-thumb { flex-shrink: 0; }
+    .c-attx { min-width: 44px; }
+    .c-attname, .c-attmeta { min-width: 0; }
+    .c-att > .faint { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .c-url { font-size: 16px; }
   }
 </style>

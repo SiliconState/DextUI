@@ -55,6 +55,8 @@
   let tokenInput = $state("");
   let inspect: ViewBlock | null = $state(null);
   let indexOpen = $state(false);
+  let mobileLayout = $state(false);
+  const dlgIndex = useDialog(() => mobileLayout && indexOpen);
 
   const activeStore = $derived.by(() => {
     void app.hostEpoch; // stores are re-created after a host restart
@@ -67,6 +69,7 @@
   const view = $derived(sess.view);
   const pendingList = $derived(view ? [...view.pending.values()] : []);
   const pendingUi = $derived(view?.pendingUi);
+  const blockingOverlay = $derived(app.paletteOpen || app.shortcutsOpen || !!artifact.document || !!pendingUi || !!inspect || app.eventsOpen || app.galleryOpen || app.settingsOpen || app.sessionCtlOpen || providers.open || packSheet.open || packSheet.panelOpen || !!crew.openId || folders.open || flows.open || tasks.open || packCreds.open);
   const pendingUiError = $derived(view?.uiResponseError);
   const pendingUiErrorRev = $derived(view?.uiResponseErrorRev ?? 0);
   const pendingTotal = $derived(queueTotal());
@@ -112,11 +115,41 @@
   // Never carry an open off-canvas drawer across the desktop breakpoint.
   $effect(() => {
     const mobile = matchMedia("(max-width: 900px)");
+    mobileLayout = mobile.matches;
     const onChange = () => {
+      mobileLayout = mobile.matches;
       indexOpen = false;
     };
     mobile.addEventListener("change", onChange);
     return () => mobile.removeEventListener("change", onChange);
+  });
+
+  // iOS resizes the visual viewport, not necessarily the layout viewport,
+  // when the software keyboard opens. Keep the phone shell above it; leave
+  // pinch zoom and the desktop viewport entirely under browser control.
+  $effect(() => {
+    const root = document.documentElement;
+    const isMobile = mobileLayout;
+    if (!isMobile) {
+      root.style.removeProperty("--mobile-viewport-height");
+      root.style.removeProperty("--mobile-viewport-top");
+      return;
+    }
+    const viewport = window.visualViewport;
+    if (!viewport) return;
+    const update = () => {
+      if (viewport.scale === 1) {
+        root.style.setProperty("--mobile-viewport-height", `${viewport.height}px`);
+        root.style.setProperty("--mobile-viewport-top", `${viewport.offsetTop}px`);
+      }
+    };
+    update();
+    viewport.addEventListener("resize", update);
+    viewport.addEventListener("scroll", update);
+    return () => {
+      viewport.removeEventListener("resize", update);
+      viewport.removeEventListener("scroll", update);
+    };
   });
 
   // The document title doubles as the hidden-tab queue badge; the hidden-tab
@@ -135,6 +168,7 @@
   $effect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.defaultPrevented || e.isComposing || e.keyCode === 229) return;
+      if (!blockingOverlay) dlgIndex.onKey(e);
       if (app.sessionAction) {
         if (e.key === "Escape" && !app.sessionPending) app.sessionAction = null;
         return;
@@ -165,7 +199,12 @@
       }
       // Modal surfaces own the keyboard until closed. In particular, do not let
       // Ctrl+N/session cycling switch the document underneath a focused report.
-      if (app.paletteOpen || app.shortcutsOpen || artifact.document || pendingUi || inspect || app.eventsOpen || app.galleryOpen || app.settingsOpen || app.sessionCtlOpen || providers.open || packSheet.open || packSheet.panelOpen || crew.openId || folders.open || flows.open || tasks.open || packCreds.open) return;
+      if (indexOpen && !blockingOverlay && (e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "b") {
+        e.preventDefault();
+        indexOpen = false;
+        return;
+      }
+      if (indexOpen || blockingOverlay) return;
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "b") {
         e.preventDefault();
         toggleNavigation();
@@ -312,14 +351,14 @@
   </div>
 {:else}
   <div class="shell" class:rail-collapsed={app.sidebarCollapsed} data-state={app.phase} data-agent-id="app.root">
-    <aside class="index" data-state={indexOpen ? "open" : "closed"} data-agent-id="session.rail.wrap">
+    <aside class="index" inert={mobileLayout && !indexOpen} role={mobileLayout ? "dialog" : undefined} aria-modal={mobileLayout && indexOpen ? true : undefined} aria-label="Sessions" tabindex="-1" use:dlgIndex.ref data-state={indexOpen ? "open" : "closed"} data-agent-id="session.rail.wrap">
       <SessionIndex onPick={() => (indexOpen = false)} onCollapse={toggleSidebar} onClose={() => (indexOpen = false)} />
     </aside>
     {#if indexOpen}
       <div class="index-scrim" onclick={() => (indexOpen = false)} onkeydown={() => {}} role="presentation"></div>
     {/if}
 
-    <main class="main">
+    <main class="main" inert={mobileLayout && indexOpen}>
       {#if app.lastError && app.phase !== "failed"}
         <div class="errbar" data-agent-id="banner.error">
           <span class="st-red">✗ {app.lastError}</span>
@@ -369,13 +408,13 @@
       {/if}
     </main>
 
-    <div class="composer">
+    <div class="composer" inert={mobileLayout && indexOpen}>
       {#if activeStore}
         <Composer store={activeStore} />
       {/if}
     </div>
 
-    <div class="todos-row">
+    <div class="todos-row" inert={mobileLayout && indexOpen}>
       {#if activeStore}
         <Todos store={activeStore} />
       {/if}
@@ -387,12 +426,12 @@
       {/each}
     </div>
 
-    <div class="statusline">
+    <div class="statusline" inert={mobileLayout && indexOpen}>
       {#if activeStore}
-        <StatusLine store={activeStore} onToggleIndex={toggleNavigation} />
+        <StatusLine store={activeStore} {indexOpen} onToggleIndex={toggleNavigation} />
       {:else}
         <div class="sl-min" data-agent-id="status.phase" data-state={app.phase}>
-          <button class="act idx-toggle" data-agent-id="index.toggle" onclick={toggleNavigation}>[≡]</button>
+          <button class="act idx-toggle" data-agent-id="index.toggle" aria-label="Open sessions" aria-expanded={indexOpen} onclick={toggleNavigation}>☰</button>
           {#if app.sidebarCollapsed}
             <button class="act rail-restore-min" data-agent-id="sidebar.restore" onclick={toggleSidebar}>[› sessions]</button>
           {/if}
@@ -414,6 +453,7 @@
           <button
             class="act"
             data-agent-id="settings.open"
+            aria-label="Settings"
             data-state={app.settingsOpen ? "open" : "closed"}
             aria-haspopup="dialog"
             aria-expanded={app.settingsOpen}
@@ -560,6 +600,7 @@
   }
   .pair-row input {
     flex: 1;
+    min-width: 0;
     padding: 8px 10px;
   }
   .pair-help {
@@ -634,6 +675,14 @@
     .rail-restore-min {
       display: none;
     }
+  }
+  @media (max-width: 600px) {
+    .sl-min { align-items: center; min-height: 48px; }
+    .sl-min-right { display: none; }
+    .hero { justify-content: flex-start; overflow-y: auto; padding-block: 20px; }
+    .pair { top: var(--mobile-viewport-top, 0px); position: relative; height: var(--mobile-viewport-height, 100dvh); overflow-y: auto; align-items: safe center; }
+    .pair-box { flex-shrink: 0; padding: 18px 16px; }
+    .appr-dock { max-height: min(42dvh, calc(var(--mobile-viewport-height, 100dvh) * 0.42)); }
   }
   /* Crew run sheet gets more room than the 30rem drawer: tails and
      deliverables are the widest content in the app. */

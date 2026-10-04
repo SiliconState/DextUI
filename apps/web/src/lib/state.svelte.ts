@@ -66,6 +66,8 @@ export const app = $state({
   notify: "off" as NotifyState,
   /** Hero-typing stash: the printable key that spawned a fresh session. */
   pendingDraft: "",
+  /** Finder can reveal an otherwise quiet empty mobile Todos panel. */
+  todosReveal: 0,
   shortcutsOpen: false,
   sessionAction: null as SessionAction | null,
   sessionPending: false,

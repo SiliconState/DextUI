@@ -84,11 +84,11 @@ test("receipts: activate → list → add (dup refused) → rule → summary cha
   const add = call(bins.receipts, cwd, "tool", { tool: "add_receipt", input: { date: "Sep 3, 2026", vendor: "Blue Bottle", amount: "5.40", category: "Meals", source: "coffee.txt" } }, env);
   assert.equal(add.is_error, false);
   assert.match(add.content, /Added #1: 2026-09-03 Blue Bottle \$5\.40 → Meals/);
-  const month = new Date().toISOString().slice(0, 7);
+  const receiptMonth = "2026-09"; // add_receipt scopes its view to the receipt's date, not today's month
   assert.ok(views(add).length >= 1, "a view card comes back");
   assert.match(views(add)[0].markdown, /```chart/, "chart fence in the view");
   assert.match(views(add)[0].markdown, /```csv/, "ledger table in the view");
-  assert.match(views(add)[0].title, new RegExp(month.replace("-", "-")));
+  assert.equal(views(add)[0].title, `Receipts — ${receiptMonth}`);
 
   const dup = call(bins.receipts, cwd, "tool", { tool: "add_receipt", input: { date: "2026-09-03", vendor: "blue bottle", amount: 5.4 } }, env);
   assert.equal(dup.is_error, false);

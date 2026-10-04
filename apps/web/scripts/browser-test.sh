@@ -377,4 +377,104 @@ wait_js '!!document.querySelector(`[data-agent-id="packs.overlay"]`)' || { echo 
 agent-browser press Escape >/dev/null
 wait_js '!document.querySelector(`[data-agent-id="packs.overlay"]`)' || { echo "FAIL: overlay esc"; FAIL=1; }
 
+note "mobile: narrow layouts, touch targets, drawer focus, and keyboard-sized viewport"
+agent-browser fill '[data-agent-id="composer.input"]' '' >/dev/null
+for SIZE in '320 640' '375 667' '390 844' '430 932' '600 800' '900 700'; do
+  read -r WIDTH HEIGHT <<< "$SIZE"
+  agent-browser set viewport "$WIDTH" "$HEIGHT" >/dev/null
+  wait_js 'document.querySelector(`[data-agent-id="session.rail.wrap"]`)?.inert === true' || { echo "FAIL: closed drawer remains focusable"; FAIL=1; }
+  wait_js '(()=>{const r=document.querySelector(`[data-agent-id="app.root"]`).getBoundingClientRect();return Math.abs(r.height-window.visualViewport.height)<2&&document.documentElement.scrollWidth<=innerWidth})()' || { echo "FAIL: mobile shell overflow ($SIZE)"; FAIL=1; }
+  if [ "$WIDTH" -le 600 ]; then
+    wait_js '(()=>{const input=document.querySelector(`[data-agent-id="composer.input"]`);const send=document.querySelector(`[data-agent-id="composer.send"]`);const hud=document.querySelector(`[data-agent-id="status.hud"]`);const settings=document.querySelector(`[data-agent-id="settings.open"]`).getBoundingClientRect();const r=input.getBoundingClientRect(),s=send.getBoundingClientRect(),root=document.querySelector(`[data-agent-id="composer.root"]`).getBoundingClientRect();return parseFloat(getComputedStyle(input).fontSize)>=16&&r.height>=44&&r.height<=46&&r.width>=innerWidth-110&&getComputedStyle(input).borderRadius==="0px"&&document.querySelector(`.c-row`).getBoundingClientRect().width>=innerWidth-14&&getComputedStyle(document.querySelector(`.c-row`)).gap==="0px"&&Math.abs(s.bottom-r.bottom)<2&&s.height===44&&root.height<=58&&input.placeholder==="Message Dext…"&&hud.scrollWidth<=hud.clientWidth&&settings.right<=innerWidth&&settings.height>=44})()' || { echo "FAIL: cramped mobile controls ($SIZE)"; FAIL=1; }
+  fi
+  agent-browser click '[data-agent-id="index.toggle"]' >/dev/null
+  wait_js '(()=>{const rail=document.querySelector(`[data-agent-id="session.rail.wrap"]`);return !rail.inert&&rail.contains(document.activeElement)&&document.querySelector(`main`).inert})()' || { echo "FAIL: drawer isolation/focus"; FAIL=1; }
+  agent-browser eval '(()=>{const r=document.querySelector(`[data-agent-id="session.rail.wrap"]`);const items=[...r.querySelectorAll(`button:not([disabled]),input,a[href]`)].filter(x=>x.getClientRects().length&&getComputedStyle(x).visibility==="visible");window.__drawerFirst=items[0];window.__drawerLast=items.at(-1);window.__drawerLast.focus();return true})()' >/dev/null
+  agent-browser press Tab >/dev/null
+  wait_js 'document.activeElement===window.__drawerFirst' || { echo "FAIL: drawer forward boundary"; FAIL=1; }
+  agent-browser press Shift+Tab >/dev/null
+  wait_js 'document.activeElement===window.__drawerLast' || { echo "FAIL: drawer reverse boundary"; FAIL=1; }
+  agent-browser press Escape >/dev/null
+  wait_js 'document.querySelector(`[data-agent-id="session.rail.wrap"]`).inert && document.activeElement?.dataset.agentId === "index.toggle" && !document.querySelector(`main`).inert' || { echo "FAIL: drawer focus restore"; FAIL=1; }
+done
+agent-browser set viewport 390 844 >/dev/null
+wait_js 'getComputedStyle(document.querySelector(`[data-agent-id="todos.root"]`)).display==="none"' || { echo "FAIL: empty Todos wastes phone space"; FAIL=1; }
+agent-browser click '[data-agent-id="finder.open"]' >/dev/null
+agent-browser fill '[data-agent-id="palette.input"]' 'show session todos' >/dev/null
+agent-browser click '[data-agent-id="palette.item.session.todos"]' >/dev/null
+wait_js 'getComputedStyle(document.querySelector(`[data-agent-id="todos.root"]`)).display!=="none" && document.querySelector(`[data-agent-id="todos.toggle"]`).getAttribute("aria-expanded")==="true"' || { echo "FAIL: quiet Todos inaccessible from Finder"; FAIL=1; }
+agent-browser click '[data-agent-id="todos.toggle"]' >/dev/null
+agent-browser click '[data-agent-id="index.toggle"]' >/dev/null
+agent-browser eval '(()=>{const b=document.querySelector(`[data-agent-id="rail.packs.toggle"]`);if(b?.getAttribute("aria-expanded")==="false")b.click();return true})()' >/dev/null
+wait_js 'document.querySelectorAll(`.idx-pack-edit`).length>0 && [...document.querySelectorAll(`.idx-pack-edit`)].every(x=>getComputedStyle(x).visibility==="visible")' || { echo "FAIL: mobile pack edits hidden"; FAIL=1; }
+agent-browser press Control+k >/dev/null
+wait_js 'document.querySelector(`[data-agent-id="session.rail.wrap"]`).dataset.state==="open" && document.querySelector(`[data-agent-id="palette.root"]`).contains(document.activeElement)' || { echo "FAIL: nested Finder focus/isolation"; FAIL=1; }
+agent-browser eval '(()=>{const p=document.querySelector(`[data-agent-id="palette.root"]`);[...p.querySelectorAll(`input,button`)].at(-1).focus();return true})()' >/dev/null
+agent-browser press Tab >/dev/null
+wait_js 'document.activeElement?.dataset.agentId==="palette.input"' || { echo "FAIL: drawer stole nested Finder Tab"; FAIL=1; }
+agent-browser press Escape >/dev/null
+wait_js '!document.querySelector(`[data-agent-id="palette.root"]`) && !document.querySelector(`[data-agent-id="session.rail.wrap"]`).inert && document.querySelector(`[data-agent-id="session.rail.wrap"]`).contains(document.activeElement)' || { echo "FAIL: nested focus restore"; FAIL=1; }
+agent-browser press Control+b >/dev/null
+wait_js 'document.querySelector(`[data-agent-id="session.rail.wrap"]`).dataset.state==="closed"' || { echo "FAIL: navigation shortcut cannot close drawer"; FAIL=1; }
+agent-browser click '[data-agent-id="composer.attach.menu"]' >/dev/null
+wait_js 'document.querySelector(`[data-agent-id="composer.attach.menu"]`).getAttribute("aria-expanded")==="true"' || { echo "FAIL: attachment menu did not open"; FAIL=1; }
+agent-browser press Escape >/dev/null
+wait_js 'document.querySelector(`[data-agent-id="composer.attach.menu"]`).getAttribute("aria-expanded")==="false" && document.activeElement?.dataset.agentId==="composer.attach.menu"' || { echo "FAIL: attachment menu Escape/focus"; FAIL=1; }
+agent-browser click '[data-agent-id="composer.attach.menu"]' >/dev/null
+agent-browser click '[data-agent-id="composer.attach.link"]' >/dev/null
+wait_js 'document.activeElement?.dataset.agentId==="composer.attachurl.input" && document.querySelector(`[data-agent-id="composer.attach.menu"]`).getAttribute("aria-expanded")==="false"' || { echo "FAIL: mobile link attachment focus"; FAIL=1; }
+agent-browser press Escape >/dev/null
+wait_js '!document.querySelector(`[data-agent-id="composer.attachurl.row"]`) && document.activeElement?.dataset.agentId==="composer.input"' || { echo "FAIL: mobile link cancel"; FAIL=1; }
+# Emulate the touch-pointer branch while retaining the suite's desktop browser.
+agent-browser eval '(()=>{window.__mobileMatchMedia=window.matchMedia;window.matchMedia=q=>q==="(max-width: 900px) and (pointer: coarse)"?{matches:true}:window.__mobileMatchMedia.call(window,q);return true})()' >/dev/null
+agent-browser fill '[data-agent-id="composer.input"]' 'mobile draft' >/dev/null
+agent-browser press Enter >/dev/null
+wait_js 'document.querySelector(`[data-agent-id="composer.input"]`).value === "mobile draft\n"' || { echo "FAIL: mobile Return sent instead of adding a line"; FAIL=1; }
+agent-browser fill '[data-agent-id="composer.input"]' '' >/dev/null
+agent-browser fill '[data-agent-id="composer.input"]' 'thinking preview demo' >/dev/null
+agent-browser click '[data-agent-id="composer.send"]' >/dev/null
+wait_js '!!document.querySelector(`[data-agent-id="composer.stop"]`) && getComputedStyle(document.querySelector(`[data-agent-id="composer.steer"]`)).display==="none" && document.querySelector(`[data-agent-id="composer.input"]`).placeholder==="Add a follow-up…"' || { echo "FAIL: idle working composer controls"; FAIL=1; }
+agent-browser fill '[data-agent-id="composer.input"]' 'follow-up from phone' >/dev/null
+wait_js 'document.querySelector(`[data-agent-id="composer.steer"]`)?.dataset.state==="ready" && document.querySelector(`[data-agent-id="composer.input"]`).getBoundingClientRect().width>=200' || { echo "FAIL: phone steer ready/width"; FAIL=1; }
+agent-browser click '[data-agent-id="composer.steer"]' >/dev/null
+wait_js 'document.querySelector(`[data-agent-id="composer.input"]`).value==="" && document.activeElement?.dataset.agentId==="composer.input" && document.body.textContent.includes("Steering: follow-up from phone")' || { echo "FAIL: phone steer delivery/focus"; FAIL=1; }
+agent-browser click '[data-agent-id="composer.stop"]' >/dev/null
+wait_js '!document.querySelector(`[data-agent-id="composer.stop"]`) && !!document.querySelector(`[data-agent-id="composer.send"]`)' || { echo "FAIL: phone stop"; FAIL=1; }
+agent-browser eval '(()=>{window.matchMedia=window.__mobileMatchMedia;delete window.__mobileMatchMedia;return true})()' >/dev/null
+agent-browser click '[data-agent-id="status.details"]' >/dev/null
+wait_js 'document.querySelector(`[data-agent-id="status.details"]`).getAttribute("aria-expanded")==="true" && getComputedStyle(document.querySelector(`[data-agent-id="status.ctx"]`)).display!=="none"' || { echo "FAIL: mobile details hidden"; FAIL=1; }
+agent-browser click '[data-agent-id="status.details"]' >/dev/null
+agent-browser click '[data-agent-id="settings.open"]' >/dev/null
+wait_js '(()=>{const r=document.querySelector(`[data-agent-id="settings.overlay"]`).getBoundingClientRect();return r.top>=0&&r.bottom<=innerHeight&&r.right<=innerWidth})()' || { echo "FAIL: mobile settings off-screen"; FAIL=1; }
+agent-browser press Escape >/dev/null
+# An already-open popover must switch geometry across desktop/mobile resize.
+agent-browser click '[data-agent-id="settings.open"]' >/dev/null
+agent-browser set viewport 1280 800 >/dev/null
+wait_js 'document.querySelector(`[data-agent-id="settings.overlay"]`).style.transform===""' || { echo "FAIL: mobile popover geometry leaked onto desktop"; FAIL=1; }
+agent-browser set viewport 390 844 >/dev/null
+wait_js 'document.querySelector(`[data-agent-id="settings.overlay"]`).style.transform==="translateY(-100%)"' || { echo "FAIL: desktop popover did not switch to phone geometry"; FAIL=1; }
+agent-browser press Escape >/dev/null
+# Model a software keyboard shrinking only the visual viewport (iOS behavior).
+# Override dimensions on the existing viewport so real installed listeners run.
+agent-browser eval '(()=>{const v=window.visualViewport;Object.defineProperty(v,"height",{value:360,writable:true,configurable:true});Object.defineProperty(v,"offsetTop",{value:0,writable:true,configurable:true});v.dispatchEvent(new Event("resize"));return true})()' >/dev/null
+wait_js 'Math.abs(document.querySelector(`[data-agent-id="app.root"]`).getBoundingClientRect().height-360)<2' || { echo "FAIL: visual viewport sizing"; FAIL=1; }
+agent-browser fill '[data-agent-id="composer.input"]' "$MULTI" >/dev/null
+wait_js 'document.querySelector(`[data-agent-id="composer.input"]`).getBoundingClientRect().height<=91 && document.querySelector(`[data-agent-id="settings.open"]`).getBoundingClientRect().bottom<=360' || { echo "FAIL: keyboard leaves controls covered"; FAIL=1; }
+agent-browser click '[data-agent-id="settings.open"]' >/dev/null
+wait_js '(()=>{const r=document.querySelector(`[data-agent-id="settings.overlay"]`).getBoundingClientRect();return r.top>=0&&r.bottom<=360})()' || { echo "FAIL: keyboard settings overflow"; FAIL=1; }
+agent-browser eval '(()=>{const v=window.visualViewport;v.height=280;v.offsetTop=45;v.dispatchEvent(new Event("resize"));v.dispatchEvent(new Event("scroll"));return true})()' >/dev/null
+wait_js '(()=>{const r=document.querySelector(`[data-agent-id="settings.overlay"]`).getBoundingClientRect();return r.top>=45&&r.bottom<=325&&document.querySelector(`[data-agent-id="composer.input"]`).getBoundingClientRect().height<=73})()' || { echo "FAIL: open menu/composer did not follow keyboard resize and pan"; FAIL=1; }
+agent-browser press Escape >/dev/null
+agent-browser fill '[data-agent-id="composer.input"]' '' >/dev/null
+agent-browser click '[data-agent-id="finder.open"]' >/dev/null
+wait_js '(()=>{const r=document.querySelector(`[data-agent-id="palette.root"]`)?.getBoundingClientRect();return !!r&&r.top>=45&&r.bottom<=325})()' || { echo "FAIL: keyboard finder overflow"; FAIL=1; }
+agent-browser press Escape >/dev/null
+agent-browser eval '(()=>{const v=window.visualViewport;delete v.height;delete v.offsetTop;v.dispatchEvent(new Event("resize"));v.dispatchEvent(new Event("scroll"));return true})()' >/dev/null
+agent-browser click '[data-agent-id="index.toggle"]' >/dev/null
+wait_js 'document.querySelector(`[data-agent-id="session.rail.wrap"]`).dataset.state==="open" && Math.abs(document.querySelector(`[data-agent-id="session.rail.wrap"]`).getBoundingClientRect().left)<1' || exit 1
+agent-browser click '[data-agent-id="session.new"]' >/dev/null
+wait_js 'document.querySelector(`[data-agent-id="session.rail.wrap"]`).dataset.state==="closed" && !document.querySelector(`main`).inert' || { agent-browser eval '(()=>JSON.stringify({rail:document.querySelector(`[data-agent-id="session.rail.wrap"]`)?.dataset.state,mainInert:document.querySelector(`main`)?.inert,active:document.activeElement?.dataset.agentId,newDisabled:document.querySelector(`[data-agent-id="session.new"]`)?.disabled,action:!!document.querySelector(`[data-agent-id="session.action"]`),dialogs:[...document.querySelectorAll(`[role="dialog"]`)].map(x=>x.dataset.agentId)}))()'; echo "FAIL: new session covered by drawer"; exit 1; }
+agent-browser set viewport 1280 800 >/dev/null
+wait_js '!document.querySelector(`[data-agent-id="session.rail.wrap"]`).inert && !document.documentElement.style.getPropertyValue("--mobile-viewport-height") && getComputedStyle(document.querySelector(`[data-agent-id="status.details"]`)).display==="none"' || { echo "FAIL: desktop layout not restored"; FAIL=1; }
+
 if [ $FAIL -eq 0 ]; then echo "ALL BROWSER CHECKS PASSED"; else echo "BROWSER CHECKS FAILED"; exit 1; fi

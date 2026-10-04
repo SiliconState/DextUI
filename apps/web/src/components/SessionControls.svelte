@@ -12,7 +12,17 @@
   let { view }: { view: SessionState } = $props();
 
   const dlg = useDialog(() => app.sessionCtlOpen);
-  const posStyle = $derived(popoverPos(app.sessionCtlAnchor, 304));
+  let layoutRevision = $state(0);
+  $effect(() => {
+    if (!app.sessionCtlOpen) return;
+    const resize = () => { layoutRevision += 1; };
+    window.addEventListener("resize", resize);
+    return () => window.removeEventListener("resize", resize);
+  });
+  const posStyle = $derived.by(() => {
+    void layoutRevision;
+    return popoverPos(app.sessionCtlAnchor, 304);
+  });
 
   const modelValue = $derived(view.provider && view.model ? `${view.provider}\u001f${view.model}` : "");
   const modelInCatalog = $derived(app.modelCatalog.some((group) => group.provider === view.provider && group.models.includes(view.model ?? "")));
@@ -189,7 +199,12 @@
     font-size: 12px;
     animation: fade-in 0.1s ease-out;
   }
+  @media (max-width: 600px) {
+    .menu { max-height: calc(var(--mobile-viewport-height, 100dvh) - 72px); overflow-y: auto; }
+    .menu .ctl { min-height: 44px; font-size: 16px; }
+  }
   .head {
+    flex-shrink: 0;
     display: flex;
     align-items: baseline;
     justify-content: space-between;
@@ -207,6 +222,7 @@
     flex: none;
   }
   .sec {
+    flex-shrink: 0;
     display: grid;
     grid-template-columns: 4.5rem 1fr;
     gap: 2px 8px;

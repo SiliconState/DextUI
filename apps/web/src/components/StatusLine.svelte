@@ -12,7 +12,8 @@ import Meter from "./Meter.svelte";
   import { fmtTokens, fmtElapsed, prettyPath } from "../lib/markdown";
   import { useSession } from "../lib/useSession.svelte";
 
-  let { store, onToggleIndex }: { store: SessionStore; onToggleIndex?: () => void } = $props();
+  let mobileDetails = $state(false);
+  let { store, onToggleIndex, indexOpen = false }: { store: SessionStore; onToggleIndex?: () => void; indexOpen?: boolean } = $props();
 
   const sess = useSession(() => store);
   const view = $derived(sess.view ?? store.state);
@@ -125,9 +126,9 @@ import Meter from "./Meter.svelte";
   }
 </script>
 
-<div class="sl" data-agent-id="status.hud" data-state={view.compacting ? "compacting" : view.working ? "working" : "idle"}>
+<div class="sl" class:mobile-details={mobileDetails} data-agent-id="status.hud" data-state={view.compacting ? "compacting" : view.working ? "working" : "idle"}>
   {#if onToggleIndex}
-    <button class="act idx-toggle" data-agent-id="index.toggle" onclick={onToggleIndex}>[≡]</button>
+    <button class="act idx-toggle" data-agent-id="index.toggle" aria-label="Open sessions" aria-expanded={indexOpen} onclick={onToggleIndex}>☰</button>
   {/if}
   {#if app.sidebarCollapsed}
     <button class="act rail-restore" data-agent-id="sidebar.restore" onclick={toggleSidebar} title="Show sessions (Ctrl/Cmd+B)">[› sessions]</button>
@@ -167,7 +168,7 @@ import Meter from "./Meter.svelte";
   {#if ticker}
     <span class="sep">│</span>
     <button
-      class={`act crew-tick ${ticker.top.status === "paused" ? "st-yellow" : "st-cyan"}`}
+      class={`act crew-tick ${ticker.top.status === "paused" ? "st-yellow mobile-alert" : "st-cyan"}`}
       data-agent-id="status.crew"
       data-state={ticker.top.state}
       title={`${ticker.top.task}${ticker.more ? ` (+${ticker.more} more live)` : ""}`}
@@ -206,15 +207,15 @@ import Meter from "./Meter.svelte";
   {/if}
   {#if view.compacting}
     <span class="sep">│</span>
-    <span class="st-magenta pulse" data-agent-id="status.compacting">Compacting context…</span>
+    <span class="st-magenta pulse mobile-alert" data-agent-id="status.compacting">Compacting context…</span>
   {/if}
   {#if view.retry}
     <span class="sep">│</span>
-    <span class="st-yellow pulse" data-agent-id="status.retry" title={view.retry.reason}>Retry #{view.retry.attempt} in {view.retry.wait_secs}s</span>
+    <span class="st-yellow pulse mobile-alert" data-agent-id="status.retry" title={view.retry.reason}>Retry #{view.retry.attempt} in {view.retry.wait_secs}s</span>
   {/if}
   {#if view.failed}
     <span class="sep">│</span>
-    <span class="st-red">✗ turn failed</span>
+    <span class="st-red mobile-alert" data-agent-id="status.failed">✗ turn failed</span>
   {/if}
   {#if view.working && view.turnStartedAt}
     <span class="sep">│</span>
@@ -231,10 +232,12 @@ import Meter from "./Meter.svelte";
       >⚠ {pendingTotal}</button
       >
     {/if}
-    <button class="act" data-agent-id="finder.open" onclick={() => (app.paletteOpen = true)} title="Finder (⌘K)">⌘k</button>
+    <button class="act mobile-more" data-agent-id="status.details" aria-label="Session details" aria-expanded={mobileDetails} onclick={() => (mobileDetails = !mobileDetails)}>⋯</button>
+    <button class="act" data-agent-id="finder.open" aria-label="Find sessions and commands" onclick={() => (app.paletteOpen = true)} title="Finder (⌘K)">⌘k</button>
     <button
       class="act settings-open"
       data-agent-id="settings.open"
+      aria-label="Settings"
       data-state={app.settingsOpen ? "open" : "closed"}
       aria-haspopup="dialog"
       aria-expanded={app.settingsOpen}
@@ -347,6 +350,22 @@ import Meter from "./Meter.svelte";
     .ctl-chip {
       max-width: 16ch;
     }
+  }
+  .mobile-more { display: none; }
+  @media (max-width: 600px) {
+    .sl { align-items: center; flex-wrap: wrap; gap: 4px; overflow-x: hidden; padding: 2px var(--page-gutter); min-height: 48px; }
+    .sl > :not(.idx-toggle):not(.dot):not(.ctl-chip):not(.sl-right):not(.mobile-alert):not([data-agent-id="status.model"]) { display: none; }
+    .sl > .mobile-alert { order: 2; flex-basis: 100%; white-space: normal; }
+    .sl.mobile-details { max-height: calc(var(--mobile-viewport-height, 100dvh) * 0.35); overflow-y: auto; }
+    .sl .ctl-chip { flex: 1; min-width: 0; max-width: none; padding-inline: 4px; }
+    .sl > [data-agent-id="status.model"] { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+    .sl-right { gap: 0; align-items: center; }
+    .mobile-more { display: inline-block; }
+    .sl-right .act, .idx-toggle { min-width: 44px; text-align: center; }
+    .sl.mobile-details > :not(.idx-toggle):not(.dot):not(.ctl-chip):not(.sl-right):not([data-agent-id="status.model"]):not(.sep):not(.rail-restore) { display: block; order: 2; max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+    .sl.mobile-details > .folder, .sl.mobile-details > .conn { flex-basis: 100%; }
+    .sl.mobile-details > .conn { display: flex; align-items: center; }
+    .sl.mobile-details > .truncate { max-width: 100%; }
   }
   .crew-tick { white-space: nowrap; }
   .crew-tick .tick-min { display: none; }

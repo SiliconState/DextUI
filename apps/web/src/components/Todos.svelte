@@ -36,6 +36,16 @@
             : "closed",
   );
 
+  let seenReveal = app.todosReveal;
+  $effect(() => {
+    const reveal = app.todosReveal;
+    if (reveal !== seenReveal) {
+      seenReveal = reveal;
+      open = true;
+      localStorage.setItem("dextui.todosOpen", "1");
+    }
+  });
+
   const glyph: Record<string, string> = { pending: "○", in_progress: "◐", completed: "●" };
 
   function toggle() {
@@ -82,6 +92,8 @@
     void supported;
     if (sid !== shownSid) {
       shownSid = sid;
+      ++loadSeq; // invalidate the previous session's in-flight request immediately
+      loading = false;
       data = null;
       failed = false;
     }
@@ -116,13 +128,14 @@
 
   $effect(() => {
     return () => {
+      ++loadSeq;
       if (timer) clearTimeout(timer);
     };
   });
 </script>
 
 {#if supported}
-  <div class="todos content-axis" data-agent-id="todos.root" data-state={panelState}>
+  <div class="todos content-axis" class:mobile-quiet={!open && (!data || data.items.length === 0)} data-agent-id="todos.root" data-state={panelState}>
     <button class="todos-head" data-agent-id="todos.toggle" aria-expanded={open} onclick={toggle}>
       <span class="faint">{open ? "▾" : "▸"}</span>
       <span class="st-cyan">Todos</span>
@@ -214,6 +227,11 @@
   }
   .todo[data-state="completed"] .tt {
     color: var(--dim);
+  }
+  @media (max-width: 600px) {
+    .todos.mobile-quiet { display: none; }
+    .todos-head { align-items: center; }
+    .todos-head > .faint { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   }
   .faint {
     color: var(--faint);

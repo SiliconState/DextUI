@@ -46,7 +46,8 @@
     {
       name: "compose",
       rows: [
-        ["⏎", "send (steer when supported)"],
+        ["⏎", "desktop: send; touch phone/tablet: newline"],
+        ["⌘/ctrl ⏎", "send or queue follow-up (steering when supported)"],
         ["shift ⏎", "newline"],
         ["↑ / ↓", "history — first / last line"],
         ["tab", "complete / command"],
@@ -66,7 +67,8 @@
       name: "app",
       rows: [
         ["status line", "model · effort · approval · ⚙ settings menu"],
-        ["rail / finder", "open todos panel · inspect blocks · raw events"],
+        ["todos / finder", "open todos panel; empty phone panels are quiet until opened"],
+        ["phone + / ↑ / ■", "attachments / send or queue follow-up / stop"],
       ],
     },
   ];

@@ -21,7 +21,17 @@
 
   // Anchored away from the nearest edge by the shared popover geometry
   // (menu is 15rem wide); no anchor → bottom-right corner.
-  const posStyle = $derived(popoverPos(app.settingsAnchor, 240));
+  let layoutRevision = $state(0);
+  $effect(() => {
+    if (!app.settingsOpen) return;
+    const resize = () => { layoutRevision += 1; };
+    window.addEventListener("resize", resize);
+    return () => window.removeEventListener("resize", resize);
+  });
+  const posStyle = $derived.by(() => {
+    void layoutRevision;
+    return popoverPos(app.settingsAnchor, 240);
+  });
 
   const notifyLabel = $derived(app.notify === "on" ? "On" : app.notify === "blocked" ? "Blocked" : "Off");
 
@@ -127,7 +137,11 @@
     font-size: 12px;
     animation: fade-in 0.1s ease-out;
   }
+  @media (max-width: 600px) {
+    .menu { max-height: calc(var(--mobile-viewport-height, 100dvh) - 72px); }
+  }
   .sec {
+    flex-shrink: 0;
     display: flex;
     flex-direction: column;
     gap: 5px;
@@ -185,6 +199,7 @@
     margin: 1px 0;
   }
   .item {
+    flex-shrink: 0;
     display: flex;
     flex-direction: column;
     gap: 1px;

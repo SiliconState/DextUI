@@ -130,6 +130,7 @@
       if (m) out.push({ slug: "folder.move", label: `Change folder — move “${m.title}”`, hint: "between turns", group: "sess", run: () => openFolderPicker({ intent: "move", session: m.id }) });
     }
     if (view) {
+      if (app.caps.includes("todos_read")) out.push({ slug: "session.todos", label: "Show session todos", group: "sess", run: () => { app.todosReveal += 1; } });
       out.push({
         slug: "session.copyid",
         label: "Copy session id",
@@ -352,6 +353,7 @@
   }
   .fz-input-row input {
     flex: 1;
+    min-width: 0;
   }
   .fz-list {
     max-height: 46vh;
@@ -398,6 +400,12 @@
   .fz-empty {
     padding: 14px 12px;
     color: var(--faint);
+  }
+  @media (max-width: 600px) {
+    .fz { top: calc(var(--mobile-viewport-top, 0px) + env(safe-area-inset-top, 0px) + 12px); max-height: calc(var(--mobile-viewport-height, 100dvh) - 24px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px)); display: flex; flex-direction: column; }
+    .fz-list { min-height: 0; max-height: none; }
+    .fz-input-row { align-items: center; flex-shrink: 0; }
+    .fz-hint { display: none; }
   }
   .st-green {
     color: var(--green);

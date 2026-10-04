@@ -57,7 +57,7 @@
   <div class="idx-head">
     <span class="faint">Sessions</span>
     <span class="faint">{filtered.length}</span>
-    <button class="act accent" data-agent-id="session.new" onclick={newSession} disabled={disabled}>+ New</button>
+    <button class="act accent" data-agent-id="session.new" onclick={() => { newSession(); onPick?.(); }} disabled={disabled}>+ New</button>
     {#if canManage}<button class="act" aria-label="Manage sessions" aria-expanded={menu === "all"} data-agent-id="sessions.manage" onclick={() => (menu = menu === "all" ? "" : "all")}>⋯</button>{/if}
     <button class="act rail-min" data-agent-id="sidebar.collapse" onclick={onCollapse} title="Minimize sessions (Ctrl/Cmd+B)">[‹]</button>
     <button class="act rail-close" data-agent-id="sidebar.close" onclick={onClose} title="Close sessions">[×]</button>
@@ -244,6 +244,12 @@
     padding: 12px 10px;
     color: var(--faint);
   }
+  @media (max-width: 900px) {
+    .idx-head { gap: 4px; align-items: center; }
+    .idx-head .act { min-width: 40px; text-align: center; }
+    .idx-row { padding-block: 10px; }
+    .idx-search { min-height: 44px; font-size: 16px; }
+  }
   .idx-foot {
     padding: 6px 10px;
     border-top: 1px solid var(--line);
@@ -260,6 +266,9 @@
   .idx-pack-run:hover { background: var(--bg2); }
   .idx-pack-edit { visibility: hidden; padding: 2px 10px; font-size: 11px; }
   .idx-pack:hover .idx-pack-edit, .idx-pack:focus-within .idx-pack-edit { visibility: visible; }
+  @media (max-width: 900px), (pointer: coarse) {
+    .idx-pack-edit { visibility: visible; }
+  }
   .idx-pack-new { padding: 4px 10px 0 18px; font-size: 11px; }
   .faint {
     color: var(--faint);

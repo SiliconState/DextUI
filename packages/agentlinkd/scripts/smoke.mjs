@@ -211,7 +211,7 @@ try {
       busyDigest.actions.some((x) => x.cmd === "interrupt" && x.session === sid),
   );
   const end2 = await a.waitFor((e) => e.session === sid && e.event === "turn_end" && e.seq > end1.seq, 5000, "turn 2 end");
-  const resumed = a.events.find((e) => e.session === sid && e.event === "text_block_complete" && e.seq < end2.seq && String(e.data).includes("two"));
+  const resumed = a.events.find((e) => e.session === sid && e.event === "text_block_complete" && e.seq > end1.seq && e.seq < end2.seq && String(e.data).includes("two"));
   ok("second turn accepted immediately", !!end2);
   ok("second turn uses seat resume", String(resumed?.data).includes("[resumed]"));
   ok("resume keeps model and applies new effort", String(resumed?.data).includes("[fake-b/beta; effort=xhigh]"));

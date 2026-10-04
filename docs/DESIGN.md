@@ -45,7 +45,7 @@ The unit of attention is the **decision**, not the message.
 - **Action Queue** is the home screen on phone: every pending approval across all sessions as a card with syntax-aware diff (dext's mutation preview), Once / Always / Deny (exactly dext's `Choice`), and a note field. Push (ntfy/Telegram webhook from the host; PWA Web Push where installed) exists to pull the human back to a decision, not to chat.
 - **Session view** borrows the TUI's proven contract: first-class blocks (text, dimmed collapsible thinking, tool cards with live output tails, batch markers, compaction markers), composer with `/` completion (command list comes from the host), steer-while-running, stop, model/effort/approval chips, usage ticker, agent-active clock, todo panel (reads the same per-session todo file dext's `Ctrl+L` modal reads).
 - **Review mode** (post-turn): session-level aggregate diff from dext's checkpoint refs, one-tap handoff to `git_commit`.
-- Desktop is keyboard-first (`a`/`d` on the focused approval); mobile is one-handed bottom sheets + haptics.
+- Desktop is keyboard-first (`a`/`s`/`d` for the oldest pending approval); mobile uses a unified full-width composer, 44px touch controls, an off-canvas session drawer and a compact status bar. Touch Return inserts a newline; explicit Send/Queue submits. Safe-area padding and the visual viewport keep the shell above the software keyboard. See [mobile.md](mobile.md) for controls, breakpoints and verification limits. Swipeable queues and haptics remain roadmap work.
 
 ## Risk register → solutions
 
@@ -118,6 +118,7 @@ Agents authoring workspace `.html` artifacts SHOULD follow this contract: self-c
 ```
 docs/PROTOCOL.md       AgentLink v1 wire contract (the keystone)
 docs/DESIGN.md         design notes, contracts, repo map, milestones (this file)
+docs/mobile.md         phone controls, keyboard behavior, responsive verification
 docs/UPSTREAM.md       dext bridge-mode PR spec
 packages/protocol      TS types + envelope helpers (zero deps)
 packages/client        connection + per-session state machine + seq resume + chart renderer (zero deps)
@@ -134,13 +135,17 @@ packs/                 consumer packs: sdk-rs, pack-sdk-ts, receipts, invoice, r
 
 - **M0:** protocol, docs, fixtures, TS protocol/client, zero-dep mock with synthetic approvals, Svelte PWA (sessions, transcript, approvals, composer, queue, status), smoke test.
 - **M1 (done, Node not Rust):** `agentlinkd` one-shot bridge around stock `dext --output stream-json` with seat resume, on-disk journals, cold/wake, model/effort controls, `/__agent` digest, todos, chart/image rendering (```chart fences + `files_read`), and queue-next-turn steering; PWA wired to real dext. The upstream `dext bridge` PR (UPSTREAM.md) remains the path to live in-stream steering and interactive approvals on the real host.
-- **M2:** mobile loop, QR pairing, `--lan`, push on `permission.request`/`turn_end`, swipeable queue, haptics.
+- **M2 (partial):** responsive mobile session loop delivered: compact shared composer, touch targets, keyboard-aware sizing, safe areas, drawer focus handling and mobile regression coverage. QR pairing, swipeable queue and haptics remain roadmap work; real-device keyboard and installed-PWA checks remain manual.
 - **M3:** depth, checkpoints/undo timeline, review mode, seats switcher, pack browser, usage dashboard; Tauri desktop.
 - **M4:** agent layer, `/__agent` hardening, MCP supervision surface, save-as-rule/save-as-pack accretion, fixture-driven visual regression via browser packs; Tauri mobile / PWABuilder store packaging.
 
 ## Development gates
 
-Beyond `npm test` / `npm run typecheck` / `npm run build`:
+For web changes, run `cd apps/web && npx svelte-check`, then root `npm test`, then `cd apps/web && npm run build`. A full workspace check/build is also available through root `npm run typecheck` and `npm run build`. The browser gates build an isolated `dist.smoke`; production `dist` is not touched by tests. Web-only deployment is rebuild plus refresh, not a host restart.
+
+`apps/web/scripts/browser-test.sh` covers the responsive shell at 320, 375, 390, 430, 600 and 900px, drawer focus boundaries and nested Finder, Send/Queue/Stop, attachment-menu dismissal, touch Return, quiet Todos access, and visual-viewport resize/pan with an open menu. These are Chromium geometry/interaction checks, not physical iOS/Android certification; see [mobile.md](mobile.md).
+
+Additional gates:
 
 ### Bridge verification and thinking transactions
 

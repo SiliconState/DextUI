@@ -32,6 +32,8 @@ Useful flags: `--port` · `--token` · `--dext` (auto-detects the binary) ·
 
 ## Highlights
 
+- **Phone-friendly controls**: full-width composer, touch-sized send/queue/stop,
+  keyboard-aware layout ([docs/mobile.md](docs/mobile.md))
 - **Multi-session rail**: cold/wake restore, rename, true-purge delete,
   `Ctrl+[`/`]` cycling
 - **One action queue**: every pending approval across all sessions, `a`/`s`/`d`
@@ -70,8 +72,10 @@ Useful flags: `--port` · `--token` · `--dext` (auto-detects the binary) ·
 ## Verification
 
 ```bash
+npm run typecheck        # protocol/client TypeScript and Svelte diagnostics
 npm test                 # unit + fold-equivalence suites, then a real-browser
                          # smoke (visibly skips where agent-browser is absent)
+npm run build            # rebuild protocol, client, and production web bundle
 npm run smoke            # mock host end-to-end
 npm run smoke:agentlinkd # real-host surface against a fake dext
 ```
@@ -82,6 +86,7 @@ npm run smoke:agentlinkd # real-host surface against a fake dext
 |---|---|
 | [docs/PROTOCOL.md](docs/PROTOCOL.md) | AgentLink v1 wire format, WS + REST, capability negotiation, flows/tasks contracts |
 | [docs/DESIGN.md](docs/DESIGN.md) | Design notes, theming contract, development gates, repo map, milestones |
+| [docs/mobile.md](docs/mobile.md) | Phone controls, keyboard behavior, responsive checks, and real-device verification limits |
 | [docs/UPSTREAM.md](docs/UPSTREAM.md) | `dext bridge` PR spec, the path to live steering and interactive approvals |
 | [packs/README.md](packs/README.md) | Consumer pack architecture and gallery metadata |
 | [docs/crew-live-monitoring.md](docs/crew-live-monitoring.md) | Crew run monitoring design |
