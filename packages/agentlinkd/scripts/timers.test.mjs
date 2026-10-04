@@ -18,11 +18,18 @@ function dirs(t) {
 test("timer validation, rev CAS, atomic IO, caps and symlink refusal", (t) => {
   const { root, cwd } = dirs(t);
   assert.equal(validateTimer(timer()).ok, true);
-  for (const change of [{ name: "../bad" }, { rev: 0 }, { at: "tomorrow" }, { at: "2026-02-30T12:00:00Z" }, { at: "2026-01-01T12:00:00" }, { session: "core-id" }, { prompt: " " }, { prompt: "x".repeat(100001) }]) assert.ok(validateTimer(timer(change)).error);
+  for (const change of [{ name: "../bad" }, { rev: 0 }, { rev: null }, { at: "tomorrow" }, { at: "2026-02-30T12:00:00Z" }, { at: "0000-01-01T00:00:00+01:00" }, { at: "2026-01-01T12:00:00" }, { session: "core-id" }, { prompt: " " }, { prompt: "x".repeat(100001) }]) assert.ok(validateTimer(timer(change)).error);
   assert.equal(writeTimer(cwd, timer(), { expectedRev: 0 }).timer.rev, 1);
   assert.equal(writeTimer(cwd, timer(), { expectedRev: 0 }).error, "stale_rev");
   assert.equal(writeTimer(cwd, timer({ prompt: "new" }), { expectedRev: 1 }).timer.rev, 2);
   assert.equal(readTimer(cwd, "check-ci").timer.prompt, "new");
+  assert.equal(writeTimer(cwd, timer({ prompt: "🌍".repeat(40000) })).error, "too_large");
+  assert.equal(readTimer(cwd, "check-ci").timer.prompt, "new", "oversized writes leave the previous file intact");
+  assert.equal(readTimer(cwd, null).error, "bad_name");
+  const max = path.join(cwd, ".dext/timers/max-rev.timer.json");
+  fs.writeFileSync(max, JSON.stringify(timer({ name: "max-rev", rev: Number.MAX_SAFE_INTEGER })));
+  assert.equal(writeTimer(cwd, timer({ name: "max-rev" })).error, "bad_rev");
+  fs.unlinkSync(max);
   const dir = path.join(cwd, ".dext/timers");
   assert.deepEqual(fs.readdirSync(dir), ["check-ci.timer.json"]);
   fs.writeFileSync(path.join(root, "outside.json"), JSON.stringify(timer()));
@@ -65,6 +72,36 @@ test("timer failures retry without overlapping submits; scheduler persistence mu
   writeTimer(cwd, timer({ name: "no-state" }));
   const file = path.join(stateDir, "triggers.json"); fs.unlinkSync(file); fs.symlinkSync(path.join(stateDir, "elsewhere"), file);
   s.pollTimers(); await sleep(30); assert.equal(calls, 2, "no dispatch without durable revision acceptance");
+});
+
+for (const action of ["delete", "stop", "reschedule"]) test(`queued timer dispatch is cancelled by ${action}`, async (t) => {
+  const { cwd, stateDir } = dirs(t); writeTimer(cwd, timer());
+  let sent = 0;
+  const s = createScheduler({ stateDir, startRun: () => {}, submitTimer: () => { sent++; return { ok: true }; } });
+  t.after(() => s.stop()); s.addWorkspace(cwd); s.pollTimers();
+  if (action === "delete") fs.unlinkSync(path.join(cwd, ".dext/timers/check-ci.timer.json"));
+  if (action === "stop") s.stop();
+  if (action === "reschedule") writeTimer(cwd, timer({ at: "2099-01-01T00:00:00Z" }));
+  await sleep(30);
+  assert.equal(sent, 0);
+});
+
+for (const raw of ["{", "null", "[]", JSON.stringify({ fired: 123 }), JSON.stringify({ fired: {}, timerRecords: null }), JSON.stringify({ fired: {}, timerRecords: { invalid: { rev: 1, fingerprint: "x", delivered: null } } })]) test(`broken timer state fails closed: ${raw.slice(0, 30)}`, async (t) => {
+  const { cwd, stateDir } = dirs(t); writeTimer(cwd, timer());
+  fs.writeFileSync(path.join(stateDir, "triggers.json"), raw);
+  let sent = 0; const logs = [];
+  const s = createScheduler({ stateDir, startRun: () => {}, submitTimer: () => { sent++; return { ok: true }; }, log: (m) => logs.push(m) });
+  t.after(() => s.stop()); s.addWorkspace(cwd); s.pollTimers(); await sleep(30);
+  assert.equal(sent, 0); assert.ok(logs.some((m) => m.includes("timer delivery disabled")));
+});
+
+test("timer completion requires explicit durable acceptance", async (t) => {
+  const { cwd, stateDir } = dirs(t); writeTimer(cwd, timer());
+  const events = []; let calls = 0;
+  const s = createScheduler({ stateDir, startRun: () => {}, submitTimer: () => { calls++; }, broadcast: (_e, data) => events.push(data) });
+  t.after(() => s.stop()); s.addWorkspace(cwd); s.pollTimers(); await sleep(30); s.pollTimers(); await sleep(30);
+  assert.equal(calls, 2); assert.ok(events.some((e) => e.phase === "failed"));
+  assert.ok(!events.some((e) => e.phase === "fired"));
 });
 
 test("startup recovery takes priority over a due timer in the same session", async (t) => {

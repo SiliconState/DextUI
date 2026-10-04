@@ -17,6 +17,7 @@ export async function durableHost(t, { bridge = false, args = [], env = {} } = {
   const cwd = path.join(temp, "workspace");
   fs.mkdirSync(cwd);
   let child, base, stderr = "";
+  let journalStarts = new Map();
   const sockets = [];
   const journal = (id) => {
     try { return fs.readFileSync(path.join(state, "journals", `${id}.jsonl`), "utf8").split("\n").filter(Boolean).map(JSON.parse); }
@@ -25,20 +26,28 @@ export async function durableHost(t, { bridge = false, args = [], env = {} } = {
   const index = () => JSON.parse(fs.readFileSync(path.join(state, "sessions.json"), "utf8"));
   const stop = async (signal = "SIGTERM") => {
     for (const ws of sockets.splice(0)) ws.close();
+    const fakePids = new Set();
+    if (signal === "SIGKILL" && fs.existsSync(path.join(state, "sessions.json"))) {
+      for (const s of index()) {
+        let active = null;
+        for (const e of journal(s.id).slice(journalStarts.get(s.id) ?? 0)) {
+          if (e.event === "turn_start") active = e.data?.pid;
+          if (e.event === "turn_end" || e.event === "interrupted") active = null;
+        }
+        if (active) fakePids.add(active);
+      }
+    }
     if (child?.exitCode === null && child?.signalCode === null) {
       const exit = once(child, "exit"); child.kill(signal); await exit;
     }
     // SIGKILL bypasses host cleanup; terminate only fake children recorded in
     // this isolated journal, never inspect or signal unrelated processes.
-    if (signal === "SIGKILL") {
-      for (const s of index()) for (const e of journal(s.id)) {
-        const pid = e.event === "turn_start" && e.data?.pid;
-        if (pid) { try { process.kill(pid, "SIGKILL"); } catch { /* gone */ } }
-      }
-    }
+    for (const pid of fakePids) { try { process.kill(pid, "SIGKILL"); } catch { /* gone */ } }
   };
   t.after(async () => { await stop(); fs.rmSync(temp, { recursive: true, force: true }); });
   async function start(extra = []) {
+    journalStarts = new Map();
+    if (fs.existsSync(path.join(state, "sessions.json"))) for (const s of index()) journalStarts.set(s.id, journal(s.id).length);
     child = spawn(process.execPath, [path.join(root, "src/server.mjs"), "--port=0", "--token=durable-test-token", `--cwd=${cwd}`, `--state-dir=${state}`, `--crew=${temp}/no-crew`, `--dext=${root}/scripts/fake-dext.mjs`, ...args, ...extra], {
       env: { ...process.env, HOME: home, DEXT_HOME: home, DEXT_SESSIONS_DIR: "", DEXT_LOGS_DIR: "", AGENTLINKD_AUTO_RESUME: "false", AGENTLINKD_TIMERS: "false", FAKE_DEXT_NDJSON: bridge ? "1" : "0", ...env },
       stdio: ["ignore", "pipe", "pipe"],
@@ -59,9 +68,10 @@ export async function durableHost(t, { bridge = false, args = [], env = {} } = {
     return { ws, events, send, wait, hello };
   }
   async function open(c) {
+    const existing = new Set(fs.existsSync(path.join(state, "sessions.json")) ? index().map((s) => s.id) : []);
     c.send("session.open");
-    const list = await c.wait((e) => e.event === "session.list" && e.data.sessions.length);
-    const id = list.data.sessions.at(-1).id;
+    const list = await c.wait((e) => e.event === "session.list" && e.data.sessions.some((s) => !existing.has(s.id)));
+    const id = list.data.sessions.find((s) => !existing.has(s.id)).id;
     assert.ok(id); c.send("session.subscribe", { id });
     await c.wait((e) => e.event === "session.snapshot" && e.session === id);
     return id;

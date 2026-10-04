@@ -8,6 +8,7 @@
 //   mesh      a message arrives for node <node> (polled `mesh recv`)
 //   webhook   POST /hooks/<token> — token derived (HMAC) from the pairing
 //             token + cwd + flow, so nothing secret is stored anywhere
+//   at        agent-written timer files submit a prompt once into a session
 //
 // Execution semantics (at-most-once per period, never silent):
 //   * Fires are SERIALIZED per flow: one launch in flight at a time; events
@@ -26,7 +27,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { execFile } from "node:child_process";
 import { listFlows, readFlow } from "./flows.mjs";
-import { listTimers } from "./timers.mjs";
+import { listTimers, readTimer } from "./timers.mjs";
 import { checkedPath } from "./session-files.mjs";
 
 const TICK_MS = 30_000;
@@ -106,26 +107,37 @@ export function createScheduler({
   let failures = {};
   let slots = {};
   let timerRecords = {};
+  let timerStateReadable = true;
+  let timerGeneration = 0;
   const timersInFlight = new Set();
   const timerErrors = new Map();
   try {
     checkedPath(stateFile);
-    const raw = JSON.parse(fs.readFileSync(stateFile, "utf8")) || {};
-    if (raw && typeof raw.fired === "object") {
+    const raw = JSON.parse(fs.readFileSync(stateFile, "utf8"));
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("invalid trigger state");
+    if (Object.hasOwn(raw, "fired") || Object.hasOwn(raw, "timerRecords")) {
       fired = raw.fired ?? {};
       attempted = raw.attempted ?? {};
       failures = raw.failures ?? {};
       slots = raw.slots ?? {};
-      timerRecords = raw.timerRecords ?? {};
+      timerRecords = raw.timerRecords === undefined ? {} : raw.timerRecords;
+      if ([fired, attempted, failures, slots].some((map) => !map || typeof map !== "object" || Array.isArray(map))) throw new Error("invalid trigger state maps");
+      if (!timerRecords || typeof timerRecords !== "object" || Array.isArray(timerRecords) || Object.values(timerRecords).some((r) =>
+        !r || !Number.isSafeInteger(r.rev) || r.rev < 1 || typeof r.fingerprint !== "string" || !/^[a-f0-9]{64}$/.test(r.fingerprint) || !Array.isArray(r.delivered) || r.delivered.some((n) => typeof n !== "string")
+      )) throw new Error("invalid timerRecords");
     } else {
       fired = raw; // pre-serialization format: a flat last-fire map
     }
-  } catch {
-    fired = {};
+  } catch (err) {
+    fired = {}; attempted = {}; failures = {}; slots = {}; timerRecords = {};
+    // A broken existing state file is not proof that a timer never fired.
+    timerStateReadable = err.code === "ENOENT";
+    if (!timerStateReadable) log(`triggers: timer delivery disabled: ${err.message}`);
   }
   function persist(strict = false) {
     const tmp = `${stateFile}.${crypto.randomBytes(8).toString("hex")}.tmp`;
     try {
+      if (!timerStateReadable) throw new Error("refusing to overwrite unreadable trigger state");
       checkedPath(stateFile);
       checkedPath(tmp);
       fs.writeFileSync(tmp, JSON.stringify({ fired, attempted, failures, slots, timerRecords }), { flag: "wx", mode: 0o600 });
@@ -325,11 +337,12 @@ export function createScheduler({
    * A durable revision fingerprint refuses same-rev edits and stale writes.
    * Prompt acceptance itself is deduped from the target session journal, which
    * closes the dispatch -> slot-persist crash window even beyond nonce TTL. */
+  const timerFingerprint = (timer) => crypto.createHash("sha256").update(JSON.stringify(timer)).digest("hex");
   function pollTimers() {
-    if (!submitTimer) return;
+    if (!submitTimer || !timerStateReadable) return;
     for (const cwd of workspaces.keys()) for (const timer of listTimers(cwd)) {
       const k = `at\u0000${cwd}\u0000${timer.name}`;
-      const fingerprint = crypto.createHash("sha256").update(JSON.stringify(timer)).digest("hex");
+      const fingerprint = timerFingerprint(timer);
       const prior = timerRecords[k];
       if (prior && (timer.rev < prior.rev || (timer.rev === prior.rev && fingerprint !== prior.fingerprint))) {
         if (timerErrors.get(k) !== "stale_rev") {
@@ -347,8 +360,17 @@ export function createScheduler({
       const record = timerRecords[k];
       if (record.delivered.includes(nonce) || Date.parse(timer.at) > Date.now()) continue;
       timersInFlight.add(k);
-      Promise.resolve().then(() => submitTimer(cwd, timer, nonce)).then((result) => {
+      const generation = timerGeneration;
+      Promise.resolve().then(() => {
+        // Stop/delete/reschedule can happen after polling but before dispatch.
+        if (generation !== timerGeneration || !workspaces.has(cwd)) return { cancelled: true };
+        const current = readTimer(cwd, timer.name);
+        if (!current.ok || timerFingerprint(current.timer) !== fingerprint) return { cancelled: true };
+        return submitTimer(cwd, current.timer, nonce);
+      }).then((result) => {
+        if (result?.cancelled) return;
         if (result?.error) throw new Error(result.error);
+        if (result?.ok !== true) throw new Error("timer submission was not durably accepted");
         record.delivered.push(nonce);
         try { persist(true); } catch (err) { record.delivered.pop(); throw err; }
         timerErrors.delete(k);
@@ -417,6 +439,7 @@ export function createScheduler({
   }
 
   function stop() {
+    timerGeneration++; // invalidate timer submissions not yet dispatched
     clearInterval(tick);
     tick = null;
     // Both intervals are ours; leaving the mesh poll running leaked a timer
@@ -426,7 +449,10 @@ export function createScheduler({
       meshTimer = null;
     }
     for (const entry of [...live.values()]) teardown(entry);
-    for (const ws of workspaces.values()) { try { ws.dirWatcher?.close(); } catch { /* closed */ } }
+    for (const ws of workspaces.values()) {
+      clearTimeout(ws.debounce);
+      try { ws.dirWatcher?.close(); } catch { /* closed */ }
+    }
     workspaces.clear();
   }
 

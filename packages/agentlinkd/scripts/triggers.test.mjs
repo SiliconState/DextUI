@@ -126,7 +126,7 @@ test("scheduler: arms triggers from flow files, reloads, fires with cooldown, wa
   // Watch: a new file under inbox/ fires after the debounce (dotfiles ignored).
   // Bypass the cooldown by pretending the last fire was long ago.
   const persisted = JSON.parse(fs.readFileSync(path.join(state, "triggers.json"), "utf8"));
-  for (const k of Object.keys(persisted)) persisted[k] = Date.now() - 10 * 60_000;
+  for (const k of Object.keys(persisted.fired)) persisted.fired[k] = Date.now() - 10 * 60_000;
   fs.writeFileSync(path.join(state, "triggers.json"), JSON.stringify(persisted));
   s.stop();
   s = mk();

@@ -97,8 +97,8 @@ const DEFAULT_APPROVAL = argValue("approval", process.env.DEXT_APPROVAL ?? "auto
 // self-edit can never lock the operator out of the UI that fixes it.
 const SAFE_MODE = process.argv.includes("--safe");
 // Recovery is deliberately opt-in: it submits a new prompt, never replays tools.
-const AUTO_RESUME = argValue("auto-resume", process.env.AGENTLINKD_AUTO_RESUME ?? "false") === "true" || process.argv.includes("--auto-resume");
-const TIMERS_ENABLED = argValue("timers", process.env.AGENTLINKD_TIMERS ?? "false") === "true" || process.argv.includes("--timers");
+const AUTO_RESUME = argValue("auto-resume", process.argv.includes("--auto-resume") ? "true" : process.env.AGENTLINKD_AUTO_RESUME ?? "false") === "true";
+const TIMERS_ENABLED = argValue("timers", process.argv.includes("--timers") ? "true" : process.env.AGENTLINKD_TIMERS ?? "false") === "true";
 const RESUME_PROMPT = "Continue the interrupted turn. Review recovery evidence before taking any action; do not repeat side effects unless their outcome is known.";
 const STATIC_RESOLVED = resolveStaticDir({ staticDir: argValue("static", path.join(repoRoot, "apps", "web", "dist")), repoRoot, safe: SAFE_MODE });
 const STATIC_DIR = STATIC_RESOLVED.dir;
@@ -683,6 +683,7 @@ if (SELF.enabled) {
 
 function restartHost(code) {
   shuttingDown = true;
+  TRIGGERS.stop(); // pending timer microtasks must not start a new child at shutdown
   server.close();
   for (const s of sessions.values()) killChild(s);
   persistIndex(true);
@@ -891,6 +892,7 @@ function appendJournalLine(s, env, { durable = false } = {}) {
     if (durable) {
       const fd = fs.openSync(journalFile(s), fs.constants.O_WRONLY | fs.constants.O_APPEND | fs.constants.O_CREAT | fs.constants.O_NOFOLLOW, 0o600);
       try { fs.writeFileSync(fd, `${JSON.stringify(env)}\n`); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+      const dir = fs.openSync(JOURNALS_DIR, "r"); try { fs.fsyncSync(dir); } finally { fs.closeSync(dir); }
     } else fs.appendFileSync(journalFile(s), `${JSON.stringify(env)}\n`, { mode: 0o600 });
     s.lastAppendFailed = null;
     return true;
@@ -939,7 +941,13 @@ function persistIndex(force = false, strict = false) {
     const tmp = `${INDEX_PATH}.tmp`;
     checkedPath(tmp);
     fs.writeFileSync(tmp, `${JSON.stringify(entries, null, 2)}\n`, { mode: 0o600 });
+    if (strict) {
+      const fd = fs.openSync(tmp, "r"); try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+    }
     fs.renameSync(tmp, INDEX_PATH);
+    if (strict) {
+      const fd = fs.openSync(STATE_DIR, "r"); try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+    }
     for (const s of sessions.values()) s.indexEntry = JSON.stringify(indexEntryOf(s));
   } catch (err) {
     if (strict) throw err;
@@ -1118,7 +1126,7 @@ function resumeInterruptedTurns() {
     s.autoResumeAttempted = s.turnNonce;
     try {
       persistIndex(true, true);
-      submitPrompt(s, RESUME_PROMPT, `resume:${s.turnNonce}`, { recovery: true });
+      submitPrompt(s, RESUME_PROMPT, `resume:${s.turnNonce}`, { recovery: true, durableRequired: true });
       console.error(`agentlinkd: auto-resumed interrupted turn in ${s.id}`);
     } catch (err) {
       console.error(`agentlinkd: auto-resume refused for ${s.id}: ${err.message}`);
@@ -1268,7 +1276,7 @@ function zeroUsage() {
  *  project, so plain `--resume` would work again from the next turn on. */
 function resumeTarget(s) {
   if (s.resumeInterrupted) return findDextSessionDir(s) ?? true;
-  if (s.turns <= 0) return false;
+  if (s.turns <= 0) return findDextSessionDir(s) ?? false; // a partial first turn may already have a checkpoint
   if (!s.moved) return true;
   return findDextSessionDir(s) ?? true;
 }
@@ -1575,17 +1583,28 @@ function beginTurn(s, { nonce, recovery = false } = {}) {
 
 function runBridgedTurn(s, prompt, options) {
   beginTurn(s, options); // optimistic: Send disables at once; turn_start confirms
+  const epoch = s.epoch;
+  const turn = s.turnNonce;
+  const current = () => !s.deleted && s.epoch === epoch && s.turnNonce === turn;
   const packRun = parsePackSlash(prompt);
   const text = packRun?.sub === "run" && packByName(packRun.name) ? `/pack run ${packRun.name} ${packRun.task}` : prompt;
   warnMissingPackCredentials(s, packRun);
   ensureBridge(s).then((bridge) => {
-    if (s.deleted) return;
+    if (!current() || s.bridge !== bridge || !s.working) return;
+    if (s.killed || s.status !== "live") {
+      publish(journalData(s, "interrupted"));
+      s.working = false;
+      s.turnStartedAt = null;
+      persistIndex();
+      scheduleList();
+      return;
+    }
     // Ownership stamp: onExit only fails a turn whose bridge carried it.
     s.turnSeq = (s.turnSeq ?? 0) + 1;
     bridge.turnSeq = s.turnSeq;
     if (!bridge.user(withDisplayContext(text))) throw new Error("dext stdin closed");
   }).catch((err) => {
-    if (s.deleted) return;
+    if (!current()) return;
     publish(journalData(s, "error", String(err?.message ?? err)));
     publish(journalData(s, "turn_end", { usage: zeroUsage(), failed: true }));
     s.working = false;
@@ -1915,6 +1934,9 @@ function finishCleanup(s, by) {
   s.uiAnswer = null;
   s.uiProgress.clear();
   s.steeringQueue = [];
+  s.turnNonce = null;
+  s.autoResumeAttempted = null;
+  s.resumeInterrupted = false;
   s.working = false;
   s.turnStartedAt = null;
   if (intent.action === "delete") {
@@ -2306,15 +2328,14 @@ async function handlePackSlash(client, s, cmd) {
  *  duplicate, never a second run. */
 function submitPrompt(s, incoming, nonce, options = {}) {
   let text = incoming;
-  if (s.steeringQueue.length > 0) {
+  const queued = s.steeringQueue;
+  if (queued.length > 0) {
     // Queued steering that missed its boundary (interrupt/crash/restart)
     // rides with the next real prompt instead of being lost. A pack run goes
     // first so its `/pack run <name>` prefix still activates the pack; the
     // queued text becomes part of the task.
     const packFirst = parsePackSlash(incoming)?.sub === "run";
-    text = (packFirst ? [incoming, ...s.steeringQueue] : [...s.steeringQueue, incoming]).join("\n\n");
-    s.steeringQueue = [];
-    persistIndex();
+    text = (packFirst ? [incoming, ...queued] : [...queued, incoming]).join("\n\n");
   }
   if (s.status === "cold") wakeSession(s);
   const env = journalData(s, "user_message", { text, ...(typeof nonce === "string" && nonce ? { nonce } : {}) }, { durable: options.durableRequired });
@@ -2323,6 +2344,7 @@ function submitPrompt(s, incoming, nonce, options = {}) {
     throw new Error(`prompt journal write failed: ${s.lastAppendFailed}`);
   }
   publish(env);
+  s.steeringQueue = []; // only consume queued input after acceptance
   if (s.title === "New session") {
     s.title = text.slice(0, 60);
     persistIndex();
@@ -2337,7 +2359,7 @@ function submitTimerPrompt(cwd, timer, nonce) {
   const s = sessions.get(timer.session);
   if (!s || path.resolve(s.cwd) !== path.resolve(cwd)) return { error: "no_session_in_workspace" };
   if (s.journal.some((e) => e.event === "user_message" && e.data?.nonce === nonce)) return { ok: true, duplicate: true };
-  if (s.deleted || s.cleanup || s.managing || s.resumeInterrupted || s.working || s.compacting || s.compactRequested) return { error: "session_busy" };
+  if (shuttingDown || s.deleted || s.cleanup || s.managing || s.resumeInterrupted || s.working || s.compacting || s.compactRequested) return { error: "session_busy" };
   submitPrompt(s, timer.prompt, nonce, { durableRequired: true });
   return { ok: true };
 }
@@ -3617,6 +3639,7 @@ function findDextSessionDirs(seat) {
     const sessionsDir = path.join(projects, project.name, "sessions");
     let sessionDirs;
     try {
+      if (!checkedPath(sessionsDir)) continue;
       sessionDirs = fs.readdirSync(sessionsDir, { withFileTypes: true });
     } catch {
       continue;
@@ -3627,8 +3650,10 @@ function findDextSessionDirs(seat) {
       const headerFile = path.join(dir, "_latest.jsonl");
       let mtimeMs;
       try {
-        const fd = fs.openSync(headerFile, "r");
+        if (!checkedPath(headerFile)) continue;
+        const fd = fs.openSync(headerFile, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
         try {
+          if (!fs.fstatSync(fd).isFile()) continue;
           const cap = Buffer.alloc(64 * 1024);
           const n = fs.readSync(fd, cap, 0, cap.length, 0);
           const firstLine = cap.toString("utf8", 0, n).split("\n", 1)[0];
@@ -4200,6 +4225,7 @@ let shuttingDown = false;
 function shutdown() {
   if (shuttingDown) return;
   shuttingDown = true;
+  TRIGGERS.stop(); // pending timer microtasks must not start a new child at shutdown
   server.close();
   for (const s of sessions.values()) killChild(s);
   const deadline = Date.now() + 5500;

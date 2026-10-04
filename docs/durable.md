@@ -9,7 +9,7 @@ Restart recovery is off by default. Start agentlinkd with `--auto-resume`
 The index records `working`, `turnNonce`, and `autoResumeAttempted`.
 Only a session with a persisted working turn and an unfinished journal is
 eligible. The host terminates that old UI turn as failed, atomically saves
-an attempt fence, wakes the session, and submits this fixed prompt:
+a fsynced attempt fence, wakes the session, and durably accepts this fixed prompt before dispatch:
 
 > Continue the interrupted turn. Review recovery evidence before taking any action; do not repeat side effects unless their outcome is known.
 
@@ -54,7 +54,9 @@ older revisions or changed content at the same revision. Write a unique
 temporary file then rename it over the timer file, as for shared tasks.
 The host's write helper performs rev CAS and atomic rename; direct agent
 writes cannot be forced to use CAS, but observed stale edits are refused.
-Delete the file to cancel an undelivered timer.
+Delete the file to cancel an undelivered timer. The scheduler revalidates the
+file immediately before dispatch, so deletion or rescheduling after polling
+cannot execute the stale prompt. Host shutdown cancels queued dispatches.
 
 The existing trigger scheduler polls timers every 30 seconds and immediately
 at startup. Overdue timers fire once. Busy sessions wait for a later tick,
@@ -69,5 +71,7 @@ replayed by timer delivery.
 
 Verification: `node --test packages/agentlinkd/scripts/timers.test.mjs`
 covers validation, links/caps, revision checks, catch-up, restart dedup beyond
-the client nonce TTL, dispatch serialization, and fail-closed persistence.
+the client nonce TTL, dispatch serialization/cancellation, and fail-closed persistence.
+Unreadable or malformed scheduler state disables timer delivery until it is
+repaired and the host restarted; it is never treated as an empty delivery history.
 

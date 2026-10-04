@@ -91,6 +91,7 @@ if (process.argv.includes("--input") && process.argv[process.argv.indexOf("--inp
   // change); echoed on turn_start so host tests can assert the argv contract.
   const resumeArg = process.argv.find((a) => a === "--resume" || a.startsWith("--resume=")) ?? null;
   const resume = resumeArg === null ? null : resumeArg === "--resume" ? "latest" : resumeArg.slice("--resume=".length);
+  await new Promise((resolve) => setTimeout(resolve, Number(process.env.FAKE_DEXT_READY_DELAY_MS) || 0));
   out("ready", {
     input: "ndjson",
     session_id: "fake-ndjson-1",
@@ -104,7 +105,10 @@ if (process.argv.includes("--input") && process.argv[process.argv.indexOf("--inp
   let waitingUi = null;
   let rejectUiOnce = false;
   let buf = "";
+  let turnTimer = null;
   const endTurn = (failed = false) => {
+    clearTimeout(turnTimer);
+    turnTimer = null;
     out("usage_update", { turn: usage, session: usage });
     out("turn_end", { usage, failed });
     busy = false;
@@ -142,7 +146,7 @@ if (process.argv.includes("--input") && process.argv[process.argv.indexOf("--inp
       out("permission_request", { id: "perm-1", tool: "write_file", input: { path: "x" }, summary: "" });
       return;
     }
-    setTimeout(() => {
+    turnTimer = setTimeout(() => {
       out("text_block_complete", `fake ${text.trim()}`);
       out("thinking_effort_changed", { effort: "high" });
       endTurn(false);
