@@ -98,6 +98,7 @@ const DEFAULT_APPROVAL = argValue("approval", process.env.DEXT_APPROVAL ?? "auto
 const SAFE_MODE = process.argv.includes("--safe");
 // Recovery is deliberately opt-in: it submits a new prompt, never replays tools.
 const AUTO_RESUME = argValue("auto-resume", process.env.AGENTLINKD_AUTO_RESUME ?? "false") === "true" || process.argv.includes("--auto-resume");
+const TIMERS_ENABLED = argValue("timers", process.env.AGENTLINKD_TIMERS ?? "false") === "true" || process.argv.includes("--timers");
 const RESUME_PROMPT = "Continue the interrupted turn. Review recovery evidence before taking any action; do not repeat side effects unless their outcome is known.";
 const STATIC_RESOLVED = resolveStaticDir({ staticDir: argValue("static", path.join(repoRoot, "apps", "web", "dist")), repoRoot, safe: SAFE_MODE });
 const STATIC_DIR = STATIC_RESOLVED.dir;
@@ -629,6 +630,7 @@ TRIGGERS = createScheduler({
         else resolve({});
       });
     }),
+  submitTimer: TIMERS_ENABLED ? submitTimerPrompt : undefined,
   meshBin: (() => { const p = PACKS.find((x) => x.name === "mesh"); const b = p?.path ? path.join(p.path, "bin", "mesh") : null; return b && fs.existsSync(b) ? b : "mesh"; })(),
   log: (m) => console.error(`agentlinkd: ${m}`),
   broadcast: (event, data) => broadcastControl(event, data),
@@ -882,11 +884,14 @@ function journalFile(s) {
   return path.join(JOURNALS_DIR, `${s.id}.jsonl`);
 }
 
-function appendJournalLine(s, env) {
+function appendJournalLine(s, env, { durable = false } = {}) {
   if (s.deleted) return false; // a purged journal must never be recreated by a late child
   try {
     lstatChecked(journalFile(s), "journal file");
-    fs.appendFileSync(journalFile(s), `${JSON.stringify(env)}\n`, { mode: 0o600 });
+    if (durable) {
+      const fd = fs.openSync(journalFile(s), fs.constants.O_WRONLY | fs.constants.O_APPEND | fs.constants.O_CREAT | fs.constants.O_NOFOLLOW, 0o600);
+      try { fs.writeFileSync(fd, `${JSON.stringify(env)}\n`); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+    } else fs.appendFileSync(journalFile(s), `${JSON.stringify(env)}\n`, { mode: 0o600 });
     s.lastAppendFailed = null;
     return true;
   } catch (err) {
@@ -1125,11 +1130,11 @@ function resumeInterruptedTurns() {
 
 // ---------- journal + publish ----------
 
-function journalData(s, event, data) {
+function journalData(s, event, data, options) {
   const env = { v: 1, session: s.id, seq: ++s.seq, ts: Date.now(), event };
   if (data !== undefined) env.data = data;
   s.journal.push(env);
-  appendJournalLine(s, env);
+  appendJournalLine(s, env, options);
   return env;
 }
 
@@ -1269,7 +1274,7 @@ function resumeTarget(s) {
 }
 
 function bridgeEnv(s) {
-  const env = dextEnv();
+  const env = dextEnv({ DEXTUI_SESSION_ID: s.id });
   if (s.provider && s.model) {
     env.DEXT_PROVIDER = s.provider;
     env.DEXT_MODEL = s.model;
@@ -1640,7 +1645,7 @@ function runTurn(s, prompt, options) {
   const resume = resumeTarget(s);
   if (typeof resume === "string") args.push(`--resume=${resume}`);
   else if (resume) args.push("--resume");
-  const childEnv = dextEnv();
+  const childEnv = dextEnv({ DEXTUI_SESSION_ID: s.id });
   if (s.provider && s.model) {
     childEnv.DEXT_PROVIDER = s.provider;
     childEnv.DEXT_MODEL = s.model;
@@ -2312,12 +2317,29 @@ function submitPrompt(s, incoming, nonce, options = {}) {
     persistIndex();
   }
   if (s.status === "cold") wakeSession(s);
-  publish(journalData(s, "user_message", { text, ...(typeof nonce === "string" && nonce ? { nonce } : {}) }));
+  const env = journalData(s, "user_message", { text, ...(typeof nonce === "string" && nonce ? { nonce } : {}) }, { durable: options.durableRequired });
+  if (options.durableRequired && s.lastAppendFailed) {
+    s.journal.pop(); s.seq--;
+    throw new Error(`prompt journal write failed: ${s.lastAppendFailed}`);
+  }
+  publish(env);
   if (s.title === "New session") {
     s.title = text.slice(0, 60);
     persistIndex();
   }
   runTurn(s, text, { nonce, ...options });
+}
+
+/** Timer nonce dedup never expires: acceptance is the durable journal record,
+ * not the generic one-hour client delivery cache. Busy sessions retry on a
+ * later tick instead of injecting timer text into an unrelated live turn. */
+function submitTimerPrompt(cwd, timer, nonce) {
+  const s = sessions.get(timer.session);
+  if (!s || path.resolve(s.cwd) !== path.resolve(cwd)) return { error: "no_session_in_workspace" };
+  if (s.journal.some((e) => e.event === "user_message" && e.data?.nonce === nonce)) return { ok: true, duplicate: true };
+  if (s.deleted || s.cleanup || s.managing || s.working || s.compacting || s.compactRequested) return { error: "session_busy" };
+  submitPrompt(s, timer.prompt, nonce, { durableRequired: true });
+  return { ok: true };
 }
 
 // ---------- delivery dedup (nonce) ----------
@@ -4216,6 +4238,7 @@ server.listen(PORT, "127.0.0.1", () => {
   console.log(`  self-edit: ${SELF.enabled ? `on — /ui build, exit ${SELF.status().restart_exit_code} = restart` : "off (not a buildable checkout)"}`);
   console.log(`  approval: ${DEFAULT_APPROVAL} (per-session: /approval <profile>)`);
   console.log(`  auto-resume: ${AUTO_RESUME ? "on (once per interrupted turn)" : "off"}`);
+  console.log(`  timers:    ${TIMERS_ENABLED ? "on" : "off"}`);
   console.log(`  models:   ${MODEL_CATALOG.reduce((n, g) => n + g.models.length, 0)} across ${MODEL_CATALOG.length} provider(s)`);
   resumeInterruptedTurns();
 });

@@ -26,6 +26,8 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { execFile } from "node:child_process";
 import { listFlows, readFlow } from "./flows.mjs";
+import { listTimers } from "./timers.mjs";
+import { checkedPath } from "./session-files.mjs";
 
 const TICK_MS = 30_000;
 const WATCH_DEBOUNCE_MS = 5_000;
@@ -88,6 +90,7 @@ export function createScheduler({
   stateDir,
   secret,
   startRun,
+  submitTimer, // optional: absent means timer execution is off
   meshBin = "mesh",
   log = () => {},
   broadcast = () => {},
@@ -102,25 +105,37 @@ export function createScheduler({
   let attempted = {};
   let failures = {};
   let slots = {};
+  let timerRecords = {};
+  const timersInFlight = new Set();
+  const timerErrors = new Map();
   try {
+    checkedPath(stateFile);
     const raw = JSON.parse(fs.readFileSync(stateFile, "utf8")) || {};
     if (raw && typeof raw.fired === "object") {
       fired = raw.fired ?? {};
       attempted = raw.attempted ?? {};
       failures = raw.failures ?? {};
       slots = raw.slots ?? {};
+      timerRecords = raw.timerRecords ?? {};
     } else {
       fired = raw; // pre-serialization format: a flat last-fire map
     }
   } catch {
     fired = {};
   }
-  function persist() {
+  function persist(strict = false) {
+    const tmp = `${stateFile}.${crypto.randomBytes(8).toString("hex")}.tmp`;
     try {
-      fs.writeFileSync(stateFile, JSON.stringify({ fired, attempted, failures, slots }));
+      checkedPath(stateFile);
+      checkedPath(tmp);
+      fs.writeFileSync(tmp, JSON.stringify({ fired, attempted, failures, slots, timerRecords }), { flag: "wx", mode: 0o600 });
+      const fd = fs.openSync(tmp, "r"); try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+      fs.renameSync(tmp, stateFile);
+      const dir = fs.openSync(stateDir, "r"); try { fs.fsyncSync(dir); } finally { fs.closeSync(dir); }
     } catch (err) {
       log(`triggers: cannot persist ${stateFile}: ${err.message}`);
-    }
+      if (strict) throw err;
+    } finally { try { fs.rmSync(tmp, { force: true }); } catch { /* refused */ } }
   }
 
   const workspaces = new Map(); // cwd -> { watchers, dirWatcher }
@@ -305,7 +320,52 @@ export function createScheduler({
 
   // ---------- schedule + mesh polling ----------
 
+  /** One-shot at triggers: re-read on every tick, including startup, so an
+   * agent-created directory or atomic file replacement needs no host command.
+   * A durable revision fingerprint refuses same-rev edits and stale writes.
+   * Prompt acceptance itself is deduped from the target session journal, which
+   * closes the dispatch -> slot-persist crash window even beyond nonce TTL. */
+  function pollTimers() {
+    if (!submitTimer) return;
+    for (const cwd of workspaces.keys()) for (const timer of listTimers(cwd)) {
+      const k = `at\u0000${cwd}\u0000${timer.name}`;
+      const fingerprint = crypto.createHash("sha256").update(JSON.stringify(timer)).digest("hex");
+      const prior = timerRecords[k];
+      if (prior && (timer.rev < prior.rev || (timer.rev === prior.rev && fingerprint !== prior.fingerprint))) {
+        if (timerErrors.get(k) !== "stale_rev") {
+          timerErrors.set(k, "stale_rev");
+          broadcast("x-agentlinkd.timers.trigger", { cwd, name: timer.name, kind: "at", phase: "failed", error: "stale_rev" });
+        }
+        continue;
+      }
+      const nonce = `timer:${timer.name}:${timer.at}`;
+      if (timersInFlight.has(k)) continue;
+      if (!prior || timer.rev > prior.rev) {
+        timerRecords[k] = { rev: timer.rev, fingerprint, delivered: prior?.delivered ?? [] };
+        try { persist(true); } catch { timerRecords[k] = prior; continue; }
+      }
+      const record = timerRecords[k];
+      if (record.delivered.includes(nonce) || Date.parse(timer.at) > Date.now()) continue;
+      timersInFlight.add(k);
+      Promise.resolve().then(() => submitTimer(cwd, timer, nonce)).then((result) => {
+        if (result?.error) throw new Error(result.error);
+        record.delivered.push(nonce);
+        try { persist(true); } catch (err) { record.delivered.pop(); throw err; }
+        timerErrors.delete(k);
+        broadcast("x-agentlinkd.timers.trigger", { cwd, name: timer.name, kind: "at", phase: "fired", session: timer.session, nonce });
+      }).catch((err) => {
+        const error = String(err.message).slice(0, 200);
+        if (timerErrors.get(k) !== error) {
+          timerErrors.set(k, error);
+          log(`timer ${timer.name}: ${error}`);
+          broadcast("x-agentlinkd.timers.trigger", { cwd, name: timer.name, kind: "at", phase: "failed", error });
+        }
+      }).finally(() => timersInFlight.delete(k));
+    }
+  }
+
   function onTick() {
+    pollTimers();
     const now = Date.now();
     for (const entry of live.values()) {
       const t = entry.trigger;
@@ -347,6 +407,7 @@ export function createScheduler({
 
   function start() {
     if (tick) return;
+    pollTimers(); // missed one-shot timers fire immediately at startup
     tick = setInterval(() => { onTick(); pollMesh(); }, TICK_MS);
     tick.unref?.();
     setTimeout(pollMesh, 2000).unref?.();
@@ -406,7 +467,7 @@ export function createScheduler({
     return out;
   }
 
-  return { addWorkspace, reload, onTick, pollMesh, start, stop, webhook, status };
+  return { addWorkspace, reload, onTick, pollTimers, pollMesh, start, stop, webhook, status };
 }
 
 function describe(t) {

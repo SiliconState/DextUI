@@ -40,7 +40,7 @@ export async function durableHost(t, { bridge = false, args = [], env = {} } = {
   t.after(async () => { await stop(); fs.rmSync(temp, { recursive: true, force: true }); });
   async function start(extra = []) {
     child = spawn(process.execPath, [path.join(root, "src/server.mjs"), "--port=0", "--token=durable-test-token", `--cwd=${cwd}`, `--state-dir=${state}`, `--crew=${temp}/no-crew`, `--dext=${root}/scripts/fake-dext.mjs`, ...args, ...extra], {
-      env: { ...process.env, HOME: home, DEXT_HOME: home, DEXT_SESSIONS_DIR: "", DEXT_LOGS_DIR: "", AGENTLINKD_AUTO_RESUME: "false", FAKE_DEXT_NDJSON: bridge ? "1" : "0", ...env },
+      env: { ...process.env, HOME: home, DEXT_HOME: home, DEXT_SESSIONS_DIR: "", DEXT_LOGS_DIR: "", AGENTLINKD_AUTO_RESUME: "false", AGENTLINKD_TIMERS: "false", FAKE_DEXT_NDJSON: bridge ? "1" : "0", ...env },
       stdio: ["ignore", "pipe", "pipe"],
     });
     child.stderr.on("data", (b) => stderr += b);
