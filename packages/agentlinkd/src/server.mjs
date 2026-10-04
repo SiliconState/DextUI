@@ -2337,7 +2337,7 @@ function submitTimerPrompt(cwd, timer, nonce) {
   const s = sessions.get(timer.session);
   if (!s || path.resolve(s.cwd) !== path.resolve(cwd)) return { error: "no_session_in_workspace" };
   if (s.journal.some((e) => e.event === "user_message" && e.data?.nonce === nonce)) return { ok: true, duplicate: true };
-  if (s.deleted || s.cleanup || s.managing || s.working || s.compacting || s.compactRequested) return { error: "session_busy" };
+  if (s.deleted || s.cleanup || s.managing || s.resumeInterrupted || s.working || s.compacting || s.compactRequested) return { error: "session_busy" };
   submitPrompt(s, timer.prompt, nonce, { durableRequired: true });
   return { ok: true };
 }

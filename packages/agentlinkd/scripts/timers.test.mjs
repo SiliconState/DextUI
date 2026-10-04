@@ -67,6 +67,21 @@ test("timer failures retry without overlapping submits; scheduler persistence mu
   s.pollTimers(); await sleep(30); assert.equal(calls, 2, "no dispatch without durable revision acceptance");
 });
 
+test("startup recovery takes priority over a due timer in the same session", async (t) => {
+  const h = await durableHost(t, { bridge: true, args: ["--timers", "--auto-resume"], env: { FAKE_DEXT_TURN_DELAY_MS: "3000" } });
+  const c = await h.client(); const id = await h.open(c);
+  c.send("prompt.submit", { session: id, text: "unfinished", nonce: "timerrecover1" });
+  await c.wait((e) => e.event === "turn_start");
+  await h.stop("SIGKILL");
+  writeTimer(h.cwd, timer({ session: id }));
+  await h.start();
+  await until(() => h.journal(id).filter((e) => e.event === "turn_start").length === 2);
+  const messages = h.journal(id).filter((e) => e.event === "user_message");
+  assert.equal(messages.length, 2);
+  assert.equal(messages[1].data.nonce, "resume:timerrecover1");
+  assert.ok(!messages.some((e) => e.data.nonce?.startsWith("timer:")));
+});
+
 for (const enabled of [false, true]) test(`host timer startup delivery is ${enabled ? "enabled once" : "off by default"}`, async (t) => {
   const h = await durableHost(t, { args: enabled ? ["--timers"] : [] });
   const c = await h.client(); const id = await h.open(c);
