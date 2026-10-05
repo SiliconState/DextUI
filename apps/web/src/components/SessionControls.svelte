@@ -240,13 +240,20 @@
   .sec {
     flex-shrink: 0;
     display: grid;
-    grid-template-columns: 4.5rem 1fr;
+    grid-template-columns: 4.5rem minmax(0, 1fr);
     gap: 2px 8px;
     align-items: center;
     padding: 2px;
   }
   .sec .hint {
     grid-column: 2;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+  .sec button.ctl {
+    grid-column: 2;
+    white-space: normal;
+    overflow-wrap: anywhere;
   }
   .lbl {
     color: var(--faint);

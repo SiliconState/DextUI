@@ -133,6 +133,13 @@ note "kept fork from session controls preserves history and selects a new sessio
 FORK_SOURCE=$(agent-browser eval 'localStorage.getItem("dextui.activeSession")')
 agent-browser click '[data-agent-id="status.controls"]' >/dev/null
 agent-browser wait '[data-agent-id="session.fork"]' >/dev/null
+note "session fork controls and label stay inside the popout at desktop and phone widths"
+for SIZE in '1280 900' '320 640' '375 667' '390 844' '430 932' '600 800' '900 700'; do
+  read -r WIDTH HEIGHT <<< "$SIZE"
+  agent-browser set viewport "$WIDTH" "$HEIGHT" >/dev/null
+  wait_js '(()=>{const menu=document.querySelector(`[data-agent-id="session.controls.overlay"]`),button=document.querySelector(`[data-agent-id="session.fork"]`),input=document.querySelector(`[data-agent-id="session.fork.seq"]`);if(!menu||!button||!input)return false;const m=menu.getBoundingClientRect(),b=button.getBoundingClientRect(),i=input.getBoundingClientRect(),range=document.createRange();range.selectNodeContents(button);const text=range.getBoundingClientRect();return m.left>=0&&m.right<=innerWidth&&menu.scrollWidth<=menu.clientWidth&&Math.abs(b.left-i.left)<1&&Math.abs(b.width-i.width)<1&&text.left>=b.left&&text.right<=b.right&&text.top>=b.top&&text.bottom<=b.bottom})()' || { echo "FAIL: fork label/control overflow ($SIZE)"; exit 1; }
+done
+agent-browser set viewport 1280 900 >/dev/null
 agent-browser click '[data-agent-id="session.fork"]' >/dev/null
 wait_js '[...document.querySelectorAll(`[data-agent-id="block.text"]`)].some(x=>x.textContent.includes("Foreground answer complete")) && [...document.querySelectorAll(`[data-agent-id^="session."][data-agent-id$=".open"]`)].some(x=>x.dataset.state==="active"&&x.textContent.includes("fork"))' || { echo "FAIL: kept fork activation/history"; FAIL=1; }
 FORK_TARGET=$(agent-browser eval 'localStorage.getItem("dextui.activeSession")')
