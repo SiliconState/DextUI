@@ -84,8 +84,9 @@ npm run smoke:agentlinkd # real-host surface against a fake dext
 
 | Document | What it covers |
 |---|---|
+| [docs/DextUISpec.html](docs/DextUISpec.html) | As-built HTML handbook: architecture diagrams, runtime contracts, security, deployment, recovery and maintenance |
 | [docs/PROTOCOL.md](docs/PROTOCOL.md) | AgentLink v1 wire format, WS + REST, capability negotiation, flows/tasks contracts |
-| [docs/DESIGN.md](docs/DESIGN.md) | Design notes, theming contract, development gates, repo map, milestones |
+| [docs/DESIGN.md](docs/DESIGN.md) | Design rationale, historical plans, theming contract and milestones |
 | [docs/mobile.md](docs/mobile.md) | Phone controls, keyboard behavior, responsive checks, and real-device verification limits |
 | [docs/UPSTREAM.md](docs/UPSTREAM.md) | `dext bridge` PR spec, the path to live steering and interactive approvals |
 | [packs/README.md](packs/README.md) | Consumer pack architecture and gallery metadata |

@@ -1,5 +1,7 @@
 # DextUI: System Design
 
+> This document mixes historical design intent, rationale and implemented contracts. It is not an as-built deployment specification. For current architecture, capabilities, configuration and production maintenance, start with [DextUISpec.html](DextUISpec.html). Roadmap items here, including LAN/QR pairing, server Web Push and native app packaging, must not be read as shipped functionality.
+
 A web + phone front end for dext (and peer CLI agents), built as one coherent, event-sourced stack. Separate repo, separate layer: dext itself gains only a small stdio bridge; everything else lives here.
 
 ## The tower
