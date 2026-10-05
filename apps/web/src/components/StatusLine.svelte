@@ -208,6 +208,11 @@ import Meter from "./Meter.svelte";
   {#if view.compacting}
     <span class="sep">│</span>
     <span class="st-magenta pulse mobile-alert" data-agent-id="status.compacting">Compacting context…</span>
+  {:else if view.backgroundCompaction}
+    <span class="sep">│</span>
+    <span class="st-cyan mobile-alert" data-agent-id="status.background-compaction" data-phase={view.backgroundCompaction.phase} title={view.backgroundCompaction.reason}>
+      {view.backgroundCompaction.blocking ? "Waiting for compaction…" : "Summarizing context…"}
+    </span>
   {/if}
   {#if view.retry}
     <span class="sep">│</span>

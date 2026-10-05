@@ -391,10 +391,15 @@
     }
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "c") {
       // Copy wins when text is selected; otherwise interrupt the running turn.
-      if (view.working && el.selectionStart === el.selectionEnd) {
+      if ((view.working || view.compacting || view.backgroundCompaction) && el.selectionStart === el.selectionEnd) {
         e.preventDefault();
         stop();
       }
+      return;
+    }
+    if (e.key === "Escape" && view.backgroundCompaction) {
+      e.preventDefault();
+      stop();
       return;
     }
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "n") {
@@ -618,7 +623,7 @@
       {#if histIdx > 0}
         <span class="faint" data-agent-id="composer.histmark">[↑{histIdx}]</span>
       {/if}
-      {#if view.working}
+      {#if view.working || view.backgroundCompaction}
         <button class="act err stop-control" data-agent-id="composer.stop" aria-label="Stop current work" title="Stop current work" onpointerdown={(e) => { if (phone) e.preventDefault(); }} onclick={stop}><span class="desktop-label">^c stop</span><span class="mobile-icon" aria-hidden="true">■</span></button>
       {/if}
       <button

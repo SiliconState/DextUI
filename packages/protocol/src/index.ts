@@ -101,12 +101,31 @@ export interface RuntimeControlAppliedEvent {
   stream_aborted: boolean;
 }
 
+export interface BackgroundCompactionEvent {
+  version: 1;
+  session_id: string;
+  session_epoch: number;
+  job_id: string;
+  origin_turn_id: string;
+  phase: "running" | "ready" | "waiting" | "applied" | "failed" | "cancelled" | "discarded";
+  blocking: boolean;
+  reason: string;
+  elapsed_ms: number;
+  wait_ms: number;
+  before_chars: number;
+  after_chars?: number;
+  usage_known: boolean;
+}
+
 export interface CompactEndEvent {
   /** Message counts before and after compaction. */
   before: number;
   after: number;
   /** Resume summary persisted by core; UIs keep it collapsed by default. */
   summary: string;
+  /** Background application is not the end of legacy blocking compaction. */
+  background?: boolean;
+  job_id?: string;
 }
 
 export interface SteeringReceivedEvent {
@@ -922,6 +941,8 @@ export interface SnapshotEvent {
   /** Ephemeral bridge state, included only so a reconnect can recover the form/progress UI. */
   pending_ui_request?: Extract<PackUiRequestEvent, { method: "form" }>;
   ui_progress?: Extract<PackUiRequestEvent, { method: "progress" }>[];
+  /** Current child-owned job, never reconstructed from the journal. */
+  background_compaction?: BackgroundCompactionEvent | null;
   last_seq: number;
   /** Live turn state is projection metadata, not a journal event. */
   working?: boolean;
@@ -1031,6 +1052,8 @@ export interface AgentEventMap {
   slash: string;
   structured_slash: string;
   turn_end: TurnEndEvent;
+  /** Ephemeral in agentlinkd; never signals a user turn or blocking compact. */
+  background_compaction: BackgroundCompactionEvent;
   compact_start: undefined;
   compact_end: CompactEndEvent;
   compact_failed: { message: string };
@@ -1059,6 +1082,8 @@ export interface HostEventMap {
   "ui.response_failed": PackUiResponseFailedEvent;
   "ui.progress": Extract<PackUiRequestEvent, { method: "progress" }>;
   "ui.progress.cleared": undefined;
+  /** Ephemeral authoritative replacement on reconnect or child lifecycle change. */
+  "x-agentlinkd.background_compaction": { current: BackgroundCompactionEvent | null };
   /** Journaled after todo_write in bridge mode; clients refetch GET /sessions/:id/todos. */
   "todos.changed": TodosResponse;
 }

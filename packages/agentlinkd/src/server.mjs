@@ -46,6 +46,7 @@ import { fetchToFile, receiveUpload, uploadDirFor } from "./uploads.mjs";
 import { withDisplayContext } from "./display-context.mjs";
 import { bridgeArgs, probeNdjsonSupport, probePackUiSupport, spawnBridge, supportsPackUi, toBridgeChoice, toPermissionRequest } from "./bridge.mjs";
 import { normalizeUiRequest, progressKey, validUiResponse } from "./pack-ui.mjs";
+import { acceptBackground, acceptBackgroundApplication, backgroundState, clearBackground } from "./background-compaction.mjs";
 
 const here = path.dirname(url.fileURLToPath(import.meta.url));
 const repoRoot = path.join(here, "..", "..", "..");
@@ -851,6 +852,7 @@ function makeSession({ cwd, approval }) {
     uiProgress: new Map(),
     compacting: false,
     compactRequested: false,
+    background: backgroundState(),
     dextSessionId: null,
     killed: false,
     indexEntry: null,
@@ -1088,6 +1090,7 @@ function restoreSessions() {
       killed: false,
       compacting: false,
       compactRequested: false,
+      background: backgroundState(),
       pendingPermission: null,
       pendingUi: null,
       uiAnswer: null,
@@ -1199,6 +1202,11 @@ function publishEphemeral(s, event, data) {
   publish(env);
 }
 
+function clearBackgroundStatus(s) {
+  clearBackground(s.background);
+  publishEphemeral(s, "x-agentlinkd.background_compaction", { current: null });
+}
+
 let uiAnswerSeq = 0;
 
 function commitUiAnswer(s) {
@@ -1242,6 +1250,7 @@ function snapshotEnvelope(s) {
       pending_permissions: s.pendingPermission ? [s.pendingPermission] : [],
       pending_ui_request: s.pendingUi ?? undefined,
       ui_progress: [...s.uiProgress.values()],
+      background_compaction: s.background.current,
       last_seq: s.seq,
       working: s.working,
       turn_started_at: s.turnStartedAt ?? undefined,
@@ -1295,6 +1304,8 @@ function bridgeEnv(s) {
 function ensureBridge(s) {
   if (s.bridge && !s.bridge.exited) return s.bridge.whenConfigured ?? s.bridge.whenReady().then(() => s.bridge);
   const epoch = s.epoch;
+  s.background = backgroundState();
+  clearBackgroundStatus(s);
   let errTail = "";
   const args = bridgeArgs({ cwd: s.cwd, approval: s.approval, effort: s.thinkingEffort, seat: s.seat, resume: resumeTarget(s) });
   let bridge;
@@ -1306,7 +1317,7 @@ function ensureBridge(s) {
     const ownsBridge = s.bridge === bridge;
     if (ownsBridge) s.bridge = null;
     if (s.child === bridge?.child) s.child = null;
-    if (s.deleted || s.epoch !== epoch) return;
+    if (s.deleted || s.epoch !== epoch || (!ownsBridge && s.bridge)) return;
     if (s.compacting || s.compactRequested) {
       const wasWorking = s.working;
       const message = `dext exited before context compaction completed (code ${code ?? sig})`;
@@ -1319,7 +1330,11 @@ function ensureBridge(s) {
       publish(journalData(s, "permission.resolved", { request_id: s.pendingPermission.request_id, choice: "deny", by: "exit" }));
       s.pendingPermission = null;
     }
-    if (ownsBridge) clearPackUi(s, "disconnected");
+    if (ownsBridge) {
+      clearPackUi(s, "disconnected");
+      clearBackgroundStatus(s);
+      s.background = backgroundState();
+    }
     if (s.working && bridge.turnSeq === s.turnSeq) {
       // Only the bridge that owns the latest dispatched turn may fail it. A
       // recycled child exiting while its replacement already carries the next
@@ -1378,6 +1393,9 @@ function handleBridgeEvent(s, v) {
       if (d && typeof d.provider === "string") s.provider = d.provider;
       persistIndex();
       return;
+    case "background_compaction":
+      if (acceptBackground(s.background, d, s.dextSessionId)) publishEphemeral(s, v.event, d);
+      return;
     case "input_ack":
       // Form answers are committed only after core confirms correlation. A
       // successful stdin write is not enough: the child can still reject a
@@ -1431,6 +1449,12 @@ function handleBridgeEvent(s, v) {
       break;
     }
     case "compact_end":
+      if (d?.background === true) {
+        if (!acceptBackgroundApplication(s.background, d.job_id)) return;
+        publish(journalData(s, v.event, d)); // installed history, never a turn/busy transition
+        return;
+      }
+      // fall through: legacy blocking compaction
     case "compact_failed":
       s.compacting = false;
       s.compactRequested = false;
@@ -1621,6 +1645,7 @@ function recycleBridge(s) {
   const bridge = s.bridge;
   if (!bridge || bridge.exited) return;
   clearPackUi(s, "cancelled");
+  clearBackgroundStatus(s);
   s.bridge = null;
   bridge.close();
   setTimeout(() => { if (!bridge.exited) bridge.kill("SIGKILL"); }, 5000);
@@ -1631,6 +1656,9 @@ function recycleBridge(s) {
 function runTurn(s, prompt, options) {
   if (BRIDGE) return runBridgedTurn(s, prompt, options);
   beginTurn(s, options);
+  s.background = backgroundState();
+  s.dextSessionId = null; // one-shot children may create a fresh core session id
+  clearBackgroundStatus(s);
   const epoch = s.epoch;
   let sawTurnEnd = false;
   let turnEndData;
@@ -1705,6 +1733,12 @@ function runTurn(s, prompt, options) {
       return; // non-event noise on stdout
     }
     if (typeof v.event !== "string") return;
+    if (v.event === "background_compaction") {
+      if (!s.dextSessionId && v.data?.phase === "running") s.dextSessionId = v.data.session_id;
+      if (acceptBackground(s.background, v.data, s.dextSessionId)) publishEphemeral(s, v.event, v.data);
+      return;
+    }
+    if (v.event === "compact_end" && v.data?.background && !acceptBackgroundApplication(s.background, v.data.job_id)) return;
     if (v.event === "turn_end") {
       // Hold the terminal event until the child is actually closed. Otherwise
       // the UI enables Send while the host still rejects the next prompt busy.
@@ -1735,6 +1769,7 @@ function runTurn(s, prompt, options) {
       handleLine(buf);
       buf = "";
     }
+    clearBackgroundStatus(s);
     if (!sawTurnEnd) {
       if (s.killed) {
         publish(journalData(s, "interrupted"));
@@ -1825,6 +1860,8 @@ function signalChild(child, signal) {
 }
 
 function killChild(s, interrupted = true) {
+  const hadBackground = !!s.background.current;
+  clearBackgroundStatus(s);
   if (interrupted) {
     clearPackUi(s, "cancelled");
     s.killed = true;
@@ -1833,11 +1870,13 @@ function killChild(s, interrupted = true) {
   if (s.bridge && !s.bridge.exited) {
     const bridge = s.bridge;
     s.killed = interrupted;
-    if (interrupted && (s.working || s.compacting || s.compactRequested)) {
+    if (interrupted && (hadBackground || s.working || s.compacting || s.compactRequested)) {
       // Real interrupt: dext stops the turn/compaction and stays alive for the next one.
       bridge.interrupt();
-      setTimeout(() => { if ((s.working || s.compacting || s.compactRequested) && s.bridge === bridge) bridge.kill("SIGINT"); }, 3000);
-      setTimeout(() => { if ((s.working || s.compacting || s.compactRequested) && s.bridge === bridge) bridge.kill("SIGKILL"); }, 8000);
+      const turn = s.turnNonce;
+      const stillInterrupted = () => s.killed && s.turnNonce === turn && s.bridge === bridge && (s.working || s.compacting || s.compactRequested);
+      setTimeout(() => { if (stillInterrupted()) bridge.kill("SIGINT"); }, 3000);
+      setTimeout(() => { if (stillInterrupted()) bridge.kill("SIGKILL"); }, 8000);
       return;
     }
     s.bridge = null;
@@ -1933,6 +1972,9 @@ function finishCleanup(s, by) {
   s.pendingUi = null;
   s.uiAnswer = null;
   s.uiProgress.clear();
+  clearBackgroundStatus(s);
+  s.background = backgroundState();
+  s.dextSessionId = null;
   s.steeringQueue = [];
   s.turnNonce = null;
   s.autoResumeAttempted = null;
@@ -2154,6 +2196,8 @@ async function handleSlash(client, s, raw) {
       }
       s.compactRequested = !compact[1];
       if (s.compactRequested) {
+        clearBackgroundStatus(s); // manual compact invalidates speculation
+        s.killed = false;
         s.compacting = true;
         s.turnStartedAt = Date.now();
         publish(journalData(s, "compact_start"));
@@ -2535,6 +2579,7 @@ async function handleCommand(client, frame) {
         // a blocking form or active progress presentation.
         if (s.pendingUi) client.send(JSON.stringify({ v: 1, session: s.id, ts: Date.now(), event: "ui.request", data: s.pendingUi }));
         for (const progress of s.uiProgress.values()) client.send(JSON.stringify({ v: 1, session: s.id, ts: Date.now(), event: "ui.progress", data: progress }));
+        client.send(JSON.stringify({ v: 1, session: s.id, ts: Date.now(), event: "x-agentlinkd.background_compaction", data: { current: s.background.current } }));
       } else {
         client.send(JSON.stringify(snapshotEnvelope(s)));
       }
@@ -2782,7 +2827,7 @@ async function handleCommand(client, frame) {
       // Idle persistent bridge: no turn in flight. Killing the warm child
       // would drop the live seat and approval wiring for nothing; the
       // interruptible part is any queued steering.
-      if (BRIDGE && !s.working && !s.compacting && !s.compactRequested && s.bridge && !s.bridge.exited) {
+      if (BRIDGE && !s.background.current && !s.working && !s.compacting && !s.compactRequested && s.bridge && !s.bridge.exited) {
         if (s.steeringQueue.length > 0) {
           s.steeringQueue = [];
           persistIndex();

@@ -75,3 +75,52 @@ the client nonce TTL, dispatch serialization/cancellation, and fail-closed persi
 Unreadable or malformed scheduler state disables timer delivery until it is
 repaired and the host restarted; it is never treated as an empty delivery history.
 
+## Background compaction (G8)
+
+Opt in by starting the host with `DEXT_BACKGROUND_COMPACT=1`; the environment
+is passed to core children. Off by default. CORE owns the immutable summary
+worker, pair-safe prefix, validity checks, cancellation, persistence, usage,
+and application. The UI adds no worker or dependencies.
+
+The separate `background_compaction` v1 event contains:
+`{version,session_id,session_epoch,job_id,origin_turn_id,phase,blocking,reason,elapsed_ms,wait_ms,before_chars,after_chars?,usage_known}`.
+Phases: `running`, `ready`, `waiting`, `applied`, `failed`, `cancelled`,
+`discarded`. Only `waiting` has `blocking:true`. These events are ephemeral in
+agentlinkd: no journal sequence, transcript blocks, or saved job state. They
+never set `working` or legacy `compacting`, resolve approvals, or add usage.
+
+A background badge shows “Summarizing context” or “Waiting for compaction”.
+Send remains usable; a real foreground turn still controls steering and busy
+semantics. Stop, Ctrl/Cmd+C without a selection, and Escape in the composer
+cancel the job. Background-only cancellation keeps the warm core child.
+Manual compaction and child/session replacement clear transient status.
+
+Snapshots carry `background_compaction` (current job or null). Seq-resume
+sends an authoritative unsequenced, session-routed
+`x-agentlinkd.background_compaction {current}` replacement, including null,
+so disconnected clients cannot retain a stale badge. The host fences core
+session, epoch, child identity and job id with bounded retired-job state.
+Bridge death/restart never resurrects a journaled job; background-only work
+does not mark an interrupted user turn for G1 recovery. Forks inherit no job.
+
+Only installed history publishes `history_context_updated` and journaled
+`compact_end {background:true,job_id,...}`. It creates one collapsed summary
+block, not `compact_start` or an extra user turn, and cannot finish a manual
+blocking compaction block. Bounded known-job identities accept an already
+committed application buffered through interrupt exactly once without
+reviving its badge. CORE guarantees cancelled candidates never publish an
+installation. `post_compact` fires only on application. Usage comes only
+from authoritative `usage_update.session`; per-turn `turn_end.usage` never
+replaces cumulative session totals.
+
+Verification: regular tests cover job validation, late phases, cancellation,
+reconnect, child death, background-only host restart, buffered application,
+legacy fold parity and accounting. Browser checks cover normal input, reload,
+wait/apply, mobile Stop/Escape and draft preservation. The explicit gate
+`DEXT_CORE_BIN=/verified/dext npm run test:core` uses a temporary host/core
+and loopback barrier provider: two foreground turns finish while one summary
+is withheld, then idle application preserves both prompts, persists history
+and accounts summary usage once. Reported wall times demonstrate overlap,
+not a production speedup benchmark; live paid-provider behavior is unverified.
+
+

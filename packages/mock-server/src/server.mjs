@@ -201,6 +201,7 @@ function makeSession({ title, fixture, approvalFlow, live }) {
     pending: new Map(),
     pendingUi: null,
     uiProgress: new Map(),
+    background: null,
     approvalCounter: 0,
     plan: null,
     pos: 0,
@@ -280,6 +281,11 @@ function clearPackUi(s, status = "cancelled") {
   s.uiProgress.clear();
 }
 
+function clearBackground(s) {
+  s.background = null;
+  publishEphemeral(s, "x-agentlinkd.background_compaction", { current: null });
+}
+
 function snapshotEnvelope(s) {
   // Point-in-time projection at the current journal tail; snapshots are not
   // journal entries and therefore do not consume sequence numbers.
@@ -296,6 +302,7 @@ function snapshotEnvelope(s) {
       pending_permissions: [...s.pending.values()],
       pending_ui_request: s.pendingUi ?? undefined,
       ui_progress: [...s.uiProgress.values()],
+      background_compaction: s.background,
       last_seq: s.seq,
       working: s.working,
       turn_started_at: s.turnStartedAt ?? undefined,
@@ -360,6 +367,22 @@ function echoPlan(text) {
       delay: 4,
     },
     { event: "turn_end", data: { usage: usage(12, 24), failed: false }, delay: 4 },
+  ];
+}
+
+function backgroundCompactionPlan(s, text) {
+  const job = s.background ?? { version: 1, session_id: `mock-${s.id}`, session_epoch: s.generation, job_id: `bg-${s.id}-${s.turns + 1}`, origin_turn_id: `turn-${s.turns + 1}`, reason: "mock fixture", elapsed_ms: 10, wait_ms: 0, before_chars: 25000, usage_known: true };
+  const phase = (phase) => ({ event: "background_compaction", data: { ...job, phase, blocking: phase === "waiting" }, delay: 5 });
+  return [
+    { event: "turn_start", delay: 5 },
+    ...(text.includes("apply") ? [
+      phase("ready"),
+      { event: "history_context_updated", data: { chars: 1000, tokens: 250 }, delay: 5 },
+      { event: "compact_end", data: { before: 12, after: 3, summary: "Installed background summary", background: true, job_id: job.job_id }, delay: 5 },
+      phase("applied"),
+    ] : [phase("running"), ...(text.includes("wait") ? [phase("waiting")] : [])]),
+    { event: "text_block_complete", data: "Foreground answer complete; summary status is separate.", delay: 5 },
+    { event: "turn_end", data: { usage: usage(12, 24), failed: false }, delay: 5 },
   ];
 }
 
@@ -596,7 +619,10 @@ function stepReplay(s) {
       publish(journalData(s, item.event, item.data));
       return;
     }
-    publish(journalData(s, item.event, item.data));
+    if (item.event === "background_compaction") {
+      s.background = ["running", "ready", "waiting"].includes(item.data.phase) ? item.data : null;
+      publishEphemeral(s, item.event, item.data);
+    } else publish(journalData(s, item.event, item.data));
     s.timer = setTimeout(tick, item.delay ?? 5);
   };
   s.timer = setTimeout(tick, 5);
@@ -688,6 +714,7 @@ function manageSession(s, remove, by) {
   clearTimeout(s.timer);
   s.pending.clear();
   clearPackUi(s);
+  clearBackground(s);
   s.plan = null;
   s.working = false;
   s.turnStartedAt = null;
@@ -817,6 +844,7 @@ function handleCommand(client, frame) {
         for (const env of s.journal) if (env.seq > since) client.send(JSON.stringify(env));
         if (s.pendingUi) client.send(JSON.stringify({ v: 1, session: s.id, ts: Date.now(), event: "ui.request", data: s.pendingUi }));
         for (const progress of s.uiProgress.values()) client.send(JSON.stringify({ v: 1, session: s.id, ts: Date.now(), event: "ui.progress", data: progress }));
+        client.send(JSON.stringify({ v: 1, session: s.id, ts: Date.now(), event: "x-agentlinkd.background_compaction", data: { current: s.background } }));
       } else {
         client.send(JSON.stringify(snapshotEnvelope(s)));
       }
@@ -913,6 +941,7 @@ function handleCommand(client, frame) {
       s.status = "cold";
       flushPending(s);
       clearPackUi(s);
+      clearBackground(s);
       // Subscribers track status from events, not the list — tell them.
       publish(journalData(s, "session.state", { status: "cold" }));
       return;
@@ -974,7 +1003,9 @@ function handleCommand(client, frame) {
       if (!s.title || s.title.startsWith("New session") || s.title.startsWith("Fixture:")) {
         s.title = frame.text.slice(0, 60);
       }
-      if (/\bpack ui demo\b/i.test(frame.text)) {
+      if (/\bbackground compaction\b/i.test(frame.text)) {
+        beginTurn(s, backgroundCompactionPlan(s, frame.text));
+      } else if (/\bpack ui demo\b/i.test(frame.text)) {
         s.working = true;
         s.turnStartedAt = Date.now();
         publish(journalData(s, "turn_start"));
@@ -1053,6 +1084,7 @@ function handleCommand(client, frame) {
       // A dead turn must not leave approval cards or pack forms hanging.
       flushPending(s);
       clearPackUi(s);
+      clearBackground(s);
       return;
     }
 
@@ -1110,6 +1142,7 @@ function handleCommand(client, frame) {
           sendError(client, "busy", "context compaction starts between turns");
           return;
         }
+        clearBackground(s);
         s.compacting = true;
         s.turnStartedAt = Date.now();
         publish(journalData(s, "compact_start"));

@@ -106,16 +106,41 @@ if (process.argv.includes("--input") && process.argv[process.argv.indexOf("--inp
   let rejectUiOnce = false;
   let buf = "";
   let turnTimer = null;
+  let sessionUsage = usage;
+  let bg = null, lastBg = null, nextBg = 0;
+  const bgEvent = (phase, job = bg) => {
+    if (job) out("background_compaction", { ...job, phase, blocking: phase === "waiting" });
+  };
   const endTurn = (failed = false) => {
     clearTimeout(turnTimer);
     turnTimer = null;
-    out("usage_update", { turn: usage, session: usage });
-    out("turn_end", { usage, failed });
+    out("usage_update", { turn: usage, session: sessionUsage });
+    out("turn_end", { usage: sessionUsage, failed });
     busy = false;
   };
   const runTurn = (text) => {
     busy = true;
     out("turn_start", { pid: process.pid, resume });
+    if (text.includes("BG_")) {
+      if (text.includes("BG_START")) {
+        bg = { version: 1, session_id: "fake-ndjson-1", session_epoch: 0, job_id: `bg-fake-${++nextBg}`, origin_turn_id: "fake-turn", reason: "fixture", elapsed_ms: 10, wait_ms: 0, before_chars: 25000, usage_known: true };
+        bgEvent("running");
+      }
+      if (text.includes("BG_WAIT")) bgEvent("waiting");
+      if (text.includes("BG_APPLY") && bg) {
+        bgEvent("ready");
+        sessionUsage = { ...usage, input: 14, output: 9 };
+        out("usage_update", { turn: usage, session: sessionUsage });
+        out("history_context_updated", { chars: 1000, tokens: 250 });
+        out("compact_end", { before: 12, after: 3, summary: "Background fixture summary", background: true, job_id: bg.job_id });
+        bgEvent("applied");
+        lastBg = bg; bg = null;
+      }
+      if (text.includes("BG_STALE")) bgEvent("ready", lastBg);
+      out("text_block_complete", `fake ${text.trim()}`);
+      endTurn(false);
+      return;
+    }
     if (text.includes("UI_FORM")) {
       if (!uiMethods.includes("form") || !uiMethods.includes("progress")) {
         out("error", "host did not advertise pack UI methods");
@@ -214,6 +239,7 @@ if (process.argv.includes("--input") && process.argv[process.argv.indexOf("--inp
         ack("runtime_control_queued");
         const command = String(f.command ?? "");
         if (command === "/compact") {
+          bgEvent("cancelled"); lastBg = bg; bg = null;
           setTimeout(() => out("compact_start"), 20);
           setTimeout(() => out("history_context_updated", { chars: 4800, tokens: 1200 }), 70);
           setTimeout(() => out("compact_end", {
@@ -241,6 +267,7 @@ if (process.argv.includes("--input") && process.argv[process.argv.indexOf("--inp
         endTurn(false);
       } else if (f.type === "interrupt") {
         ack("interrupted");
+        bgEvent("cancelled"); lastBg = bg; bg = null;
         if (busy) endTurn(true);
       } else if (f.type === "close") { ack("close"); process.exit(0); }
     }

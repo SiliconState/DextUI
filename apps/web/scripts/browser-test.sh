@@ -104,6 +104,31 @@ sleep 0.4
 agent-browser eval '(()=>{const t=document.querySelector(`[data-agent-id="connect.token"]`);if(!t)return false;t.value="browsertest";document.querySelector(`[data-agent-id="connect.submit"]`).click();return true})()' >/dev/null
 wait_js '(()=>{const id=localStorage.getItem("dextui.activeSession");return !!id&&document.querySelector(`[data-agent-id="session.${id}.open"]`)?.dataset.state==="active"})()' || { echo "FAIL: working session not restored after reload"; FAIL=1; }
 wait_js '[...document.querySelectorAll(`[data-agent-id="block.text"]`)].some(x=>x.textContent.includes("Thinking preview complete")) && !document.querySelector(`[data-agent-id="composer.stop"]`)' || { echo "FAIL: active turn did not survive reload"; FAIL=1; }
+note "background compaction stays idle, accepts input, reconnects, applies once and cancels"
+agent-browser fill '[data-agent-id="composer.input"]' 'background compaction start' >/dev/null
+agent-browser press Enter >/dev/null
+wait_js 'document.querySelector(`[data-agent-id="status.background-compaction"]`)?.dataset.phase === "running" && document.querySelector(`[data-agent-id="composer.input"]`)?.dataset.state === "idle" && !!document.querySelector(`[data-agent-id="composer.stop"]`) && !document.querySelector(`[data-agent-id="status.compacting"]`)' || { echo "FAIL: background-only status became busy"; FAIL=1; }
+agent-browser open "$B" >/dev/null
+sleep 0.4
+agent-browser eval '(()=>{const t=document.querySelector(`[data-agent-id="connect.token"]`);if(!t)return false;t.value="browsertest";document.querySelector(`[data-agent-id="connect.submit"]`).click();return true})()' >/dev/null
+wait_js 'document.querySelector(`[data-agent-id="status.background-compaction"]`)?.dataset.phase === "running" && document.querySelector(`[data-agent-id="composer.input"]`)?.dataset.state === "idle"' || { echo "FAIL: background reconnect projection"; FAIL=1; }
+agent-browser fill '[data-agent-id="composer.input"]' 'background compaction wait' >/dev/null
+wait_js 'document.querySelector(`[data-agent-id="composer.send"]`)?.dataset.state === "ready"' || { echo "FAIL: background disabled Send"; FAIL=1; }
+agent-browser press Enter >/dev/null
+wait_js 'document.querySelector(`[data-agent-id="status.background-compaction"]`)?.textContent.includes("Waiting for compaction") && document.querySelector(`[data-agent-id="composer.input"]`)?.dataset.state === "idle"' || { echo "FAIL: background wait status"; FAIL=1; }
+agent-browser fill '[data-agent-id="composer.input"]' 'background compaction apply' >/dev/null
+agent-browser press Enter >/dev/null
+wait_js 'document.querySelectorAll(`[data-agent-id="block.compact"]`).length === 1 && document.querySelector(`[data-agent-id="block.compact"]`)?.dataset.state === "complete" && !document.querySelector(`[data-agent-id="block.compact"]`).open && !document.querySelector(`[data-agent-id="status.background-compaction"]`) && !document.querySelector(`[data-agent-id="composer.stop"]`)' || { echo "FAIL: background application projection"; FAIL=1; }
+agent-browser set viewport 390 844 >/dev/null
+agent-browser fill '[data-agent-id="composer.input"]' 'background compaction start' >/dev/null
+agent-browser click '[data-agent-id="composer.send"]' >/dev/null
+wait_js '!!document.querySelector(`[data-agent-id="status.background-compaction"]`) && !!document.querySelector(`[data-agent-id="composer.stop"]`)' || { echo "FAIL: phone background status/stop"; FAIL=1; }
+agent-browser fill '[data-agent-id="composer.input"]' 'draft survives cancellation' >/dev/null
+agent-browser press Escape >/dev/null
+wait_js '!document.querySelector(`[data-agent-id="status.background-compaction"]`) && !document.querySelector(`[data-agent-id="composer.stop"]`) && document.querySelector(`[data-agent-id="composer.input"]`)?.value === "draft survives cancellation"' || { echo "FAIL: background Escape cancellation"; FAIL=1; }
+agent-browser fill '[data-agent-id="composer.input"]' '' >/dev/null
+agent-browser set viewport 1280 900 >/dev/null
+
 # Continue fixture-specific checks in the seeded text session.
 agent-browser click '[data-agent-id="session.sess_001.open"]' >/dev/null
 wait_js 'document.querySelector(`[data-agent-id="composer.input"]`)?.dataset.session === "sess_001"' || { echo "FAIL: seeded session not selected after reload test"; FAIL=1; }

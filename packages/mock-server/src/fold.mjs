@@ -34,7 +34,7 @@ export function foldMeta(journal) {
         break;
       case "turn_end":
         failed = !!d?.failed;
-        if (d?.usage) sessionUsage = d.usage;
+        if (!sessionUsage && d?.usage) sessionUsage = d.usage; // legacy fallback only; turn_end is per-turn
         break;
       case "history_context_updated":
         contextChars = d?.chars;
@@ -48,6 +48,8 @@ export function foldMeta(journal) {
         compacting = true;
         break;
       case "compact_end":
+        if (!d?.background) compacting = false;
+        break;
       case "compact_failed":
         compacting = false;
         break;
@@ -264,9 +266,12 @@ export function fold(journal) {
         break;
       case "compact_end": {
         const completed = { kind: "compact", status: "complete", before: d.before, after: d.after, summary: d.summary, contextChars, contextTokens };
-        if (openCompaction && blocks.includes(openCompaction)) Object.assign(openCompaction, completed);
-        else blocks.push(completed);
-        openCompaction = null;
+        if (d.background) blocks.push(completed);
+        else {
+          if (openCompaction && blocks.includes(openCompaction)) Object.assign(openCompaction, completed);
+          else blocks.push(completed);
+          openCompaction = null;
+        }
         break;
       }
       case "compact_failed": {

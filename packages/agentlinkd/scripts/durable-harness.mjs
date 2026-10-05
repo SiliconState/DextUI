@@ -9,7 +9,7 @@ export async function until(fn, message = "condition timed out") {
   for (let i = 0; i < 200; i++) { const value = fn(); if (value) return value; await sleep(20); }
   throw new Error(message);
 }
-export async function durableHost(t, { bridge = false, args = [], env = {} } = {}) {
+export async function durableHost(t, { bridge = false, args = [], env = {}, bin, setup } = {}) {
   const root = path.resolve("packages/agentlinkd");
   const temp = fs.mkdtempSync(path.join(root, ".durable-test-"));
   const home = path.join(temp, "home");
@@ -27,12 +27,14 @@ export async function durableHost(t, { bridge = false, args = [], env = {} } = {
   const stop = async (signal = "SIGTERM") => {
     for (const ws of sockets.splice(0)) ws.close();
     const fakePids = new Set();
-    if (signal === "SIGKILL" && fs.existsSync(path.join(state, "sessions.json"))) {
+    if (signal === "SIGKILL" && !bin && fs.existsSync(path.join(state, "sessions.json"))) {
       for (const s of index()) {
         let active = null;
         for (const e of journal(s.id).slice(journalStarts.get(s.id) ?? 0)) {
           if (e.event === "turn_start") active = e.data?.pid;
-          if (e.event === "turn_end" || e.event === "interrupted") active = null;
+          // An idle fake bridge remains test-owned until host EOF. Include its
+          // current-host pid even when only disposable background work remains.
+          if (!bridge && (e.event === "turn_end" || e.event === "interrupted")) active = null;
         }
         if (active) fakePids.add(active);
       }
@@ -48,8 +50,13 @@ export async function durableHost(t, { bridge = false, args = [], env = {} } = {
   async function start(extra = []) {
     journalStarts = new Map();
     if (fs.existsSync(path.join(state, "sessions.json"))) for (const s of index()) journalStarts.set(s.id, journal(s.id).length);
-    child = spawn(process.execPath, [path.join(root, "src/server.mjs"), "--port=0", "--token=durable-test-token", `--cwd=${cwd}`, `--state-dir=${state}`, `--crew=${temp}/no-crew`, `--dext=${root}/scripts/fake-dext.mjs`, ...args, ...extra], {
-      env: { ...process.env, HOME: home, DEXT_HOME: home, DEXT_SESSIONS_DIR: "", DEXT_LOGS_DIR: "", AGENTLINKD_AUTO_RESUME: "false", AGENTLINKD_TIMERS: "false", FAKE_DEXT_NDJSON: bridge ? "1" : "0", ...env },
+    const childEnv = { ...process.env, HOME: home, DEXT_HOME: home, AGENTLINKD_AUTO_RESUME: "false", AGENTLINKD_TIMERS: "false", FAKE_DEXT_NDJSON: bridge ? "1" : "0", ...env };
+    // Empty core overrides mean cwd-relative state, not "unset". Never inherit
+    // operator paths into isolated tests; use the temporary DEXT_HOME layout.
+    if (!env.DEXT_SESSIONS_DIR) delete childEnv.DEXT_SESSIONS_DIR;
+    if (!env.DEXT_LOGS_DIR) delete childEnv.DEXT_LOGS_DIR;
+    child = spawn(process.execPath, [path.join(root, "src/server.mjs"), "--port=0", "--token=durable-test-token", `--cwd=${cwd}`, `--state-dir=${state}`, `--crew=${temp}/no-crew`, `--dext=${bin ?? `${root}/scripts/fake-dext.mjs`}`, ...args, ...extra], {
+      env: childEnv,
       stdio: ["ignore", "pipe", "pipe"],
     });
     child.stderr.on("data", (b) => stderr += b);
@@ -76,6 +83,7 @@ export async function durableHost(t, { bridge = false, args = [], env = {} } = {
     await c.wait((e) => e.event === "session.snapshot" && e.session === id);
     return id;
   }
+  if (setup) await setup({ temp, home, state, cwd });
   await start();
   return { temp, home, state, cwd, journal, index, start, stop, client, open };
 }

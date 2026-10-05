@@ -8,6 +8,7 @@
 
 import type {
   Block,
+  BackgroundCompactionEvent,
   CompactEndEvent,
   Envelope,
   HistoryContextUpdatedEvent,
@@ -86,6 +87,8 @@ export interface SessionState {
   /** Pack dext activated for the current turn (`pack_start`); cleared on turn_end. */
   activePack?: string;
   compacting: boolean;
+  /** Disposable summary job; never implies working or disables normal input. */
+  backgroundCompaction?: BackgroundCompactionEvent;
   failed: boolean;
   /** Bounded raw envelope tail for the inspector (deltas excluded). */
   recent: Envelope[];
@@ -110,6 +113,7 @@ export class SessionStore {
   state: SessionState;
   private listeners = new Set<Listener>();
   private nextBlockId = 1;
+  private retiredBackgroundJobs = new Set<string>();
 
   constructor(id: string) {
     this.state = {
@@ -262,6 +266,7 @@ export class SessionStore {
         this.state.uiResponseError = undefined;
         this.state.uiResponseErrorRev += 1;
         this.state.uiProgress = new Map((s.ui_progress ?? []).map((p) => [`${p.pack}:${p.params.id}`, p]));
+        this.retiredBackgroundJobs.clear(); // snapshot is authoritative child state
         this.bump({
           title: s.meta.title,
           cwd: s.meta.cwd,
@@ -274,6 +279,7 @@ export class SessionStore {
           approvalProfile: s.meta.approval_profile,
           working: s.working ?? false,
           compacting: s.compacting ?? false,
+          backgroundCompaction: s.background_compaction ?? undefined,
           failed: s.failed ?? false,
           turnStartedAt: s.working ? s.turn_started_at : undefined,
           turnUsage: s.turn_usage,
@@ -288,6 +294,7 @@ export class SessionStore {
       }
       case "session.state": {
         const s = d as { status: SessionMeta["status"]; detail?: string };
+        if (s.status === "cold" || s.status === "exited") this.clearBackground();
         this.bump({ status: s.status });
         return;
       }
@@ -318,13 +325,14 @@ export class SessionStore {
           working: false,
           failed: t.failed,
           turnStartedAt: undefined,
-          sessionUsage: t.usage,
+          sessionUsage: this.state.sessionUsage ?? t.usage, // turn_end is per-turn, never replace cumulative totals
           retry: undefined,
           activePack: undefined,
         });
         return;
       }
       case "interrupted":
+        this.clearBackground();
         this.sealOpenBlocks();
         this.bump({ working: false, turnStartedAt: undefined, retry: undefined });
         this.pushBlock({ kind: "marker", level: "warn", text: "Interrupted." });
@@ -521,13 +529,35 @@ export class SessionStore {
         });
         return;
       }
+      case "x-agentlinkd.background_compaction": {
+        const current = (d as { current: BackgroundCompactionEvent | null }).current;
+        if (current) {
+          this.retiredBackgroundJobs.clear(); // authoritative live job may belong to a replacement child
+          this.bump({ backgroundCompaction: current });
+        } else this.clearBackground();
+        return;
+      }
+      case "background_compaction": {
+        const job = d as BackgroundCompactionEvent;
+        if (job.version !== 1 || this.retiredBackgroundJobs.has(job.job_id)) return;
+        const current = this.state.backgroundCompaction;
+        if (job.phase === "running") {
+          if (current && (current.session_id !== job.session_id || job.session_epoch < current.session_epoch)) return;
+          if (current && current.job_id !== job.job_id) this.retireBackground(current.job_id);
+          this.bump({ backgroundCompaction: job });
+        } else if (current?.job_id === job.job_id && current.session_id === job.session_id && current.session_epoch === job.session_epoch) {
+          if (job.phase === "ready" || job.phase === "waiting") this.bump({ backgroundCompaction: job });
+          else this.clearBackground();
+        }
+        return;
+      }
       case "compact_start":
         this.bump({ compacting: true });
         this.pushBlock({ kind: "compact", status: "running" });
         return;
       case "compact_end": {
         const c = d as CompactEndEvent;
-        this.finishCompaction({
+        const completed: Extract<Block, { kind: "compact" }> = {
           kind: "compact",
           status: "complete",
           before: c.before,
@@ -535,8 +565,12 @@ export class SessionStore {
           summary: c.summary,
           contextChars: this.state.contextChars,
           contextTokens: this.state.contextTokens,
-        });
-        this.bump({ compacting: false });
+        };
+        if (c.background) this.pushBlock(completed);
+        else {
+          this.finishCompaction(completed);
+          this.bump({ compacting: false });
+        }
         return;
       }
       case "compact_failed": {
@@ -623,6 +657,16 @@ export class SessionStore {
       }
     });
     if (blocks) this.state.blocks = blocks;
+  }
+
+  private retireBackground(id: string): void {
+    this.retiredBackgroundJobs.add(id);
+    if (this.retiredBackgroundJobs.size > 128) this.retiredBackgroundJobs.delete(this.retiredBackgroundJobs.values().next().value!);
+  }
+
+  private clearBackground(): void {
+    if (this.state.backgroundCompaction) this.retireBackground(this.state.backgroundCompaction.job_id);
+    this.bump({ backgroundCompaction: undefined });
   }
 
   private finishCompaction(next: Extract<Block, { kind: "compact" }>): void {
