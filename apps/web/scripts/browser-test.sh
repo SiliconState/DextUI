@@ -129,6 +129,15 @@ wait_js '!document.querySelector(`[data-agent-id="status.background-compaction"]
 agent-browser fill '[data-agent-id="composer.input"]' '' >/dev/null
 agent-browser set viewport 1280 900 >/dev/null
 
+note "kept fork from session controls preserves history and selects a new session"
+FORK_SOURCE=$(agent-browser eval 'localStorage.getItem("dextui.activeSession")')
+agent-browser click '[data-agent-id="status.controls"]' >/dev/null
+agent-browser wait '[data-agent-id="session.fork"]' >/dev/null
+agent-browser click '[data-agent-id="session.fork"]' >/dev/null
+wait_js '[...document.querySelectorAll(`[data-agent-id="block.text"]`)].some(x=>x.textContent.includes("Foreground answer complete")) && [...document.querySelectorAll(`[data-agent-id^="session."][data-agent-id$=".open"]`)].some(x=>x.dataset.state==="active"&&x.textContent.includes("fork"))' || { echo "FAIL: kept fork activation/history"; FAIL=1; }
+FORK_TARGET=$(agent-browser eval 'localStorage.getItem("dextui.activeSession")')
+[ "$FORK_SOURCE" != "$FORK_TARGET" ] || { echo "FAIL: fork reused source id"; FAIL=1; }
+
 # Continue fixture-specific checks in the seeded text session.
 agent-browser click '[data-agent-id="session.sess_001.open"]' >/dev/null
 wait_js 'document.querySelector(`[data-agent-id="composer.input"]`)?.dataset.session === "sess_001"' || { echo "FAIL: seeded session not selected after reload test"; FAIL=1; }

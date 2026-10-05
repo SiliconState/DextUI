@@ -49,6 +49,7 @@ const CAPABILITIES = [
   "effort_select",
   "todos_read",
   "session_manage",
+  "session_fork",
   // GET /sessions/:id/file + POST /sessions/:id/{upload,fetch} over an
   // in-memory store — the attach flow is demoable offline in dev.
   "files_read",
@@ -829,6 +830,20 @@ function handleCommand(client, frame) {
         s = makeSession({ title: "New session", fixture: null, approvalFlow: false, live: true });
         publish(journalData(s, "session.state", { status: "live" }));
       }
+      return;
+    }
+
+    case "session.fork": {
+      const source = sessions.get(frame.id);
+      if (!source) return sendError(client, "no_session", "unknown source session");
+      if (source.working || source.compacting || source.background) return sendError(client, "busy", "fork requires an idle session");
+      if (frame.at_seq !== undefined && (!Number.isSafeInteger(frame.at_seq) || frame.at_seq < 0 || frame.at_seq > source.seq)) return sendError(client, "fork_failed", "invalid selection");
+      const fork = makeSession({ title: `${source.title} (fork)`, fixture: null, approvalFlow: false, live: true });
+      fork.cwd = source.cwd; fork.model = source.model; fork.provider = source.provider;
+      const cutoff = frame.at_seq ?? source.seq;
+      for (const e of source.journal.filter((e) => e.seq <= cutoff)) journalData(fork, e.event, e.data);
+      publish(journalData(fork, "turn_end", { usage: usage(0, 0), failed: false }));
+      sendControl(client, "session.forked", { meta: metaOf(fork), source_id: source.id, seat: `mock-${fork.id}`, session_id: `core-${fork.id}`, at: cutoff });
       return;
     }
 

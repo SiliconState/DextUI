@@ -320,6 +320,11 @@ export class Connection {
     this.sendRaw(cmd("session.rename", { id, title }));
   }
 
+  /** Fork is live-only: reconnect must not create a second seat. */
+  forkSession(id: string, at_seq?: number): boolean {
+    return this.sendLive(cmd("session.fork", { id, ...(at_seq === undefined ? {} : { at_seq }) }));
+  }
+
   closeSession(id: string): void {
     this.sendRaw(cmd("session.close", { id }));
   }

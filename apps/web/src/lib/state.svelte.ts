@@ -783,6 +783,12 @@ export function start(token: string): void {
       const d = env.data as { session?: string; request_id?: string } | undefined;
       if (d?.session === app.activeId) pushToast("info", "This form was already answered");
     }
+    if (env.event === "session.forked") {
+      const d = env.data as { meta: SessionMeta; at: number };
+      app.sessions = [...app.sessions.filter((s) => s.id !== d.meta.id), d.meta];
+      activate(d.meta.id);
+      pushToast("ok", `Fork created · ${d.at} messages retained`);
+    }
     if (env.event === "sessions.deleted") {
       const d = env.data as { ids: string[] };
       finishSessionAction();

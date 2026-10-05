@@ -155,6 +155,8 @@ export interface SessionMeta {
   cwd: string;
   /** Increments on clear, including across host restarts. */
   generation?: number;
+  /** Kept branch provenance; at counts authoritative core messages. */
+  forkOf?: { id: string; at_seq: number; at: number };
   agent: { name: string; version: string };
   model?: string;
   provider?: string;
@@ -1111,6 +1113,7 @@ export interface ControlEventMap {
   };
   hello_fail: { reason: string };
   "session.list": { sessions: SessionMeta[] };
+  "session.forked": { meta: SessionMeta; source_id: string; seat: string; session_id: string; at: number };
   /** A session was deleted (by any client); stores, subscriptions, and local
    *  drafts for `id` should be dropped. `by` names the requesting client. */
   "session.removed": { id: string; by?: string };

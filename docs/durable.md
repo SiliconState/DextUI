@@ -123,4 +123,33 @@ is withheld, then idle application preserves both prompts, persists history
 and accounts summary usage once. Reported wall times demonstrate overlap,
 not a production speedup benchmark; live paid-provider behavior is unverified.
 
+## Kept forks (G5)
+
+Hosts whose core advertises `--fork-to` expose capability `session_fork`.
+`session.fork {id,at_seq?}` snapshots an idle session's saved core history and
+calls CORE's one-shot kept-fork command. The session must have a checkpoint;
+foreground work, compaction, background summaries and concurrent management
+are refused. The host freezes management while the bounded snapshot is copied.
+
+Blank `at_seq` keeps the latest saved history; zero keeps an empty prefix.
+Otherwise it must identify one retained `user_message`, `text_block_complete`,
+or `tool_call_result` by exact core text/tool identity. Repeated text,
+compacted-away selections, deltas and missing entries are refused instead of
+converting host sequence numbers to guessed message counts. CORE rounds a
+pair-unsafe cut backwards and reports the actual count.
+
+Success replies `session.forked {meta,source_id,seat,session_id,at}` and adds
+a new session on the new seat. It rebuilds visible history from the retained
+core messages, not a copy of approvals, usage, nonce receipts or transient jobs.
+The source is untouched; CORE gives the branch a new session id and empty tool
+journal. The first prompt resumes that new seat. Failures return `fork_failed`
+and no successful session entry. Fork commands are live-only in the client,
+never automatically replayed from its reconnect outbox.
+
+The session controls offer Fork session, with an optional event sequence.
+Real-core integration tests verify exact mapping, tool-pair roundback, source
+preservation, new identity, no provider request during fork, host restart and
+independent continuation. Mock/browser coverage verifies controls, new-session
+selection and preserved visible history.
+
 

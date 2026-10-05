@@ -80,6 +80,14 @@
     if (v && v !== view.approvalProfile) app.conn?.slash(view.id, `/approval ${v}`);
   }
 
+  let forkSeq = $state("");
+  const canFork = $derived(app.phase === "live" && app.caps.includes("session_fork") && !view.working && !view.compacting && !view.backgroundCompaction);
+  function fork() {
+    const at = forkSeq.trim() ? Number(forkSeq) : undefined;
+    if (!canFork || (at !== undefined && (!Number.isSafeInteger(at) || at < 0))) return;
+    if (app.conn?.forkSession(view.id, at)) closeSessionCtl();
+  }
+
   function onKey(e: KeyboardEvent) {
     dlg.onKey(e);
     if (e.key === "Escape") {
@@ -174,6 +182,14 @@
         {:else}
           <span class="appr-val" data-agent-id="status.profile" title="Approval profile — {view.approvalProfile}">{APPROVAL_LABELS[view.approvalProfile] ?? view.approvalProfile}</span>
         {/if}
+      </div>
+    {/if}
+    {#if app.caps.includes("session_fork")}
+      <div class="sec">
+        <span class="lbl">Branch</span>
+        <input class="ctl" type="text" inputmode="numeric" pattern="[0-9]*" bind:value={forkSeq} placeholder="Event seq (optional)" data-agent-id="session.fork.seq" disabled={!canFork} />
+        <span class="hint">Blank keeps the latest saved history. Event seq must identify a complete message.</span>
+        <button class="act ctl" data-agent-id="session.fork" disabled={!canFork} onclick={fork}>Fork session</button>
       </div>
     {/if}
   </div>

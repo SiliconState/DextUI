@@ -47,6 +47,7 @@ import { withDisplayContext } from "./display-context.mjs";
 import { bridgeArgs, probeNdjsonSupport, probePackUiSupport, spawnBridge, supportsPackUi, toBridgeChoice, toPermissionRequest } from "./bridge.mjs";
 import { normalizeUiRequest, progressKey, validUiResponse } from "./pack-ui.mjs";
 import { acceptBackground, acceptBackgroundApplication, backgroundState, clearBackground } from "./background-compaction.mjs";
+import { readForkSource, forkBoundary, forkEvents } from "./session-fork.mjs";
 
 const here = path.dirname(url.fileURLToPath(import.meta.url));
 const repoRoot = path.join(here, "..", "..", "..");
@@ -265,6 +266,7 @@ const MODEL_CATALOG = discoverModels();
 const DEXT_HELP = dextOutput(["--help"]);
 const BRIDGE = probeNdjsonSupport(() => DEXT_HELP);
 const PACK_UI = BRIDGE && probePackUiSupport(() => DEXT_HELP);
+const KEPT_FORK = DEXT_HELP.includes("--fork-to");
 const DEFAULT_MODEL = discoverActiveModel(MODEL_CATALOG);
 if (DEFAULT_MODEL.provider && DEFAULT_MODEL.model) {
   let group = MODEL_CATALOG.find((g) => g.provider === DEFAULT_MODEL.provider);
@@ -501,6 +503,7 @@ function resolveCrew() {
   return null;
 }
 const CREW_BIN = resolveCrew();
+if (KEPT_FORK) CAPABILITIES.push("session_fork");
 // hello_ok.crews + x-agentlinkd.crew.{open,close,tail,file,stop,resume}.
 if (CREW_BIN) CAPABILITIES.push("crew");
 // x-agentlinkd.tasks.* + /task: the shared task workspace (goal, acceptance,
@@ -821,7 +824,7 @@ function handlePackFileCommand(client, frame) {
   }
 }
 
-function makeSession({ cwd, approval }) {
+function makeSession({ cwd, approval, seat, persist = true }) {
   // Never reuse a deleted id after restart (old tabs may still hold drafts).
   const id = `sess_${BigInt(`0x${crypto.randomBytes(12).toString("hex")}`)}`;
   const s = {
@@ -833,7 +836,7 @@ function makeSession({ cwd, approval }) {
     model: DEFAULT_MODEL.model ?? null,
     thinkingEffort: "medium",
     modelLocked: false,
-    seat: `dextui-${crypto.randomBytes(4).toString("hex")}`,
+    seat: seat ?? `dextui-${crypto.randomBytes(4).toString("hex")}`,
     status: "live",
     working: false,
     turnStartedAt: null,
@@ -862,7 +865,7 @@ function makeSession({ cwd, approval }) {
     deleted: false,
   };
   sessions.set(id, s);
-  persistIndex();
+  if (persist) persistIndex();
   crewRootFor(cwd);
   return s;
 }
@@ -920,6 +923,7 @@ function indexEntryOf(s) {
     modelLocked: s.modelLocked,
     seat: s.seat,
     generation: s.generation ?? 0,
+    ...(s.forkOf ? { forkOf: s.forkOf } : {}),
     ...(s.moved ? { moved: true } : {}),
     ...(s.cleanup ? { cleanup: s.cleanup } : {}),
     ...(s.steeringQueue.length > 0 ? { steeringQueue: [...s.steeringQueue] } : {}),
@@ -1099,6 +1103,7 @@ function restoreSessions() {
       epoch: 0,
       deleted: false,
       generation: Number.isSafeInteger(e.generation) ? e.generation : 0,
+      forkOf: e.forkOf ?? null,
       cleanup: e.cleanup?.action === "delete" || e.cleanup?.action === "clear" ? e.cleanup : null,
     };
     sessions.set(s.id, s);
@@ -1155,6 +1160,7 @@ function metaOf(s) {
     title: s.title,
     cwd: s.cwd,
     generation: s.generation ?? 0,
+    ...(s.forkOf ? { forkOf: s.forkOf } : {}),
     agent: { name: "dext", version: "cli" },
     model: s.model ?? undefined,
     provider: s.provider ?? undefined,
@@ -1924,6 +1930,55 @@ function wakeSession(s) {
   scheduleList();
 }
 
+// ---------- kept fork ----------
+
+async function forkSession(s, atSeq) {
+  if (s.managing || s.cleanup || s.working || s.compacting || s.compactRequested || s.background.current || s.child && !s.bridge) throw new Error("fork requires an idle session without pending background work");
+  s.managing = true;
+  s.forking = true;
+  const seat = `dextui-${crypto.randomBytes(8).toString("hex")}`;
+  const snapshot = path.join(STATE_DIR, `.fork-${crypto.randomBytes(8).toString("hex")}.jsonl`);
+  let fork, targetCreated = false;
+  try {
+    const dir = findDextSessionDir(s);
+    if (!dir) throw new Error("session has no saved core checkpoint to fork");
+    const source = readForkSource(path.join(dir, "_latest.jsonl"), s.seat);
+    const at = forkBoundary(source.messages, s.journal, atSeq);
+    fs.writeFileSync(snapshot, source.bytes, { flag: "wx", mode: 0o600 });
+    const result = await dextOutputAsync(["--fork-to", seat, "--at", String(at), `--resume=${snapshot}`, "--seat", s.seat, "--cd", s.cwd, "--output", "stream-json"], s.cwd);
+    if (!result.ok) throw new Error(result.err.trim().slice(-500) || "core fork failed");
+    const events = result.out.split("\n").filter((l) => l.trim()).map(JSON.parse);
+    const data = events.length === 1 && events[0].event === "session_fork" ? events[0].data : null;
+    if (!data || data.seat !== seat || data.source_session_id !== source.header.session_id || typeof data.session_id !== "string" || !Number.isSafeInteger(data.at) || data.at < 0 || data.at > at) throw new Error("core returned an invalid fork result");
+    targetCreated = true;
+    fork = makeSession({ cwd: s.cwd, approval: s.approval, seat, persist: false });
+    fork.title = `${s.title} (fork)`.slice(0, 80);
+    fork.provider = s.provider; fork.model = source.header.model ?? s.model;
+    fork.thinkingEffort = s.thinkingEffort; fork.modelLocked = s.modelLocked;
+    fork.turns = 1; // kept history must resume the new seat on its first prompt
+    fork.dextSessionId = data.session_id;
+    fork.forkOf = { id: s.id, at_seq: atSeq ?? s.seq, at: data.at };
+    for (const event of forkEvents(source.messages.slice(0, data.at))) {
+      journalData(fork, event.event, event.data, { durable: true });
+      if (fork.lastAppendFailed) throw new Error("cannot persist fork transcript");
+    }
+    journalData(fork, "turn_end", { usage: zeroUsage(), failed: false }, { durable: true });
+    journalData(fork, "info", `Forked from ${s.title}; ${data.at} core messages retained.`, { durable: true });
+    if (fork.lastAppendFailed) throw new Error("cannot persist fork transcript");
+    persistIndex(true, true);
+    scheduleList();
+    return { meta: metaOf(fork), source_id: s.id, seat, session_id: data.session_id, at: data.at };
+  } catch (err) {
+    if (fork) { sessions.delete(fork.id); removeJournalFile(fork); persistIndex(true); }
+    if (targetCreated) try { purgeSeat(seat); } catch (cleanup) { console.error(`agentlinkd: failed fork seat cleanup: ${cleanup.message}`); }
+    throw err;
+  } finally {
+    s.managing = false;
+    s.forking = false;
+    try { fs.rmSync(snapshot, { force: true }); } catch (err) { console.error(`agentlinkd: fork snapshot cleanup failed: ${err.message}`); }
+  }
+}
+
 // ---------- delete / clear ----------
 
 function broadcastControl(event, data) {
@@ -2503,6 +2558,7 @@ async function handleCommand(client, frame) {
   }
   if (client.phase !== "live") return;
   const target = sessions.get(frame.id ?? frame.session);
+  if (target?.forking && frame.cmd !== "session.unsubscribe") return sendError(client, "busy", "session fork in progress", frame.cmd);
   if (target && (target.managing || target.cleanup) &&
       !["session.delete", "session.clear", "session.unsubscribe"].includes(frame.cmd)) {
     sendError(client, "busy", "session cleanup pending; retry delete/clear before using it", frame.cmd);
@@ -2558,6 +2614,15 @@ async function handleCommand(client, frame) {
       const approval = APPROVALS.has(frame.approval) ? frame.approval : DEFAULT_APPROVAL;
       const s = makeSession({ cwd, approval });
       publish(journalData(s, "session.state", { status: "live" }));
+      return;
+    }
+
+    case "session.fork": {
+      const s = sessions.get(frame.id);
+      if (!KEPT_FORK) return sendError(client, "unsupported", "core does not support kept forks", frame.cmd);
+      if (!s) return sendError(client, "no_session", `unknown session ${frame.id}`, frame.cmd);
+      try { sendControl(client, "session.forked", await forkSession(s, frame.at_seq)); }
+      catch (err) { sendError(client, "fork_failed", err.message, frame.cmd); }
       return;
     }
 
