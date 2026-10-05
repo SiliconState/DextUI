@@ -89,6 +89,8 @@ export interface SessionState {
   compacting: boolean;
   /** Disposable summary job; never implies working or disables normal input. */
   backgroundCompaction?: BackgroundCompactionEvent;
+  backgroundCompact?: boolean;
+  backgroundCompactPending?: boolean;
   failed: boolean;
   /** Bounded raw envelope tail for the inspector (deltas excluded). */
   recent: Envelope[];
@@ -280,6 +282,8 @@ export class SessionStore {
           working: s.working ?? false,
           compacting: s.compacting ?? false,
           backgroundCompaction: s.background_compaction ?? undefined,
+          backgroundCompact: s.meta.background_compact,
+          backgroundCompactPending: s.background_compact_pending ?? false,
           failed: s.failed ?? false,
           turnStartedAt: s.working ? s.turn_started_at : undefined,
           turnUsage: s.turn_usage,
@@ -306,6 +310,7 @@ export class SessionStore {
         if (c.provider !== undefined) patch.provider = c.provider;
         if (c.model !== undefined) patch.model = c.model;
         if (c.thinking_effort !== undefined) patch.thinkingEffort = c.thinking_effort;
+        if (typeof c.background_compact === "boolean") patch.backgroundCompact = c.background_compact;
         if (typeof c.cwd === "string" && c.cwd) patch.cwd = c.cwd;
         this.bump(patch);
         return;
@@ -527,6 +532,16 @@ export class SessionStore {
           level: "warn",
           text: `Login required${l?.provider ? ` for ${l.provider}` : ""} — complete it in the dext TUI.`,
         });
+        return;
+      }
+      case "background_compaction_setting": {
+        const setting = d as { enabled: boolean };
+        if (typeof setting?.enabled === "boolean") this.bump({ backgroundCompact: setting.enabled });
+        return;
+      }
+      case "x-agentlinkd.background_compaction_setting": {
+        const setting = d as { enabled: boolean; pending: boolean };
+        if (typeof setting?.enabled === "boolean" && typeof setting.pending === "boolean") this.bump({ backgroundCompact: setting.enabled, backgroundCompactPending: setting.pending });
         return;
       }
       case "x-agentlinkd.background_compaction": {

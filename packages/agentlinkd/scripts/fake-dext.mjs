@@ -8,6 +8,13 @@ import path from "node:path";
 // Provider auth is a file in DEXT_HOME so login/logout survive across the
 // one-shot invocations the host makes (status → login → status).
 const AUTH_FILE = path.join(process.env.DEXT_HOME ?? "/nonexistent", "fake-auth.json");
+const AUTH_FAILURE_FILE = path.join(process.env.DEXT_HOME ?? "/nonexistent", "fake-auth-failure");
+if (process.argv[2] === "auth" && fs.existsSync(AUTH_FAILURE_FILE)) {
+  const mode = fs.readFileSync(AUTH_FAILURE_FILE, "utf8").trim();
+  if (mode === "empty" && ["status", "models"].includes(process.argv[3])) { console.log(JSON.stringify({ version: 1, active_provider: "fake-a", providers: [] })); process.exit(0); }
+  process.stderr.write(`Error: provider state has unsafe writable mode 0664; remove group/world write bits: ${process.env.DEXT_HOME}/providers.json fixture-secret-must-not-echo\n`);
+  process.exit(1);
+}
 function readAuth() {
   try { return JSON.parse(fs.readFileSync(AUTH_FILE, "utf8")); } catch { return { "fake-a": "auth" }; }
 }
@@ -35,11 +42,16 @@ if (process.argv[2] === "auth" && (process.argv[3] === "status" || process.argv[
   process.exit(0);
 }
 if (process.argv[2] === "auth" && process.argv[3] === "login") {
-  const [, , , , provider, credential] = process.argv;
+  const [, , , , provider] = process.argv;
+  let credential = "";
+  for await (const chunk of process.stdin) credential += chunk;
+  credential = credential.trim();
+  if (!credential) { process.stderr.write("[err] missing credential on stdin\n"); process.exit(1); }
   if (!["fake-a", "fake-b"].includes(provider)) { process.stderr.write(`[err] unknown provider ${provider}\n`); process.exit(1); }
   const a = readAuth();
   a[provider] = "key";
   writeAuth(a);
+  if (process.env.FAKE_DEXT_AUTH_POST_LOGIN_FAIL === "1") fs.writeFileSync(AUTH_FAILURE_FILE, "mode");
   process.stdout.write(`stored credential for ${provider} (${credential ? credential.length : 0} chars)\nactive -> fake-a\n`);
   process.exit(0);
 }
@@ -74,7 +86,7 @@ if (process.argv[2] === "--help") {
   // Answers the host's bridge probe. `--input ndjson` is advertised only when
   // the test opts in, so default harness runs stay on the one-shot path.
   process.stdout.write(
-    `usage: dext [options]\n  -p <prompt>\n${process.env.FAKE_DEXT_NDJSON === "1" ? "  --input ndjson (ui.capabilities ui.response; emits ui.request)\n" : ""}`,
+    `usage: dext [options]\n  -p <prompt>\n${process.env.FAKE_DEXT_BACKGROUND_SETTING === "1" ? "  --background-compact=on|off\n" : ""}${process.env.FAKE_DEXT_NDJSON === "1" ? "  --input ndjson (ui.capabilities ui.response; emits ui.request)\n" : ""}`,
   );
   process.exit(0);
 }
@@ -91,12 +103,15 @@ if (process.argv.includes("--input") && process.argv[process.argv.indexOf("--inp
   // change); echoed on turn_start so host tests can assert the argv contract.
   const resumeArg = process.argv.find((a) => a === "--resume" || a.startsWith("--resume=")) ?? null;
   const resume = resumeArg === null ? null : resumeArg === "--resume" ? "latest" : resumeArg.slice("--resume=".length);
+  let backgroundEnabled = process.argv.find((arg) => arg.startsWith("--background-compact="))?.slice("--background-compact=".length) !== "off";
+  if (process.env.FAKE_DEXT_PRE_READY_BACKGROUND === "1") out("background_compaction_setting", { enabled: !backgroundEnabled });
   await new Promise((resolve) => setTimeout(resolve, Number(process.env.FAKE_DEXT_READY_DELAY_MS) || 0));
   out("ready", {
     input: "ndjson",
     session_id: "fake-ndjson-1",
     model: process.env.DEXT_MODEL || "alpha",
     provider: process.env.DEXT_PROVIDER || "fake-a",
+    ...(process.env.FAKE_DEXT_BACKGROUND_SETTING === "1" ? { background_compact: backgroundEnabled } : {}),
     ui_protocol: 1,
     frames: ["user", "steer", "control", "interrupt", "permission", "ui.capabilities", "ui.response", "close"],
   });
@@ -121,7 +136,7 @@ if (process.argv.includes("--input") && process.argv[process.argv.indexOf("--inp
   const runTurn = (text) => {
     busy = true;
     out("turn_start", { pid: process.pid, resume });
-    if (text.includes("BG_")) {
+    if (text.includes("BG_") && backgroundEnabled) {
       if (text.includes("BG_START")) {
         bg = { version: 1, session_id: "fake-ndjson-1", session_epoch: 0, job_id: `bg-fake-${++nextBg}`, origin_turn_id: "fake-turn", reason: "fixture", elapsed_ms: 10, wait_ms: 0, before_chars: 25000, usage_known: true };
         bgEvent("running");
@@ -236,8 +251,24 @@ if (process.argv.includes("--input") && process.argv[process.argv.indexOf("--inp
       else if (f.type === "user") { ack("submitted"); runTurn(String(f.text ?? "")); }
       else if (f.type === "steer") { ack("steering_queued"); out("steering_received", { messages: [f.text], preview: String(f.text).slice(0, 80) }); }
       else if (f.type === "control" && String(f.command ?? "").startsWith("/compact")) {
-        ack("runtime_control_queued");
         const command = String(f.command ?? "");
+        if (command.startsWith("/compact background")) {
+          if (busy || process.env.FAKE_DEXT_BACKGROUND_REFUSE === "1" && !command.endsWith("status")) { ack("unsupported_busy_slash", "fixture setting refused"); continue; }
+          if (process.env.FAKE_DEXT_BACKGROUND_EXIT === "1") process.exit(1);
+          ack("submitted");
+          setTimeout(() => {
+            if (!command.endsWith("status")) {
+              const next = command.endsWith("on");
+              if (!next) { bgEvent("cancelled"); lastBg = bg; bg = null; }
+              if (process.env.FAKE_DEXT_BACKGROUND_FAIL === "1") { backgroundEnabled = backgroundEnabled && next; out("error", "[background compaction] persisting background compaction setting: fixture save failed"); return; }
+              backgroundEnabled = next;
+            }
+            out("background_compaction_setting", { enabled: backgroundEnabled });
+            out("info", `background compaction: ${backgroundEnabled ? "on" : "off"}; regular compaction remains available`);
+          }, Number(process.env.FAKE_DEXT_BACKGROUND_DELAY_MS) || 0);
+          continue;
+        }
+        ack("runtime_control_queued");
         if (command === "/compact") {
           bgEvent("cancelled"); lastBg = bg; bg = null;
           setTimeout(() => out("compact_start"), 20);

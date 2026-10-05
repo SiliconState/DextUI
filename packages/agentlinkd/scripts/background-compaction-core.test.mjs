@@ -6,7 +6,7 @@ import path from "node:path";
 import http from "node:http";
 import { durableHost, until } from "./durable-harness.mjs";
 
-for (const enabled of [true, false]) test(`real host/core background compaction ${enabled ? "overlaps and applies idle" : "defaults off"}`, { timeout: 30000 }, async (t) => {
+for (const enabled of [true, false]) test(`real host/core background compaction ${enabled ? "defaults on, overlaps and applies idle" : "explicit startup default off"}`, { timeout: 30000 }, async (t) => {
   assert.ok(process.env.DEXT_CORE_BIN, "set DEXT_CORE_BIN to CORE's verified binary");
   const requests = []; let summaryResponse;
   const provider = http.createServer(async (req, res) => {
@@ -21,7 +21,7 @@ for (const enabled of [true, false]) test(`real host/core background compaction 
   t.after(async () => { provider.closeAllConnections(); await new Promise((r) => provider.close(r)); });
   const h = await durableHost(t, {
     bin: process.env.DEXT_CORE_BIN,
-    env: { DEXT_PROVIDER: "local", DEXT_MODEL: "mock-model", DEXT_MODEL_FORCE: "1", DEXT_BASE_URL: `http://127.0.0.1:${provider.address().port}`, DEXT_BACKGROUND_COMPACT: enabled ? "1" : "0" },
+    env: { DEXT_PROVIDER: "local", DEXT_MODEL: "mock-model", DEXT_MODEL_FORCE: "1", DEXT_BASE_URL: `http://127.0.0.1:${provider.address().port}`, DEXT_BACKGROUND_COMPACT: enabled ? undefined : "0" },
     setup({ home, state, cwd }) {
       fs.writeFileSync(path.join(cwd, "hooks.json"), JSON.stringify({ post_compact: [{ command: "printf '%s\\n' \"$DEXT_COMPACT_SUMMARY\" >> hook-observed" }] }));
       const dir = path.join(home, "projects", "fixture", "sessions", "background-source"); fs.mkdirSync(dir, { recursive: true });

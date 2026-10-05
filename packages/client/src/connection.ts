@@ -524,8 +524,9 @@ export class Connection {
     this.sendRaw(cmd(`${AUTH_EXT}.status`, {}));
   }
 
-  authLogin(provider: string, credential: string): void {
-    this.sendRaw(cmd(`${AUTH_EXT}.login`, { provider, credential }));
+  /** Credentials are live-only: never retained in the reconnect outbox. */
+  authLogin(provider: string, credential: string): boolean {
+    return this.sendLive(cmd(`${AUTH_EXT}.login`, { provider, credential }));
   }
 
   authLogout(provider: string): void {
@@ -677,7 +678,7 @@ export class Connection {
       }
       case "x-agentlinkd.auth.status": {
         const d = env.data as { model_catalog?: ModelGroup[] };
-        if (Array.isArray(d?.model_catalog)) this.modelCatalog = d.model_catalog;
+        if (Array.isArray(d?.model_catalog) && d.model_catalog.length > 0) this.modelCatalog = d.model_catalog;
         break;
       }
       case "hello_fail": {

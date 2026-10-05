@@ -61,7 +61,7 @@ export function parseRestartRequest(text) {
 export function restartBusyDetail(sessions, crewRuns = [], launches = []) {
   const out = [];
   for (const s of sessions) {
-    const kind = s.interrupting ? "cleanup" : s.cleanup ? "cleanup" : s.forking ? "fork" : s.managing ? "management" : s.compacting || s.compactRequested ? "compact" : s.working ? "turn" : s.background?.current ? "background" : null;
+    const kind = s.backgroundSetting ? "setting" : s.interrupting ? "cleanup" : s.cleanup ? "cleanup" : s.forking ? "fork" : s.managing ? "management" : s.compacting || s.compactRequested ? "compact" : s.working ? "turn" : s.background?.current ? "background" : null;
     if (kind) out.push({ kind, session: s.id, title: String(s.title ?? "").slice(0, 40) });
   }
   for (const r of crewRuns) out.push({ kind: "crew", run: r.id, manifest: r.manifest });

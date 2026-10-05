@@ -162,6 +162,8 @@ export interface SessionMeta {
   provider?: string;
   thinking_effort?: ThinkingEffort;
   model_locked?: boolean;
+  /** Saved session preference; absent on older hosts/cores. */
+  background_compact?: boolean;
   approval_profile?: string;
   status: SessionStatus;
   created_at: number;
@@ -840,6 +842,7 @@ export interface CrewControlEvent {
 }
 
 export interface SessionConfiguredEvent {
+  background_compact?: boolean;
   provider?: string;
   model?: string;
   thinking_effort?: ThinkingEffort;
@@ -945,6 +948,8 @@ export interface SnapshotEvent {
   ui_progress?: Extract<PackUiRequestEvent, { method: "progress" }>[];
   /** Current child-owned job, never reconstructed from the journal. */
   background_compaction?: BackgroundCompactionEvent | null;
+  /** Setting changes are serialized separately from user turns. */
+  background_compact_pending?: boolean;
   last_seq: number;
   /** Live turn state is projection metadata, not a journal event. */
   working?: boolean;
@@ -1056,6 +1061,7 @@ export interface AgentEventMap {
   turn_end: TurnEndEvent;
   /** Ephemeral in agentlinkd; never signals a user turn or blocking compact. */
   background_compaction: BackgroundCompactionEvent;
+  background_compaction_setting: { enabled: boolean };
   compact_start: undefined;
   compact_end: CompactEndEvent;
   compact_failed: { message: string };
@@ -1086,6 +1092,8 @@ export interface HostEventMap {
   "ui.progress.cleared": undefined;
   /** Ephemeral authoritative replacement on reconnect or child lifecycle change. */
   "x-agentlinkd.background_compaction": { current: BackgroundCompactionEvent | null };
+  /** Authoritative setting/admission sync, including after seq-only reconnect. */
+  "x-agentlinkd.background_compaction_setting": { enabled: boolean; pending: boolean };
   /** Journaled after todo_write in bridge mode; clients refetch GET /sessions/:id/todos. */
   "todos.changed": TodosResponse;
 }
@@ -1182,6 +1190,8 @@ export const CAPABILITIES = [
   "thinking",
   "model_select",
   "effort_select",
+  /** Saved per-session background summaries with authoritative idle controls. */
+  "background_compaction_setting",
   "todos_read",
   /** Host honors session.delete / session.clear / session.delete_all. */
   "session_manage",

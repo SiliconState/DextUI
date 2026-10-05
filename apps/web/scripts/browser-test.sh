@@ -99,6 +99,9 @@ wait_js 'document.querySelector(`[data-agent-id="composer.send"]`)?.dataset.stat
 agent-browser click '[data-agent-id="composer.send"]' >/dev/null
 wait_js 'document.querySelector(`[data-agent-id="block.thinking"][data-state="thinking"] .think-p.stream`)?.textContent.includes("reasoning-120")' || { echo "FAIL: active thinking preview did not appear"; FAIL=1; }
 wait_js '(()=>{const p=document.querySelector(`[data-agent-id="block.thinking"][data-state="thinking"] .think-p.stream`);if(!p)return false;const s=getComputedStyle(p);const lines=parseFloat(s.maxHeight)/parseFloat(s.lineHeight);return lines>=3.9&&lines<=4.1&&p.scrollHeight>p.clientHeight})()' || { echo "FAIL: active thinking preview is not capped at four lines"; FAIL=1; }
+agent-browser eval 'document.querySelector(`[data-agent-id="status.controls"]`)?.click();true' >/dev/null
+wait_js 'document.querySelector(`[data-agent-id="session.background.select"]`)?.disabled' || { echo "FAIL: background preference editable during a turn"; exit 1; }
+agent-browser click '[data-agent-id="session.controls.close"]' >/dev/null
 agent-browser open "$B" >/dev/null
 sleep 0.4
 agent-browser eval '(()=>{const t=document.querySelector(`[data-agent-id="connect.token"]`);if(!t)return false;t.value="browsertest";document.querySelector(`[data-agent-id="connect.submit"]`).click();return true})()' >/dev/null
@@ -129,9 +132,25 @@ wait_js '!document.querySelector(`[data-agent-id="status.background-compaction"]
 agent-browser fill '[data-agent-id="composer.input"]' '' >/dev/null
 agent-browser set viewport 1280 900 >/dev/null
 
+note "per-session background summaries default on, can disable an idle job, survive reload and fork"
+agent-browser fill '[data-agent-id="composer.input"]' 'background compaction start' >/dev/null
+agent-browser press Enter >/dev/null
+wait_js '!!document.querySelector(`[data-agent-id="status.background-compaction"]`) && document.querySelector(`[data-agent-id="composer.input"]`)?.dataset.state === "idle"' || { echo "FAIL: preference test has no idle summary"; exit 1; }
+agent-browser eval 'document.querySelector(`[data-agent-id="status.controls"]`)?.click();true' >/dev/null
+wait_js 'document.querySelector(`[data-agent-id="session.background.select"]`)?.value === "on" && !document.querySelector(`[data-agent-id="session.background.select"]`).disabled' || { echo "FAIL: default background preference"; exit 1; }
+agent-browser eval '(()=>{const s=document.querySelector(`[data-agent-id="session.background.select"]`);s.value="off";s.dispatchEvent(new Event("change",{bubbles:true}));return s.value==="on"})()' | grep -q true || { echo "FAIL: background preference updated optimistically"; exit 1; }
+wait_js 'document.querySelector(`[data-agent-id="session.background.select"]`)?.value === "off" && !document.querySelector(`[data-agent-id="session.background.select"]`).disabled && !document.querySelector(`[data-agent-id="status.background-compaction"]`) && !document.querySelector(`[data-agent-id="composer.stop"]`) && document.querySelectorAll(`[data-agent-id="block.compact"]`).length === 1' || { echo "FAIL: disabling idle summary"; exit 1; }
+agent-browser open "$B" >/dev/null
+sleep 0.4
+agent-browser eval '(()=>{const t=document.querySelector(`[data-agent-id="connect.token"]`);if(!t)return false;t.value="browsertest";document.querySelector(`[data-agent-id="connect.submit"]`).click();return true})()' >/dev/null
+wait_js '!!document.querySelector(`[data-agent-id="status.controls"]`)' || { echo "FAIL: background preference reload"; exit 1; }
+agent-browser eval 'document.querySelector(`[data-agent-id="status.controls"]`)?.click();true' >/dev/null
+wait_js 'document.querySelector(`[data-agent-id="session.background.select"]`)?.value === "off" && !document.querySelector(`[data-agent-id="session.background.select"]`).disabled' || { echo "FAIL: saved background preference lost on reload"; exit 1; }
+agent-browser click '[data-agent-id="session.controls.close"]' >/dev/null
+
 note "kept fork from session controls preserves history and selects a new session"
 FORK_SOURCE=$(agent-browser eval 'localStorage.getItem("dextui.activeSession")')
-agent-browser click '[data-agent-id="status.controls"]' >/dev/null
+agent-browser eval 'document.querySelector(`[data-agent-id="status.controls"]`)?.click();true' >/dev/null
 agent-browser wait '[data-agent-id="session.fork"]' >/dev/null
 note "session fork controls and label stay inside the popout at desktop and phone widths"
 for SIZE in '1280 900' '320 640' '375 667' '390 844' '430 932' '600 800' '900 700'; do
@@ -140,17 +159,26 @@ for SIZE in '1280 900' '320 640' '375 667' '390 844' '430 932' '600 800' '900 70
   wait_js '(()=>{const menu=document.querySelector(`[data-agent-id="session.controls.overlay"]`),button=document.querySelector(`[data-agent-id="session.fork"]`),input=document.querySelector(`[data-agent-id="session.fork.seq"]`);if(!menu||!button||!input)return false;const m=menu.getBoundingClientRect(),b=button.getBoundingClientRect(),i=input.getBoundingClientRect(),range=document.createRange();range.selectNodeContents(button);const text=range.getBoundingClientRect();return m.left>=0&&m.right<=innerWidth&&menu.scrollWidth<=menu.clientWidth&&Math.abs(b.left-i.left)<1&&Math.abs(b.width-i.width)<1&&text.left>=b.left&&text.right<=b.right&&text.top>=b.top&&text.bottom<=b.bottom})()' || { echo "FAIL: fork label/control overflow ($SIZE)"; exit 1; }
 done
 agent-browser set viewport 1280 900 >/dev/null
+wait_js '(()=>{const b=document.querySelector(`[data-agent-id="session.fork"]`);if(!b||b.disabled)return false;const r=b.getBoundingClientRect();const box=[r.x,r.y,r.width,r.height].join(",");const stable=window.__forkStableBox===box;window.__forkStableBox=box;return stable})()' || { echo "FAIL: fork action did not settle after resize"; exit 1; }
 agent-browser click '[data-agent-id="session.fork"]' >/dev/null
-wait_js '[...document.querySelectorAll(`[data-agent-id="block.text"]`)].some(x=>x.textContent.includes("Foreground answer complete")) && [...document.querySelectorAll(`[data-agent-id^="session."][data-agent-id$=".open"]`)].some(x=>x.dataset.state==="active"&&x.textContent.includes("fork"))' || { echo "FAIL: kept fork activation/history"; FAIL=1; }
+wait_js '[...document.querySelectorAll(`[data-agent-id="block.text"]`)].some(x=>x.textContent.includes("Foreground answer complete")) && [...document.querySelectorAll(`[data-agent-id^="session."][data-agent-id$=".open"]`)].some(x=>x.dataset.state==="active"&&x.textContent.includes("fork"))' || { echo "FAIL: kept fork activation/history"; exit 1; }
 FORK_TARGET=$(agent-browser eval 'localStorage.getItem("dextui.activeSession")')
 [ "$FORK_SOURCE" != "$FORK_TARGET" ] || { echo "FAIL: fork reused source id"; FAIL=1; }
+agent-browser eval 'document.querySelector(`[data-agent-id="status.controls"]`)?.click();true' >/dev/null
+wait_js 'document.querySelector(`[data-agent-id="session.background.select"]`)?.value === "off"' || { echo "FAIL: fork did not inherit background preference"; exit 1; }
+agent-browser click '[data-agent-id="session.controls.close"]' >/dev/null
 
 # Continue fixture-specific checks in the seeded text session.
 agent-browser click '[data-agent-id="session.sess_001.open"]' >/dev/null
 wait_js 'document.querySelector(`[data-agent-id="composer.input"]`)?.dataset.session === "sess_001"' || { echo "FAIL: seeded session not selected after reload test"; FAIL=1; }
 agent-browser wait '[data-agent-id="composer.input"]' >/dev/null
+agent-browser eval 'document.querySelector(`[data-agent-id="status.controls"]`)?.click();true' >/dev/null
+wait_js 'document.querySelector(`[data-agent-id="session.background.select"]`)?.value === "on"' || { echo "FAIL: background preference leaked to another session"; exit 1; }
+agent-browser select '[data-agent-id="session.background.select"]' 'off' >/dev/null
+wait_js 'document.querySelector(`[data-agent-id="session.background.select"]`)?.value === "off" && !document.querySelector(`[data-agent-id="session.background.select"]`).disabled' || { echo "FAIL: cannot disable background before manual compaction"; exit 1; }
+agent-browser click '[data-agent-id="session.controls.close"]' >/dev/null
 
-note "native slash compaction updates CTX and keeps summary collapsed"
+note "native slash compaction updates CTX and keeps summary collapsed (background off)"
 agent-browser fill '[data-agent-id="composer.input"]' '/compact' >/dev/null
 wait_js 'document.querySelector(`[data-agent-id="composer.send"]`)?.dataset.state === "ready"' || { echo "FAIL: compaction session composer not ready"; FAIL=1; }
 agent-browser press Enter >/dev/null
@@ -184,7 +212,7 @@ wait_js '[...document.querySelectorAll(`[data-agent-id="block.user"]`)].at(-1)?.
 wait_js '!document.querySelector(`[data-agent-id="composer.stop"]`)' || { echo "FAIL: attachment turn did not finish"; FAIL=1; }
 
 note "session controls are scoped, compact, and mutually exclusive with settings"
-agent-browser click '[data-agent-id="status.controls"]' >/dev/null
+agent-browser eval 'document.querySelector(`[data-agent-id="status.controls"]`)?.click();true' >/dev/null
 agent-browser wait '[data-agent-id="session.controls.overlay"]' >/dev/null
 wait_js 'document.querySelector(`[data-agent-id="session.controls.overlay"]`)?.textContent.includes("This session") && document.querySelector(`[data-agent-id="session.controls.overlay"]`)?.textContent.includes("Thinking") && document.querySelector(`[data-agent-id="session.controls.overlay"]`)?.textContent.includes("Permissions")' || { echo "FAIL: session controls labels"; FAIL=1; }
 agent-browser click '[data-agent-id="session.controls.scrim"]' >/dev/null
@@ -195,6 +223,25 @@ agent-browser eval 'document.querySelector(`[data-agent-id="status.controls"]`)?
 agent-browser wait '[data-agent-id="session.controls.overlay"]' >/dev/null
 wait_js '!document.querySelector(`[data-agent-id="settings.overlay"]`)' || { echo "FAIL: status popovers overlap"; FAIL=1; }
 agent-browser click '[data-agent-id="session.controls.scrim"]' >/dev/null
+
+note "provider sign-in failure keeps DeepSeek/list visible, refresh recovers, pasted value is cleared"
+agent-browser eval 'document.querySelector(`[data-agent-id="settings.open"]`)?.click();true' >/dev/null
+agent-browser wait '[data-agent-id="providers.open"]' >/dev/null
+agent-browser click '[data-agent-id="providers.open"]' >/dev/null
+wait_js 'document.querySelector(`[data-agent-id="providers.row.deepseek"]`)?.dataset.state === "out"' || { echo "FAIL: DeepSeek provider fixture missing"; exit 1; }
+agent-browser click '[data-agent-id="providers.login.deepseek"]' >/dev/null
+agent-browser fill '[data-agent-id="providers.credential"]' 'fixture-refuse' >/dev/null
+agent-browser click '[data-agent-id="providers.submit"]' >/dev/null
+wait_js 'document.querySelector(`[data-agent-id="providers.error"]`)?.textContent.includes("0664") && !!document.querySelector(`[data-agent-id="providers.row.deepseek"]`) && !document.querySelector(`[data-agent-id="providers.credential"]`) && document.querySelector(`[data-agent-id="providers.overlay"]`)?.dataset.state === "ready"' || { echo "FAIL: provider failure blanked dialog or left credential/pending"; exit 1; }
+agent-browser click '[data-agent-id="providers.refresh"]' >/dev/null
+wait_js 'document.querySelector(`[data-agent-id="providers.error"]`)?.textContent.includes("0664") && document.querySelectorAll(`[data-agent-id="providers.list"] .row`).length === 3' || { echo "FAIL: failed refresh erased provider list"; exit 1; }
+agent-browser click '[data-agent-id="providers.refresh"]' >/dev/null
+wait_js '!document.querySelector(`[data-agent-id="providers.error"]`) && document.querySelector(`[data-agent-id="providers.row.deepseek"]`)?.dataset.state === "out"' || { echo "FAIL: provider refresh did not recover"; exit 1; }
+agent-browser click '[data-agent-id="providers.login.deepseek"]' >/dev/null
+agent-browser fill '[data-agent-id="providers.credential"]' 'fixture-success' >/dev/null
+agent-browser click '[data-agent-id="providers.submit"]' >/dev/null
+wait_js 'document.querySelector(`[data-agent-id="providers.row.deepseek"]`)?.dataset.state === "in" && !document.querySelector(`[data-agent-id="providers.credential"]`) && !document.querySelector(`[data-agent-id="providers.error"]`)' || { echo "FAIL: provider retry did not sign in"; exit 1; }
+agent-browser click '[data-agent-id="providers.close"]' >/dev/null
 
 note "charts render and follow theme via settings menu (echo session — fixture sessions replay canned text)"
 agent-browser click '[data-agent-id="session.new"]' >/dev/null

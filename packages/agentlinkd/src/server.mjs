@@ -48,6 +48,7 @@ import { bridgeArgs, probeNdjsonSupport, probePackUiSupport, spawnBridge, suppor
 import { normalizeUiRequest, progressKey, validUiResponse } from "./pack-ui.mjs";
 import { acceptBackground, acceptBackgroundApplication, backgroundState, clearBackground } from "./background-compaction.mjs";
 import { readForkSource, forkBoundary, forkEvents } from "./session-fork.mjs";
+import { authStatusError } from "./auth-errors.mjs";
 
 const here = path.dirname(url.fileURLToPath(import.meta.url));
 const repoRoot = path.join(here, "..", "..", "..");
@@ -267,6 +268,8 @@ const DEXT_HELP = dextOutput(["--help"]);
 const BRIDGE = probeNdjsonSupport(() => DEXT_HELP);
 const PACK_UI = BRIDGE && probePackUiSupport(() => DEXT_HELP);
 const KEPT_FORK = DEXT_HELP.includes("--fork-to");
+const BACKGROUND_SETTING = DEXT_HELP.includes("--background-compact");
+const BACKGROUND_DEFAULT = process.env.DEXT_BACKGROUND_COMPACT === undefined || !["", "0", "false", "off", "no"].includes(process.env.DEXT_BACKGROUND_COMPACT.trim().toLowerCase());
 const DEFAULT_MODEL = discoverActiveModel(MODEL_CATALOG);
 if (DEFAULT_MODEL.provider && DEFAULT_MODEL.model) {
   let group = MODEL_CATALOG.find((g) => g.provider === DEFAULT_MODEL.provider);
@@ -323,9 +326,11 @@ function parseProviderStatusJson(text) {
 async function providerStatusAsync() {
   const j = await dextOutputAsync(["auth", "status", "--json"]);
   const parsed = j.ok ? parseProviderStatusJson(j.out) : null;
-  if (parsed) return parsed;
+  if (parsed?.providers.length) return parsed;
   const r = await dextOutputAsync(["auth", "status"]);
-  return parseProviderStatus(r.ok ? r.out : "");
+  const status = r.ok ? parseProviderStatus(r.out) : null;
+  if (!status?.providers.length) throw new Error(authStatusError(r.ok ? j : r));
+  return status;
 }
 // After a login the model list may grow (a provider's models appear once it
 // is authenticated): refresh the catalog in place so hello_ok and the status
@@ -338,22 +343,30 @@ function refreshModelCatalog() {
 async function reloadModelCatalog() {
   const j = await dextOutputAsync(["auth", "models", "--json"]);
   const groups = j.ok ? parseModelsJson(j.out) : null;
-  if (groups) {
+  if (groups?.length) {
     MODEL_CATALOG.splice(0, MODEL_CATALOG.length, ...groups);
     return MODEL_CATALOG;
   }
   const r = await dextOutputAsync(["auth", "models"]);
   if (!r.ok) return MODEL_CATALOG;
-  MODEL_CATALOG.splice(0, MODEL_CATALOG.length, ...parseModels(r.out));
+  const fallback = parseModels(r.out);
+  if (fallback.length) MODEL_CATALOG.splice(0, MODEL_CATALOG.length, ...fallback);
   return MODEL_CATALOG;
 }
 /** `stdin` (optional) is written and closed; used to hand `auth login` its
  *  credential off argv (patches/dext/0001) so /proc/<pid>/cmdline never has it. */
 function runDext(args, timeout = 60_000, stdin = null) {
   return new Promise((resolve) => {
-    const child = execFile(DEXT_BIN, args, { env: dextEnv(), timeout, maxBuffer: 4 * 1024 * 1024, windowsHide: true }, (err, stdout, stderr) => {
-      resolve({ ok: !err, stdout: String(stdout ?? ""), stderr: String(stderr ?? "") });
-    });
+    // CORE's catalog replacement otherwise inherits a group-writable umask,
+    // then CORE refuses its own new providers.json on the next invocation.
+    // Spawn is synchronous; restore immediately, before any event-loop work.
+    const oldMask = process.platform === "win32" ? undefined : process.umask(0o077);
+    let child;
+    try {
+      child = execFile(DEXT_BIN, args, { env: dextEnv(), timeout, maxBuffer: 4 * 1024 * 1024, windowsHide: true }, (err, stdout, stderr) => {
+        resolve({ ok: !err, stdout: String(stdout ?? ""), stderr: String(stderr ?? "") });
+      });
+    } finally { if (oldMask !== undefined) process.umask(oldMask); }
     child.stdin?.on("error", () => {});
     if (stdin !== null) child.stdin?.end(`${stdin}\n`);
     else child.stdin?.end();
@@ -451,6 +464,7 @@ const COMMANDS = [
   { cmd: "/login", desc: "Sign-in help for another device; --show reveals the access code" },
   { cmd: "/approval", desc: `Set dext approval profile (${[...APPROVALS].join("|")}) — next turn` },
   ...(BRIDGE ? [{ cmd: "/compact", desc: "Compact context now · status · auto · percent" }] : []),
+  ...(BACKGROUND_SETTING && BRIDGE ? [{ cmd: "/compact background", desc: "Background summaries · on · off · status (this session)" }] : []),
 ];
 
 // Random per process: lets clients tell a reconnect to the same host (resume
@@ -504,6 +518,7 @@ function resolveCrew() {
 }
 const CREW_BIN = resolveCrew();
 if (KEPT_FORK) CAPABILITIES.push("session_fork");
+if (BACKGROUND_SETTING && BRIDGE) CAPABILITIES.push("background_compaction_setting");
 // hello_ok.crews + x-agentlinkd.crew.{open,close,tail,file,stop,resume}.
 if (CREW_BIN) CAPABILITIES.push("crew");
 // x-agentlinkd.tasks.* + /task: the shared task workspace (goal, acceptance,
@@ -850,6 +865,8 @@ function makeSession({ cwd, approval, seat, persist = true }) {
     compacting: false,
     compactRequested: false,
     background: backgroundState(),
+    backgroundCompact: BACKGROUND_SETTING ? BACKGROUND_DEFAULT : undefined,
+    backgroundSetting: null,
     dextSessionId: null,
     killed: false,
     indexEntry: null,
@@ -914,6 +931,7 @@ function indexEntryOf(s) {
     provider: s.provider,
     model: s.model,
     thinkingEffort: s.thinkingEffort,
+    ...(typeof s.backgroundCompact === "boolean" ? { backgroundCompact: s.backgroundCompact } : {}),
     modelLocked: s.modelLocked,
     seat: s.seat,
     generation: s.generation ?? 0,
@@ -1091,6 +1109,8 @@ function restoreSessions() {
       compacting: false,
       compactRequested: false,
       background: backgroundState(),
+      backgroundCompact: typeof e.backgroundCompact === "boolean" ? e.backgroundCompact : undefined,
+      backgroundSetting: null,
       pendingPermission: null,
       pendingUi: null,
       uiAnswer: null,
@@ -1104,6 +1124,13 @@ function restoreSessions() {
     };
     sessions.set(s.id, s);
     restoreJournal(s);
+    if (BACKGROUND_SETTING && s.backgroundCompact === undefined) {
+      const dir = findDextSessionDir(s);
+      try {
+        const value = dir && readForkSource(path.join(dir, "_latest.jsonl"), s.seat).header.background_compact;
+        if (typeof value === "boolean") s.backgroundCompact = value;
+      } catch { /* ready will establish the current preference */ }
+    }
     crewRootFor(s.cwd);
     if (!s.cleanup) {
       const interrupted = terminateUnfinishedTurn(s);
@@ -1161,6 +1188,7 @@ function metaOf(s) {
     model: s.model ?? undefined,
     provider: s.provider ?? undefined,
     thinking_effort: s.thinkingEffort,
+    ...(BACKGROUND_SETTING ? { background_compact: s.backgroundCompact ?? BACKGROUND_DEFAULT } : {}),
     model_locked: s.modelLocked,
     approval_profile: s.approval,
     status: s.status,
@@ -1203,6 +1231,62 @@ function publishEphemeral(s, event, data) {
   if (data !== undefined) env.data = data;
   publish(env);
 }
+
+function syncBackgroundPreference(s) {
+  if (BACKGROUND_SETTING && typeof s.backgroundCompact === "boolean") {
+    publishEphemeral(s, "x-agentlinkd.background_compaction_setting", { enabled: s.backgroundCompact, pending: !!s.backgroundSetting });
+  }
+}
+
+/** A saved setting receipt is separate from routing ACK and turn lifecycle. */
+async function configureBackgroundPreference(s, choice) {
+  if (!BACKGROUND_SETTING || !BRIDGE) throw new Error("core does not support per-session background compaction");
+  if (s.backgroundSetting || s.working || s.compacting || s.compactRequested || s.managing || s.cleanup || s.interrupting || s.deleted || shuttingDown) throw new Error("background compaction settings apply between turns");
+  const epoch = s.epoch;
+  const op = { bridge: null, sent: false, receive: null, seq: null, cancelled: false };
+  s.backgroundSetting = op;
+  syncBackgroundPreference(s);
+  const current = () => !s.deleted && s.epoch === epoch && s.backgroundSetting === op && !op.cancelled && !shuttingDown;
+  const request = (bridge, command, expected) => new Promise((resolve, reject) => {
+    const timer = setTimeout(() => finish(Object.assign(new Error("core did not confirm background compaction setting"), { uncertain: true })), 5000);
+    const finish = (error, value) => {
+      clearTimeout(timer);
+      op.receive = null;
+      op.sent = false;
+      if (error) reject(error); else resolve(value);
+    };
+    op.receive = (error, value) => {
+      if (!error && typeof expected === "boolean" && value !== expected) error = new Error("core confirmed a different background compaction preference");
+      finish(error, value);
+    };
+    op.seq = `background-setting-${++backgroundSettingSeq}`;
+    op.sent = true;
+    if (!bridge.control(command, op.seq)) finish(new Error("core bridge could not accept the setting command"));
+  });
+  try {
+    if (s.status === "cold") wakeSession(s);
+    const bridge = await ensureBridge(s);
+    op.bridge = bridge;
+    if (!current() || s.bridge !== bridge || s.working || s.compacting || s.compactRequested || s.interrupting) throw new Error("background compaction setting request was cancelled");
+    try {
+      await request(bridge, `/compact background ${choice === undefined ? "status" : choice ? "on" : "off"}`, choice);
+    } catch (error) {
+      // Failed setting saves can leave CORE safely off without a success event.
+      // Ask for actual state under the same admission lock; never ACK the change.
+      if (error.uncertain) recycleBridge(s);
+      else if (current() && s.bridge === bridge && !bridge.exited && !s.interrupting) {
+        try { await request(bridge, "/compact background status"); }
+        catch { recycleBridge(s); }
+      }
+      throw error;
+    }
+  } finally {
+    if (s.backgroundSetting === op) s.backgroundSetting = null;
+    syncBackgroundPreference(s);
+    SELF?.tick();
+  }
+}
+let backgroundSettingSeq = 0;
 
 function clearBackgroundStatus(s) {
   clearBackground(s.background);
@@ -1253,6 +1337,7 @@ function snapshotEnvelope(s) {
       pending_ui_request: s.pendingUi ?? undefined,
       ui_progress: [...s.uiProgress.values()],
       background_compaction: s.background.current,
+      background_compact_pending: !!s.backgroundSetting,
       last_seq: s.seq,
       working: s.working,
       turn_started_at: s.turnStartedAt ?? undefined,
@@ -1309,7 +1394,7 @@ function ensureBridge(s) {
   s.background = backgroundState();
   clearBackgroundStatus(s);
   let errTail = "";
-  const args = bridgeArgs({ cwd: s.cwd, approval: s.approval, effort: s.thinkingEffort, seat: s.seat, resume: resumeTarget(s) });
+  const args = bridgeArgs({ cwd: s.cwd, approval: s.approval, effort: s.thinkingEffort, seat: s.seat, resume: resumeTarget(s), backgroundCompact: BACKGROUND_SETTING ? s.backgroundCompact : undefined });
   let bridge;
   const onEvent = (v) => {
     if (s.deleted || s.epoch !== epoch || s.bridge !== bridge) return;
@@ -1319,6 +1404,7 @@ function ensureBridge(s) {
     const ownsBridge = s.bridge === bridge;
     if (ownsBridge) s.bridge = null;
     if (s.child === bridge?.child) s.child = null;
+    if (s.backgroundSetting?.bridge === bridge) s.backgroundSetting.receive?.(new Error("core exited before confirming background compaction setting"));
     if (s.deleted || s.epoch !== epoch || (!ownsBridge && s.bridge)) return;
     if (s.compacting || s.compactRequested) {
       const wasWorking = s.working;
@@ -1376,6 +1462,7 @@ function ensureBridge(s) {
   s.bridge = bridge;
   s.child = bridge.child; // stopForPurge / signalChild keep working unchanged
   bridge.whenConfigured = bridge.whenReady().then((ready) => {
+    if (BACKGROUND_SETTING && typeof ready.background_compact !== "boolean") throw new Error("core ready is missing background compaction preference");
     bridge.packUi = PACK_UI && supportsPackUi(ready);
     if (bridge.packUi && !bridge.uiCapabilities(PACK_UI_METHODS)) {
       throw new Error("dext stdin closed before pack UI capabilities were advertised");
@@ -1393,8 +1480,26 @@ function handleBridgeEvent(s, v) {
       if (d && typeof d.session_id === "string") s.dextSessionId = d.session_id;
       if (d && typeof d.model === "string") s.model = d.model;
       if (d && typeof d.provider === "string") s.provider = d.provider;
+      if (BACKGROUND_SETTING && typeof d?.background_compact === "boolean") {
+        s.backgroundCompact = d.background_compact;
+        syncBackgroundPreference(s);
+      }
       persistIndex();
       return;
+    case "background_compaction_setting": {
+      // Resume events precede the CLI override; only ready establishes startup.
+      if (!s.bridge?.ready || !BACKGROUND_SETTING || typeof d?.enabled !== "boolean") return;
+      s.backgroundCompact = d.enabled;
+      let error;
+      try { persistIndex(false, true); } catch (err) { error = err; }
+      publishEphemeral(s, v.event, d);
+      syncBackgroundPreference(s);
+      if (s.backgroundSetting?.sent) s.backgroundSetting.receive?.(error, d.enabled);
+      return;
+    }
+    case "error":
+      if (s.backgroundSetting?.sent && typeof d === "string" && d.startsWith("[background compaction]")) s.backgroundSetting.receive?.(new Error(d));
+      break;
     case "background_compaction":
       if (acceptBackground(s.background, d, s.dextSessionId)) {
         publishEphemeral(s, v.event, d);
@@ -1402,6 +1507,10 @@ function handleBridgeEvent(s, v) {
       }
       return;
     case "input_ack":
+      if (s.backgroundSetting?.sent && d?.seq === s.backgroundSetting.seq && ["withheld", "invalid", "unsupported_busy_slash"].includes(d.route)) {
+        s.backgroundSetting.receive?.(new Error(`core refused background compaction setting: ${d.detail ?? d.route}`));
+        return;
+      }
       // Form answers are committed only after core confirms correlation. A
       // successful stdin write is not enough: the child can still reject a
       // stale id or a full response channel.
@@ -1648,6 +1757,7 @@ function runBridgedTurn(s, prompt, options) {
 /** Stop the bridged child so the next turn respawns with new env/args (model,
  *  approval). Only between turns; the seat + session_id make it seamless. */
 function recycleBridge(s) {
+  s.backgroundSetting?.receive?.(new Error("core bridge recycled before setting confirmation"));
   const bridge = s.bridge;
   if (!bridge || bridge.exited) return;
   clearPackUi(s, "cancelled");
@@ -1685,6 +1795,7 @@ function runTurn(s, prompt, options) {
     "--seat",
     s.seat,
   ];
+  if (BACKGROUND_SETTING && typeof s.backgroundCompact === "boolean") args.push(`--background-compact=${s.backgroundCompact ? "on" : "off"}`);
   // `/pack run <name> <task>` (typed, queued as steering, or from the gallery)
   // becomes an explicit `--pack` invocation; only the task travels on stdin.
   // The name was validated against the catalog before the prompt was journaled.
@@ -1866,6 +1977,10 @@ function signalChild(child, signal) {
 }
 
 function killChild(s, interrupted = true) {
+  if (s.backgroundSetting) {
+    s.backgroundSetting.cancelled = true;
+    s.backgroundSetting.receive?.(new Error("background compaction setting request interrupted"));
+  }
   s.compactOperation = null; // invalidate a command awaiting bridge readiness
   if (s.compactRequested && !s.bridge?.ready) {
     s.compactRequested = false;
@@ -1911,7 +2026,7 @@ function killChild(s, interrupted = true) {
 // next turn's prompt at the turn boundary. Journaled as steering_received so
 // every subscribed client sees the ack immediately.
 function queueSteering(s, text) {
-  if (s.interrupting) return false;
+  if (s.backgroundSetting || s.interrupting) return false;
   if (s.bridge && !s.bridge.exited && s.bridge.ready && s.working) {
     // Live: dext folds it into the running turn (its own steering_received
     // marks the fold); this row is the immediate "heard you" ack.
@@ -1948,6 +2063,7 @@ function readCoreSessionId(s) {
 // ---------- kept fork ----------
 
 async function forkSession(s, atSeq) {
+  if (s.backgroundSetting) throw new Error("background compaction setting is changing");
   if (shuttingDown || s.deleted || s.interrupting || s.managing || s.cleanup || s.working || s.compacting || s.compactRequested || s.background.current || s.child && !s.bridge) throw new Error("fork requires an idle session without pending background work");
   s.managing = true;
   s.forking = true;
@@ -1969,6 +2085,7 @@ async function forkSession(s, atSeq) {
     fork.title = `${s.title} (fork)`.slice(0, 80);
     fork.provider = s.provider; fork.model = source.header.model ?? s.model;
     fork.thinkingEffort = s.thinkingEffort; fork.modelLocked = s.modelLocked;
+    fork.backgroundCompact = s.backgroundCompact ?? source.header.background_compact;
     fork.turns = 1; // kept history must resume the new seat on its first prompt
     fork.dextSessionId = data.session_id;
     fork.forkOf = { id: s.id, at_seq: atSeq ?? s.seq, at: data.at };
@@ -2089,6 +2206,7 @@ function finishCleanup(s, by) {
 }
 
 async function manageSession(s, action, by) {
+  if (s.backgroundSetting) throw new Error("background compaction setting is changing");
   if (s.interrupting) throw new Error("owned foreground work is stopping");
   if (s.managing) throw new Error("session cleanup already in progress");
   if (s.cleanup && s.cleanup.action !== action) throw new Error(`retry session.${s.cleanup.action} first`);
@@ -2151,6 +2269,7 @@ const HOST_HELP = [
   "  /approval <profile>   set this session's dext approval profile",
   `                        (${[...APPROVALS].join(" | ")}) — applies from the next turn`,
   "  /compact              compact older context now; status | auto | <percent> also supported",
+  ...(BACKGROUND_SETTING && BRIDGE ? ["  /compact background   saved session setting: on | off | status"] : []),
   "  /pack …               list | run <name> <task> | inspect <name> | create <shelf>/<name> [--from <pack>]",
   "  /task …               shared tasks: list | show <name> | new <name> <goal>",
   "                        set <name> status|goal|summary|blocked_on|answer=…",
@@ -2265,6 +2384,14 @@ async function handleSlash(client, s, raw) {
   if (ui) return handleUiSlash(client, s, ui[1].trim());
   const task = /^\/task\b\s*([\s\S]*)$/.exec(trimmed);
   if (task) return handleTaskSlash(client, s, task[1].trim());
+  const background = /^\/compact\s+background(?:\s+(on|off|status))?$/i.exec(trimmed);
+  if (background) {
+    if (!BACKGROUND_SETTING || !BRIDGE) return sendError(client, "unsupported", "this core does not support per-session background compaction");
+    if (!["cold", "live"].includes(s.status) || s.working || s.compacting || s.compactRequested) return sendError(client, "busy", "background compaction settings apply between turns");
+    try { await configureBackgroundPreference(s, /^(on|off)$/i.test(background[1] ?? "") ? background[1].toLowerCase() === "on" : undefined); }
+    catch (err) { sendError(client, "background_setting_failed", err.message); }
+    return;
+  }
   const compact = /^\/compact(?:\s+(status|auto|(?:100|[1-9]\d?)%?))?$/i.exec(trimmed);
   if (compact) {
     if (!BRIDGE) {
@@ -2292,7 +2419,7 @@ async function handleSlash(client, s, raw) {
     }
     try {
       const bridge = await ensureBridge(s);
-      if (s.deleted || s.epoch !== epoch || s.bridge !== bridge || s.killed || s.interrupting || s.managing || s.working || shuttingDown || (blocking && s.compactOperation !== operation)) {
+      if (s.deleted || s.epoch !== epoch || s.bridge !== bridge || s.killed || s.interrupting || s.managing || s.backgroundSetting || s.working || shuttingDown || (blocking && s.compactOperation !== operation)) {
         sendError(client, "cancelled", "compaction request was cancelled or the session changed");
         return;
       }
@@ -2327,7 +2454,7 @@ async function handleSlash(client, s, raw) {
     return;
   }
   if (trimmed.startsWith("/compact")) {
-    sendError(client, "bad_request", "usage: /compact [status|auto|<percent>|<percent>%]");
+    sendError(client, "bad_request", "usage: /compact [status|auto|<percent>|<percent>%|background on|off|status]");
     return;
   }
   const m = /^\/approval\s+(\S+)$/.exec(trimmed);
@@ -2477,6 +2604,7 @@ async function handlePackSlash(client, s, cmd) {
  *  dedup is restart-durable: a replay after a host restart is still a
  *  duplicate, never a second run. */
 function submitPrompt(s, incoming, nonce, options = {}) {
+  if (s.backgroundSetting) throw new Error("background compaction setting is changing");
   if (shuttingDown || s.deleted || s.interrupting || s.managing || s.cleanup || s.forking) throw new Error("session activity is stopping or managed");
   let text = incoming;
   const queued = s.steeringQueue;
@@ -2510,7 +2638,7 @@ function submitTimerPrompt(cwd, timer, nonce) {
   const s = sessions.get(timer.session);
   if (!s || path.resolve(s.cwd) !== path.resolve(cwd)) return { error: "no_session_in_workspace" };
   if (s.journal.some((e) => e.event === "user_message" && e.data?.nonce === nonce)) return { ok: true, duplicate: true };
-  if (shuttingDown || s.deleted || s.cleanup || s.managing || s.forking || s.interrupting || s.resumeInterrupted || s.working || s.compacting || s.compactRequested) return { error: "session_busy" };
+  if (shuttingDown || s.deleted || s.cleanup || s.managing || s.forking || s.backgroundSetting || s.interrupting || s.resumeInterrupted || s.working || s.compacting || s.compactRequested) return { error: "session_busy" };
   submitPrompt(s, timer.prompt, nonce, { durableRequired: true });
   return { ok: true };
 }
@@ -2634,6 +2762,7 @@ async function handleCommand(client, frame) {
 
   if (shuttingDown) return sendError(client, "busy", "host is shutting down; reconnect before retrying", frame);
   const target = sessions.get(frame.id ?? frame.session);
+  if (target?.backgroundSetting && !["interrupt", "session.subscribe", "session.unsubscribe"].includes(frame.cmd)) return sendError(client, "busy", "background compaction setting is changing", frame);
   if (target?.interrupting && !["interrupt", "session.subscribe", "session.unsubscribe"].includes(frame.cmd)) return sendError(client, "busy", "owned foreground work is stopping", frame);
   if (target?.forking && frame.cmd !== "session.unsubscribe") return sendError(client, "busy", "session fork in progress", frame);
   if (target && (target.managing || target.cleanup) &&
@@ -2702,6 +2831,7 @@ async function handleCommand(client, frame) {
         if (s.pendingUi) client.send(JSON.stringify({ v: 1, session: s.id, ts: Date.now(), event: "ui.request", data: s.pendingUi }));
         for (const progress of s.uiProgress.values()) client.send(JSON.stringify({ v: 1, session: s.id, ts: Date.now(), event: "ui.progress", data: progress }));
         client.send(JSON.stringify({ v: 1, session: s.id, ts: Date.now(), event: "x-agentlinkd.background_compaction", data: { current: s.background.current } }));
+        if (BACKGROUND_SETTING && typeof s.backgroundCompact === "boolean") client.send(JSON.stringify({ v: 1, session: s.id, ts: Date.now(), event: "x-agentlinkd.background_compaction_setting", data: { enabled: s.backgroundCompact, pending: !!s.backgroundSetting } }));
       } else {
         client.send(JSON.stringify(snapshotEnvelope(s)));
       }
@@ -2975,7 +3105,7 @@ async function handleCommand(client, frame) {
       // Idle persistent bridge: no turn in flight. Killing the warm child
       // would drop the live seat and approval wiring for nothing; the
       // interruptible part is any queued steering.
-      if (BRIDGE && !s.background.current && !s.working && !s.compacting && !s.compactRequested && s.bridge && !s.bridge.exited) {
+      if (BRIDGE && !s.backgroundSetting && !s.background.current && !s.working && !s.compacting && !s.compactRequested && s.bridge && !s.bridge.exited) {
         if (s.steeringQueue.length > 0) {
           s.steeringQueue = [];
           persistIndex();
@@ -3222,6 +3352,10 @@ async function handleConnectorsCommand(client, frame) {
 // goes to `dext auth login <provider>` over the child's stdin, never argv,
 // shell history or a browser response.
 async function handleAuthCommand(client, frame) {
+  try { await applyAuthCommand(client, frame); }
+  catch (err) { sendError(client, "auth_status_failed", err.message, frame.cmd); }
+}
+async function applyAuthCommand(client, frame) {
   const op = frame.cmd.slice("x-agentlinkd.auth.".length);
   if (op === "status") {
     const [status] = await Promise.all([providerStatusAsync(), refreshModelCatalog()]);
@@ -3267,7 +3401,10 @@ async function handleAuthCommand(client, frame) {
     return;
   }
   await refreshModelCatalog();
-  const status = { ...(await providerStatusAsync()), model_catalog: MODEL_CATALOG, changed: provider };
+  let current;
+  try { current = await providerStatusAsync(); }
+  catch (err) { return sendError(client, "auth_refresh_failed", `${op === "login" ? "Credential saved" : "Sign-out completed"}, but status refresh failed. ${err.message}`, frame.cmd); }
+  const status = { ...current, model_catalog: MODEL_CATALOG, changed: provider };
   broadcastControl("x-agentlinkd.auth.status", status);
 }
 

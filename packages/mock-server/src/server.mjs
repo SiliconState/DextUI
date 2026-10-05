@@ -40,6 +40,7 @@ const CAPABILITIES = [
   "slash.help",
   "slash.approval",
   "slash.compact",
+  "background_compaction_setting",
   "slash.model",
   "slash.todos",
   "multi_session",
@@ -73,7 +74,8 @@ const CAPABILITIES = [
 // the Providers dialog are exercisable against the mock.
 const MOCK_CONNECTORS = new Map();
 const MOCK_TICKETS = new Map();
-const MOCK_AUTH = new Map([["mock-a", "auth"], ["mock-b", "none"]]);
+const MOCK_AUTH = new Map([["mock-a", "auth"], ["mock-b", "none"], ["deepseek", "none"]]);
+let mockAuthFailure = false;
 function mockConnectorsList(extra = {}) {
   return {
     connectors: [...MOCK_CONNECTORS.values()],
@@ -85,7 +87,7 @@ function mockConnectorsList(extra = {}) {
 function mockAuthStatus(extra = {}) {
   return {
     active: "mock-a",
-    providers: [...MOCK_AUTH].map(([id, auth]) => ({ id, label: id === "mock-a" ? "Mock A" : "Mock B", model: id === "mock-a" ? "alpha" : "beta", auth, active: id === "mock-a" })),
+    providers: [...MOCK_AUTH].map(([id, auth]) => ({ id, label: id === "mock-a" ? "Mock A" : id === "deepseek" ? "DeepSeek" : "Mock B", model: id === "mock-a" ? "alpha" : "beta", auth, active: id === "mock-a" })),
     model_catalog: MOCK_MODEL_CATALOG,
     ...extra,
   };
@@ -159,6 +161,7 @@ const COMMANDS = [
   { cmd: "/login", desc: "Sign-in help; --show reveals the access code" },
   { cmd: "/approval", desc: "Set dext approval profile" },
   { cmd: "/compact", desc: "Compact session context" },
+  { cmd: "/compact background", desc: "Background summaries · on · off · status (this session)" },
   { cmd: "/model", desc: "Show or switch model" },
   { cmd: "/todos", desc: "Show the todo list" },
   ...PACKS.map((p) => ({ cmd: `/pack run ${p.name}`, desc: p.description })),
@@ -203,6 +206,8 @@ function makeSession({ title, fixture, approvalFlow, live }) {
     pendingUi: null,
     uiProgress: new Map(),
     background: null,
+    backgroundCompact: true,
+    backgroundSetting: false,
     approvalCounter: 0,
     plan: null,
     pos: 0,
@@ -235,6 +240,7 @@ function metaOf(s) {
     model: s.model,
     provider: s.provider,
     thinking_effort: s.thinkingEffort,
+    background_compact: s.backgroundCompact,
     model_locked: s.modelLocked,
     approval_profile: s.approvalProfile ?? (s.approvalFlow ? "ask" : "always"),
     status: s.status,
@@ -304,6 +310,7 @@ function snapshotEnvelope(s) {
       pending_ui_request: s.pendingUi ?? undefined,
       ui_progress: [...s.uiProgress.values()],
       background_compaction: s.background,
+      background_compact_pending: s.backgroundSetting,
       last_seq: s.seq,
       working: s.working,
       turn_started_at: s.turnStartedAt ?? undefined,
@@ -768,6 +775,8 @@ function handleCommand(client, frame) {
   }
   if (client.phase !== "live") return;
 
+  const target = sessions.get(frame.id ?? frame.session);
+  if (target?.backgroundSetting && !["session.subscribe", "session.unsubscribe"].includes(frame.cmd)) return sendError(client, "busy", "background compaction setting is changing");
   switch (frame.cmd) {
     case "ping":
       sendControl(client, "pong", {});
@@ -840,6 +849,7 @@ function handleCommand(client, frame) {
       if (frame.at_seq !== undefined && (!Number.isSafeInteger(frame.at_seq) || frame.at_seq < 0 || frame.at_seq > source.seq)) return sendError(client, "fork_failed", "invalid selection");
       const fork = makeSession({ title: `${source.title} (fork)`, fixture: null, approvalFlow: false, live: true });
       fork.cwd = source.cwd; fork.model = source.model; fork.provider = source.provider;
+      fork.backgroundCompact = source.backgroundCompact;
       const cutoff = frame.at_seq ?? source.seq;
       const retained = new Set(["user_message", "text_block_complete", "thinking_block_complete", "tool_call_preview", "tool_call_start", "tool_call_result", "compact_end"]);
       for (const e of source.journal.filter((e) => e.seq <= cutoff && retained.has(e.event))) {
@@ -864,6 +874,7 @@ function handleCommand(client, frame) {
         if (s.pendingUi) client.send(JSON.stringify({ v: 1, session: s.id, ts: Date.now(), event: "ui.request", data: s.pendingUi }));
         for (const progress of s.uiProgress.values()) client.send(JSON.stringify({ v: 1, session: s.id, ts: Date.now(), event: "ui.progress", data: progress }));
         client.send(JSON.stringify({ v: 1, session: s.id, ts: Date.now(), event: "x-agentlinkd.background_compaction", data: { current: s.background } }));
+        client.send(JSON.stringify({ v: 1, session: s.id, ts: Date.now(), event: "x-agentlinkd.background_compaction_setting", data: { enabled: s.backgroundCompact, pending: s.backgroundSetting } }));
       } else {
         client.send(JSON.stringify(snapshotEnvelope(s)));
       }
@@ -1022,7 +1033,7 @@ function handleCommand(client, frame) {
       if (!s.title || s.title.startsWith("New session") || s.title.startsWith("Fixture:")) {
         s.title = frame.text.slice(0, 60);
       }
-      if (/\bbackground compaction\b/i.test(frame.text)) {
+      if (/\bbackground compaction\b/i.test(frame.text) && s.backgroundCompact) {
         beginTurn(s, backgroundCompactionPlan(s, frame.text));
       } else if (/\bpack ui demo\b/i.test(frame.text)) {
         s.working = true;
@@ -1154,8 +1165,24 @@ function handleCommand(client, frame) {
         sendError(client, "no_session", `unknown session ${frame.session}`);
         return;
       }
-      sendAck(client, frame);
       const raw = String(frame.raw ?? "").trim();
+      const background = /^\/compact\s+background(?:\s+(on|off|status))?$/i.exec(raw);
+      if (background) {
+        if (s.working || s.compacting) return sendError(client, "busy", "background compaction settings apply between turns");
+        s.backgroundSetting = true;
+        publishEphemeral(s, "x-agentlinkd.background_compaction_setting", { enabled: s.backgroundCompact, pending: true });
+        setTimeout(() => {
+          if (!sessions.has(s.id)) return;
+          if (background[1] && background[1].toLowerCase() !== "status") s.backgroundCompact = background[1].toLowerCase() === "on";
+          if (!s.backgroundCompact) clearBackground(s);
+          publishEphemeral(s, "background_compaction_setting", { enabled: s.backgroundCompact });
+          s.backgroundSetting = false;
+          publishEphemeral(s, "x-agentlinkd.background_compaction_setting", { enabled: s.backgroundCompact, pending: false });
+          sendAck(client, frame);
+        }, 150);
+        return;
+      }
+      sendAck(client, frame);
       if (raw === "/compact") {
         if (s.working || s.compacting) {
           sendError(client, "busy", "context compaction starts between turns");
@@ -1335,12 +1362,17 @@ function handleCommand(client, frame) {
     }
 
     case "x-agentlinkd.auth.status":
+      if (mockAuthFailure) { mockAuthFailure = false; return sendControl(client, "error", { cmd: frame.cmd, code: "auth_status_failed", message: "Dext cannot read providers.json: unsafe permissions 0664. Ask the host owner to make that file owner-only (0600), then refresh providers." }); }
       sendControl(client, "x-agentlinkd.auth.status", mockAuthStatus());
       return;
     case "x-agentlinkd.auth.login":
     case "x-agentlinkd.auth.logout": {
       if (!MOCK_AUTH.has(frame.provider)) { sendError(client, "bad_request", "unknown provider", frame.cmd); return; }
       if (frame.cmd.endsWith(".login") && (typeof frame.credential !== "string" || !frame.credential.trim())) { sendError(client, "bad_request", "paste the API key or token (single line)", frame.cmd); return; }
+      if (frame.cmd.endsWith(".login") && frame.credential === "fixture-refuse") {
+        mockAuthFailure = true;
+        return sendControl(client, "error", { cmd: frame.cmd, code: "auth_status_failed", message: "Dext cannot read providers.json: unsafe permissions 0664. Ask the host owner to make that file owner-only (0600), then refresh providers." });
+      }
       MOCK_AUTH.set(frame.provider, frame.cmd.endsWith(".login") ? "key" : "none");
       broadcastControl("x-agentlinkd.auth.status", mockAuthStatus({ changed: frame.provider }));
       return;

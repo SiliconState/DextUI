@@ -123,6 +123,28 @@ test('provider catalog refreshes after hello and auth status updates the connect
   assert.deepEqual(seen, catalog);
 });
 
+test('provider credentials are live-only and are never replayed from the offline outbox', (t) => {
+  const { conn } = setup(t);
+  assert.equal(conn.authLogin('deepseek', 'fixture-credential'), false);
+  assert.equal(conn.pendingCommandCount(), 0);
+  const ws = goLive(conn);
+  assert.equal(ws.frames('x-agentlinkd.auth.login').length, 0);
+  assert.equal(conn.authLogin('deepseek', 'fixture-credential'), true);
+  assert.equal(ws.frames('x-agentlinkd.auth.login').length, 1);
+  ws.drop();
+  assert.equal(conn.authLogin('deepseek', 'must-not-queue'), false);
+  mock.timers.tick(1100);
+  const next = FakeWebSocket.instances.at(-1); next.open(); next.receive(helloOk());
+  assert.equal(next.frames('x-agentlinkd.auth.login').length, 0);
+});
+
+test('empty provider model refresh cannot erase the last known catalog', (t) => {
+  const { conn } = setup(t); const catalog = [{ provider: 'deepseek', models: ['deepseek-chat'] }];
+  const ws = goLive(conn, helloOk({ model_catalog: catalog }));
+  ws.receive({ v: 1, ts: 2, event: 'x-agentlinkd.auth.status', data: { providers: [], model_catalog: [] } });
+  assert.deepEqual(conn.modelCatalog, catalog);
+});
+
 test("(a) open → hello with token → hello_ok → live, capabilities/commands/instance captured", (t) => {
   const { conn, calls } = setup(t);
   conn.connect();

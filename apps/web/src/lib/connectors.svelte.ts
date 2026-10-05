@@ -22,6 +22,8 @@ export const providers = $state({
   active: null as string | null,
   loaded: false,
   pending: false,
+  /** Status failures retain the last known list and an actionable error. */
+  error: "",
   /** Providers dialog open. */
   open: false,
 });
@@ -130,7 +132,12 @@ export function connectorFor(cwd: string | undefined | null): ConnectorInfo | nu
 export function openProviders(): void {
   if (!providersEnabled() || !app.conn) return;
   providers.open = true;
-  if (!providers.loaded) app.conn.authStatus();
+  refreshProviders();
+}
+export function refreshProviders(): void {
+  if (!providersEnabled() || !app.conn) return;
+  providers.error = "";
+  app.conn.authStatus();
 }
 export function closeProviders(): void {
   providers.open = false;
@@ -138,7 +145,11 @@ export function closeProviders(): void {
 export function loginProvider(id: string, credential: string): void {
   if (!providersEnabled() || !app.conn) return;
   providers.pending = true;
-  app.conn.authLogin(id, credential);
+  providers.error = "";
+  if (!app.conn.authLogin(id, credential)) {
+    providers.pending = false;
+    providers.error = "Not sent: reconnect before pasting a credential again.";
+  }
 }
 export function logoutProvider(id: string): void {
   if (!providersEnabled() || !app.conn) return;
@@ -213,10 +224,16 @@ export function onConnectorsControl(env: Envelope): void {
   if (env.event === "x-agentlinkd.auth.status") {
     const d = env.data as AuthStatusReply;
     if (!d || !Array.isArray(d.providers)) return;
+    if (d.providers.length === 0) {
+      providers.pending = false;
+      providers.error = "Provider status is unavailable. The last known list is kept; refresh after checking the host.";
+      return;
+    }
+    providers.error = "";
     providers.items = d.providers.map((p) => ({ ...p }));
     providers.active = d.active;
     providers.loaded = true;
-    if (Array.isArray(d.model_catalog)) app.modelCatalog = d.model_catalog.map((g) => ({ ...g, models: [...g.models] }));
+    if (Array.isArray(d.model_catalog) && d.model_catalog.length > 0) app.modelCatalog = d.model_catalog.map((g) => ({ ...g, models: [...g.models] }));
     if (d.changed) {
       providers.pending = false;
       const p = providers.items.find((x) => x.id === d.changed);
@@ -242,6 +259,7 @@ export function onConnectorsControl(env: Envelope): void {
       pushToast("warn", d.message);
     } else if (d.cmd.startsWith("x-agentlinkd.auth.")) {
       providers.pending = false;
+      providers.error = d.message;
       pushToast("warn", d.message);
     }
   }

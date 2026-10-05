@@ -77,10 +77,15 @@ repaired and the host restarted; it is never treated as an empty delivery histor
 
 ## Background compaction (G8)
 
-Opt in by starting the host with `DEXT_BACKGROUND_COMPACT=1`; the environment
-is passed to core children. Off by default. CORE owns the immutable summary
-worker, pair-safe prefix, validity checks, cancellation, persistence, usage,
-and application. The UI adds no worker or dependencies.
+Background compaction defaults on with CORE `df69d873` or newer. Open **This
+session > Context** to turn background summaries on or off between turns;
+`/compact background [on|off|status]` provides the same control. This is a
+saved session preference, not a device setting. `DEXT_BACKGROUND_COMPACT=0`
+sets the default for new/legacy sessions only; saved preferences win.
+CORE owns the immutable summary worker, pair-safe prefix, validity checks,
+cancellation, persistence, usage, and application. The UI adds no worker or
+dependencies. Regular manual and automatic compaction remain available when
+background summaries are off, failed, stale or insufficient.
 
 The separate `background_compaction` v1 event contains:
 `{version,session_id,session_epoch,job_id,origin_turn_id,phase,blocking,reason,elapsed_ms,wait_ms,before_chars,after_chars?,usage_known}`.
@@ -113,8 +118,28 @@ installation. `post_compact` fires only on application. Usage comes only
 from authoritative `usage_update.session`; per-turn `turn_end.usage` never
 replaces cumulative session totals.
 
-Verification: regular tests cover job validation, late phases, cancellation,
-reconnect, child death, background-only host restart, buffered application,
+The host advertises `background_compaction_setting` only when the persistent
+core advertises `--background-compact`. Metadata carries `background_compact`;
+the host index stores `backgroundCompact`. The saved Boolean is supplied with
+`--background-compact=on|off` on each child spawn, after resume. Missing legacy
+host preferences use the core checkpoint header, then startup ready (never an
+earlier resume setting event). Kept forks copy the preference but no worker.
+
+Setting changes reserve session admission separately from user turns. CORE's
+`background_compaction_setting {enabled}` confirms a saved change or status;
+stdin routing acknowledgements are not success receipts. Off settles the idle
+worker without installing its candidate. Refused/failed/terminated changes
+return correlated errors, never success ACKs, including same-nonce replay.
+After a failed save, an idle status query resyncs CORE's safely-off in-memory
+value; the original change still reports failure. Snapshots and seq-only
+reconnects include the current value and pending admission state. Nonforced
+host restart waits for setting settlement.
+
+Verification: regular tests cover setting defaults, per-session scope,
+pre-ready fencing, failures/refusals, persistence, reconnect, restart admission,
+interrupt, and normal-compaction fallback, as well as job validation, late
+phases, cancellation, reconnect, child death, background-only host restart,
+buffered application,
 legacy fold parity and accounting. Browser checks cover normal input, reload,
 wait/apply, mobile Stop/Escape and draft preservation. The explicit gate
 `DEXT_CORE_BIN=/verified/dext npm run test:core` uses a temporary host/core

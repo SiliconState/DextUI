@@ -90,6 +90,7 @@ import Meter from "./Meter.svelte";
   const hasSessionCtl = $derived(
     (app.caps.includes("model_select") && app.modelCatalog.length > 0) ||
       (app.caps.includes("effort_select") && app.effortOptions.length > 0) ||
+      app.caps.includes("background_compaction_setting") ||
       !!view.approvalProfile,
   );
   const chipLabel = $derived(

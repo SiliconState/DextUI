@@ -11,10 +11,13 @@ import { spawnSync } from "node:child_process";
 
 const DEXT = process.env.DEXT_BIN ?? path.join(os.homedir(), "Dext", "target", "release", "dext");
 const have = fs.existsSync(DEXT);
-const run = (args) => {
-  const r = spawnSync(DEXT, args, { encoding: "utf8", env: { ...process.env, DEXT_NO_TUI: "1" }, timeout: 15_000 });
-  return r.status === 0 ? r.stdout : "";
-};
+function run(args, home) {
+  const env = { ...process.env, HOME: home, DEXT_HOME: home, DEXT_NO_TUI: "1" };
+  delete env.DEXT_SESSIONS_DIR; delete env.DEXT_LOGS_DIR;
+  const r = spawnSync(DEXT, args, { encoding: "utf8", env, timeout: 15_000 });
+  assert.equal(r.status, 0, `auth inspection failed: ${r.stderr}`);
+  return r.stdout;
+}
 
 // Same regexes as server.mjs parseModels/parseProviderStatus (kept in sync by
 // this test's prose sample; server.mjs is not importable without booting).
@@ -57,9 +60,12 @@ test("prose parsers pin the documented dext auth format", () => {
   assert.deepEqual(s.providers.map((p) => [p.id, p.model, p.active]), [["anthropic", "claude-a", true], ["openai", "gpt", false]]);
 });
 
-test("real dext: auth status/models yield >=1 provider via JSON or prose", { skip: !have && "dext binary not found" }, () => {
-  const statusJson = run(["auth", "status", "--json"]);
-  const modelsJson = run(["auth", "models", "--json"]);
+test("real dext: auth status/models yield >=1 provider via JSON or prose", { skip: !have && "dext binary not found" }, (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "dext-auth-format-"));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const inspect = (args) => run(args, home);
+  const statusJson = inspect(["auth", "status", "--json"]);
+  const modelsJson = inspect(["auth", "models", "--json"]);
   let sj = null;
   let mj = null;
   try { sj = JSON.parse(statusJson); } catch { /* prose binary */ }
@@ -77,8 +83,8 @@ test("real dext: auth status/models yield >=1 provider via JSON or prose", { ski
     assert.equal(mj.version, 1);
     assert.ok(mj.providers.some((p) => Array.isArray(p.models) && p.models.length > 0), "models --json has models");
   } else {
-    const s = parseStatus(run(["auth", "status"]));
+    const s = parseStatus(inspect(["auth", "status"]));
     assert.ok(s.providers.length >= 1, "prose status yields providers — dext auth format changed?");
-    assert.ok(parseModels(run(["auth", "models"])).length >= 1, "prose models yields groups — dext auth format changed?");
+    assert.ok(parseModels(inspect(["auth", "models"])).length >= 1, "prose models yields groups — dext auth format changed?");
   }
 });

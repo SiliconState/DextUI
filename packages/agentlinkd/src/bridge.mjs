@@ -41,10 +41,11 @@ export function probePackUiSupport(dextOutput) {
 /** Build argv for a bridged child; `resume` replays the seat's session —
  *  `true` = the seat's latest in this project, a string = an explicit session
  *  dir/file (needed after a folder change: seat records are project-scoped). */
-export function bridgeArgs({ cwd, approval, effort, seat, resume }) {
+export function bridgeArgs({ cwd, approval, effort, seat, resume, backgroundCompact }) {
   const args = ["--input", "ndjson", "--output", "stream-json", "--cd", cwd, "--approval", approval, "--effort", effort, "--seat", seat];
   if (typeof resume === "string" && resume) args.push(`--resume=${resume}`);
   else if (resume) args.push("--resume");
+  if (typeof backgroundCompact === "boolean") args.push(`--background-compact=${backgroundCompact ? "on" : "off"}`);
   return args;
 }
 

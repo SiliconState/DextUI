@@ -30,7 +30,7 @@
     app.phase === "live" &&
       app.caps.includes("model_select") &&
       view.status === "live" &&
-      !view.working && !view.compacting && !view.modelLocked && app.modelCatalog.length > 0,
+      !view.working && !view.compacting && !view.backgroundCompactPending && !view.modelLocked && app.modelCatalog.length > 0,
   );
   // With the bridge (steering.live), /effort is a runtime control dext applies
   // mid-turn, so the selector stays enabled while working.
@@ -39,7 +39,7 @@
     app.phase === "live" &&
       app.caps.includes("effort_select") &&
       view.status === "live" &&
-      !view.compacting &&
+      !view.compacting && !view.backgroundCompactPending &&
       (liveEffort || !view.working) && app.effortOptions.length > 0,
   );
 
@@ -67,7 +67,7 @@
     never: "Deny all actions",
   };
   const canSetApproval = $derived(
-    app.phase === "live" && app.caps.includes("slash.approval") && view.status === "live" && !view.compacting,
+    app.phase === "live" && app.caps.includes("slash.approval") && view.status === "live" && !view.compacting && !view.backgroundCompactPending,
   );
   const approvalOptions = $derived.by(() => {
     const base = ["ask", "auto-read", "auto-write"];
@@ -80,8 +80,16 @@
     if (v && v !== view.approvalProfile) app.conn?.slash(view.id, `/approval ${v}`);
   }
 
+  const canSetBackground = $derived(app.phase === "live" && app.caps.includes("background_compaction_setting") && (view.status === "live" || view.status === "cold") && !view.working && !view.compacting && !view.backgroundCompactPending);
+  function selectBackground(e: Event) {
+    const select = e.currentTarget as HTMLSelectElement;
+    const enabled = select.value === "on";
+    select.value = view.backgroundCompact === false ? "off" : "on";
+    if (canSetBackground && enabled !== view.backgroundCompact) app.conn?.slash(view.id, `/compact background ${enabled ? "on" : "off"}`);
+  }
+
   let forkSeq = $state("");
-  const canFork = $derived(app.phase === "live" && app.caps.includes("session_fork") && !view.working && !view.compacting && !view.backgroundCompaction);
+  const canFork = $derived(app.phase === "live" && app.caps.includes("session_fork") && !view.working && !view.compacting && !view.backgroundCompaction && !view.backgroundCompactPending);
   function fork() {
     const at = forkSeq.trim() ? Number(forkSeq) : undefined;
     if (!canFork || (at !== undefined && (!Number.isSafeInteger(at) || at < 0))) return;
@@ -182,6 +190,16 @@
         {:else}
           <span class="appr-val" data-agent-id="status.profile" title="Approval profile — {view.approvalProfile}">{APPROVAL_LABELS[view.approvalProfile] ?? view.approvalProfile}</span>
         {/if}
+      </div>
+    {/if}
+    {#if app.caps.includes("background_compaction_setting")}
+      <div class="sec">
+        <label class="lbl" for="background-compact">Context</label>
+        <select id="background-compact" class="ctl" value={view.backgroundCompact === false ? "off" : "on"} onchange={selectBackground} disabled={!canSetBackground} data-agent-id="session.background.select" data-state={view.backgroundCompactPending ? "pending" : canSetBackground ? "ready" : "disabled"} title="Background summaries for this session; changes apply between turns">
+          <option value="on">Background summaries on</option>
+          <option value="off">Background summaries off</option>
+        </select>
+        <span class="hint">{view.backgroundCompactPending ? "Saving this session’s preference…" : "Saved for this session. Regular compaction stays available when off."}</span>
       </div>
     {/if}
     {#if app.caps.includes("session_fork")}

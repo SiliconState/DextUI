@@ -109,7 +109,7 @@
   const canSend = $derived(
     (text.trim().length > 0 || atts.some((a) => a.status === "done")) &&
       !uploading &&
-      !view.compacting &&
+      !view.compacting && !view.backgroundCompactPending &&
       app.phase === "live" &&
       app.activeId !== "" &&
       live &&

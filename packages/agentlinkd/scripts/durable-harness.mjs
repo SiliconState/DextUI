@@ -10,7 +10,7 @@ export async function until(fn, message = "condition timed out") {
   for (let i = 0; i < 200; i++) { const value = fn(); if (value) return value; await sleep(20); }
   throw new Error(message);
 }
-export async function durableHost(t, { bridge = false, args = [], env = {}, bin, setup } = {}) {
+export async function durableHost(t, { bridge = false, args = [], env = {}, bin, setup, umask } = {}) {
   const root = path.resolve("packages/agentlinkd");
   // Real core checkpoints must not discover the surrounding UI repository:
   // concurrent fake-host tests legitimately mutate scratch files there.
@@ -58,10 +58,13 @@ export async function durableHost(t, { bridge = false, args = [], env = {}, bin,
     // operator paths into isolated tests; use the temporary DEXT_HOME layout.
     if (!env.DEXT_SESSIONS_DIR) delete childEnv.DEXT_SESSIONS_DIR;
     if (!env.DEXT_LOGS_DIR) delete childEnv.DEXT_LOGS_DIR;
-    child = spawn(process.execPath, [path.join(root, "src/server.mjs"), "--port=0", "--token=durable-test-token", `--cwd=${cwd}`, `--state-dir=${state}`, `--crew=${env.CREW_BIN ?? `${temp}/no-crew`}`, `--dext=${bin ?? `${root}/scripts/fake-dext.mjs`}`, ...args, ...extra], {
-      env: childEnv,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    const oldMask = umask === undefined ? undefined : process.umask(umask);
+    try {
+      child = spawn(process.execPath, [path.join(root, "src/server.mjs"), "--port=0", "--token=durable-test-token", `--cwd=${cwd}`, `--state-dir=${state}`, `--crew=${env.CREW_BIN ?? `${temp}/no-crew`}`, `--dext=${bin ?? `${root}/scripts/fake-dext.mjs`}`, ...args, ...extra], {
+        env: childEnv,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+    } finally { if (oldMask !== undefined) process.umask(oldMask); }
     child.stderr.on("data", (b) => stderr += b);
     let stdout = ""; child.stdout.on("data", (b) => stdout += b);
     const match = await until(() => /listening on (http:\/\/127\.0\.0\.1:\d+)/.exec(stdout), stderr);

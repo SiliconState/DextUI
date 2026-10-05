@@ -8,7 +8,7 @@
   // OAuth flows are not offered in-app: the host may be headless or paired
   // over LAN, so browser-only providers sign in from the host's terminal.
   import type { ProviderAuth } from "@dextui/protocol";
-  import { providers, closeProviders, loginProvider, logoutProvider } from "../lib/connectors.svelte";
+  import { providers, closeProviders, refreshProviders, loginProvider, logoutProvider } from "../lib/connectors.svelte";
   import { useDialog } from "../lib/dialog.svelte";
 
   const dlg = useDialog(() => providers.open);
@@ -80,11 +80,13 @@
       <span class="dim">Who runs your models</span>
       {#if providers.pending}<span class="faint pulse saving" data-agent-id="providers.saving">saving…</span>{/if}
       <span class="insp-acts">
+        <button class="act" data-agent-id="providers.refresh" onclick={refreshProviders}>Refresh</button>
         <button class="act" data-agent-id="providers.close" onclick={closeProviders}>esc</button>
       </span>
     </div>
     <div class="insp-body">
-      {#if !providers.loaded}
+      {#if providers.error}<p role="alert" class="provider-error" data-agent-id="providers.error">{providers.error}</p>{/if}
+      {#if !providers.loaded && !providers.error}
         <p class="dim">Loading…</p>
       {:else if ordered.length === 0}
         <p class="dim empty">No model providers found on this host yet.</p>
@@ -144,6 +146,12 @@
   }
   .saving {
     font-size: 0.85em;
+  }
+  .provider-error {
+    padding: 8px;
+    border: 1px solid var(--line);
+    color: var(--yellow);
+    overflow-wrap: anywhere;
   }
   .empty {
     text-align: center;
