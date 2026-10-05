@@ -120,7 +120,9 @@ wait/apply, mobile Stop/Escape and draft preservation. The explicit gate
 `DEXT_CORE_BIN=/verified/dext npm run test:core` uses a temporary host/core
 and loopback barrier provider: two foreground turns finish while one summary
 is withheld, then idle application preserves both prompts, persists history
-and accounts summary usage once. Reported wall times demonstrate overlap,
+and accounts summary usage once. A test-owned `post_compact` hook observes only
+the installed summary, exactly once after idle application, without starting a
+user turn. Reported wall times demonstrate overlap,
 not a production speedup benchmark; live paid-provider behavior is unverified.
 
 ## Kept forks (G5)
@@ -152,4 +154,39 @@ preservation, new identity, no provider request during fork, host restart and
 independent continuation. Mock/browser coverage verifies controls, new-session
 selection and preserved visible history.
 
+## Foreground crew interruption (G7)
 
+Stop matches crew manifests by the core session identity, persisted from
+`ready.session_id` (or recovered from a kept checkpoint), not by the UI session
+id. Only `owner:{session,call_id,mode:"foreground"}` runs with pending, running
+or paused status participate. Background, unrelated, legacy unowned and terminal
+runs are left alone. Ownership discovery is fresh and uncapped even though Team
+summaries show at most eight runs. Default project roots and workspace
+`.crew/runs` are scanned; symlinked paths and mismatched manifest ids are refused.
+Crew's bounded portable run ids include keyed `key-...` and custom ids.
+
+The host first awaits `crew stop <manifest>` for each matching run, with a
+45-second limit covering crew's leased abort cleanup budget. Concurrent stops
+coalesce by manifest path. Reviewed `on_abort` commands require crew's explicit
+`--allow-verify` authorization; the UI never silently authorizes cleanup.
+Each result is reported through `x-agentlinkd.crew.control`; failures also warn
+in the session, including uncertain cleanup requiring operator inspection.
+Only after that cascade does the host interrupt the captured parent child/turn.
+Child, bridge, epoch and turn identity fences prevent a late stop from killing
+a replacement; a naturally finished idle bridge stays warm.
+
+Prompt, steering, timers and session management cannot advance that session
+while cleanup is in progress, and queued input does not auto-drain. Repeated
+interrupts share the current cascade. Deliberate stops do not become G1 restart
+recovery. Cleanup failure is visible, not proof that all work stopped; background
+work deliberately survives and remains independently controllable.
+
+Verification: `npm test` includes owned-discovery, path collisions, fresh reads,
+foreground filtering, busy admission and finishing-parent regressions. The
+explicit Linux gate
+`DEXT_CORE_BIN=/verified/dext DEXT_CREW_BIN=/verified/crew npm run test:crew-core`
+uses a loopback provider and actual custom/keyed crew runs with test-owned
+workers. It checks cleanup before parent interruption, one cleanup execution,
+foreground reaping, same-session background survival and repeated-stop safety.
+Real-core workspaces live outside the checkout so checkpoint capture cannot
+race other tests' repository scratch files. No live host/state is used.

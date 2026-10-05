@@ -23,13 +23,14 @@ for (const enabled of [true, false]) test(`real host/core background compaction 
     bin: process.env.DEXT_CORE_BIN,
     env: { DEXT_PROVIDER: "local", DEXT_MODEL: "mock-model", DEXT_MODEL_FORCE: "1", DEXT_BASE_URL: `http://127.0.0.1:${provider.address().port}`, DEXT_BACKGROUND_COMPACT: enabled ? "1" : "0" },
     setup({ home, state, cwd }) {
+      fs.writeFileSync(path.join(cwd, "hooks.json"), JSON.stringify({ post_compact: [{ command: "printf '%s\\n' \"$DEXT_COMPACT_SUMMARY\" >> hook-observed" }] }));
       const dir = path.join(home, "projects", "fixture", "sessions", "background-source"); fs.mkdirSync(dir, { recursive: true });
       const transcript = path.join(dir, "_latest.jsonl");
       const header = { version: 4, model: "mock-model", system: "test", session_id: "background-source", sandbox: cwd, compact_threshold_chars: 30000, seat: { id: "dextui-01234567" } };
       const history = Array.from({ length: 12 }, (_, i) => ({ role: i % 2 ? "assistant" : "user", content: [{ type: "text", text: "context ".repeat(250) }] }));
       fs.writeFileSync(transcript, [header, ...history].map(JSON.stringify).join("\n") + "\n");
       fs.mkdirSync(state, { recursive: true });
-      fs.writeFileSync(path.join(state, "sessions.json"), JSON.stringify([{ id: "sess_123", title: "Background test", cwd, seat: header.seat.id, provider: "local", model: "mock-model", turns: 1, moved: true, approval: "never" }]));
+      fs.writeFileSync(path.join(state, "sessions.json"), JSON.stringify([{ id: "sess_123", title: "Background test", cwd, seat: header.seat.id, provider: "local", model: "mock-model", turns: 1, moved: true, approval: "always" }]));
     },
   });
   const c = await h.client(); const id = "sess_123";
@@ -46,6 +47,7 @@ for (const enabled of [true, false]) test(`real host/core background compaction 
   await until(() => summaryResponse);
   assert.ok(c.events.some((e) => e.event === "background_compaction" && e.data.phase === "running"));
   assert.ok(!c.events.some((e) => e.event === "compact_end"));
+  assert.equal(fs.existsSync(path.join(h.cwd, "hook-observed")), false, "observer must not run while summary is computing");
   assert.equal(h.index()[0].working, false);
   const reconnect = await h.client(); reconnect.send("session.subscribe", { id });
   const snap = await reconnect.wait((e) => e.event === "session.snapshot");
@@ -84,5 +86,8 @@ for (const enabled of [true, false]) test(`real host/core background compaction 
   const saved = transcripts.find((text) => text.includes("Installed background summary"));
   assert.ok(saved, "owner persisted installed history before application events");
   assert.ok(saved.includes("First foreground task")); assert.ok(saved.includes("Second foreground task while summarizing"));
+  await until(() => fs.existsSync(path.join(h.cwd, "hook-observed")));
+  assert.equal(fs.readFileSync(path.join(h.cwd, "hook-observed"), "utf8"), "Installed background summary\n", "post_compact observes the installed summary exactly once");
+  assert.equal(h.index()[0].working, false, "observer does not start a user turn");
   t.diagnostic(`barrier overlap: first foreground=${foregroundMs}ms, idle apply total=${totalMs}ms; summary withheld through both foreground turns; not a speedup benchmark`);
 });

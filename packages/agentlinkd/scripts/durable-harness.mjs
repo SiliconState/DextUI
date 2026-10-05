@@ -2,6 +2,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
+import os from "node:os";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -11,7 +12,9 @@ export async function until(fn, message = "condition timed out") {
 }
 export async function durableHost(t, { bridge = false, args = [], env = {}, bin, setup } = {}) {
   const root = path.resolve("packages/agentlinkd");
-  const temp = fs.mkdtempSync(path.join(root, ".durable-test-"));
+  // Real core checkpoints must not discover the surrounding UI repository:
+  // concurrent fake-host tests legitimately mutate scratch files there.
+  const temp = fs.mkdtempSync(path.join(bin ? os.tmpdir() : root, ".durable-test-"));
   const home = path.join(temp, "home");
   const state = path.join(temp, "state");
   const cwd = path.join(temp, "workspace");
@@ -55,7 +58,7 @@ export async function durableHost(t, { bridge = false, args = [], env = {}, bin,
     // operator paths into isolated tests; use the temporary DEXT_HOME layout.
     if (!env.DEXT_SESSIONS_DIR) delete childEnv.DEXT_SESSIONS_DIR;
     if (!env.DEXT_LOGS_DIR) delete childEnv.DEXT_LOGS_DIR;
-    child = spawn(process.execPath, [path.join(root, "src/server.mjs"), "--port=0", "--token=durable-test-token", `--cwd=${cwd}`, `--state-dir=${state}`, `--crew=${temp}/no-crew`, `--dext=${bin ?? `${root}/scripts/fake-dext.mjs`}`, ...args, ...extra], {
+    child = spawn(process.execPath, [path.join(root, "src/server.mjs"), "--port=0", "--token=durable-test-token", `--cwd=${cwd}`, `--state-dir=${state}`, `--crew=${env.CREW_BIN ?? `${temp}/no-crew`}`, `--dext=${bin ?? `${root}/scripts/fake-dext.mjs`}`, ...args, ...extra], {
       env: childEnv,
       stdio: ["ignore", "pipe", "pipe"],
     });

@@ -928,7 +928,8 @@ function indexEntryOf(s) {
     ...(s.cleanup ? { cleanup: s.cleanup } : {}),
     ...(s.steeringQueue.length > 0 ? { steeringQueue: [...s.steeringQueue] } : {}),
     turns: s.turns,
-    working: s.working && s.status === "live" && !s.killed,
+    dextSessionId: s.dextSessionId ?? null,
+    working: s.working && s.status === "live" && !s.killed && !s.interrupting,
     turnNonce: s.turnNonce ?? null,
     autoResumeAttempted: s.autoResumeAttempted ?? null,
     createdAt: s.createdAt,
@@ -1090,6 +1091,7 @@ function restoreSessions() {
       journal: [],
       pending: new Map(), // always empty: approvals live in dext's own policy
       turns: Number.isInteger(e.turns) && e.turns >= 0 ? e.turns : 0,
+      dextSessionId: typeof e.dextSessionId === "string" ? e.dextSessionId : null,
       child: null,
       killed: false,
       compacting: false,
@@ -1494,7 +1496,7 @@ function handleBridgeEvent(s, v) {
       // Turn boundary: queued steering auto-starts the next turn (parity with
       // the one-shot engine). Skipped when closed or interrupted; the queue
       // survives for the next prompt instead.
-      if (s.status === "live" && !s.killed && s.steeringQueue.length > 0) {
+      if (s.status === "live" && !s.killed && !s.interrupting && s.steeringQueue.length > 0) {
         const text = s.steeringQueue.join("\n\n");
         s.steeringQueue = [];
         persistIndex();
@@ -1804,7 +1806,7 @@ function runTurn(s, prompt, options) {
     // never has to stop the session to be heard. Skipped when the session was
     // closed or the turn was interrupted; the queue survives for the next
     // prompt instead.
-    if (sawTurnEnd && s.status === "live" && !s.killed && s.steeringQueue.length > 0) {
+    if (sawTurnEnd && s.status === "live" && !s.killed && !s.interrupting && s.steeringQueue.length > 0) {
       const text = s.steeringQueue.join("\n\n");
       s.steeringQueue = [];
       persistIndex();
@@ -1904,6 +1906,7 @@ function killChild(s, interrupted = true) {
 // next turn's prompt at the turn boundary. Journaled as steering_received so
 // every subscribed client sees the ack immediately.
 function queueSteering(s, text) {
+  if (s.interrupting) return false;
   if (s.bridge && !s.bridge.exited && s.bridge.ready && s.working) {
     // Live: dext folds it into the running turn (its own steering_received
     // marks the fold); this row is the immediate "heard you" ack.
@@ -1928,6 +1931,13 @@ function wakeSession(s) {
   publish(journalData(s, "session.state", { status: "live" }));
   persistIndex();
   scheduleList();
+}
+
+function readCoreSessionId(s) {
+  const dir = findDextSessionDir(s);
+  if (!dir) return null;
+  try { return readForkSource(path.join(dir, "_latest.jsonl"), s.seat).header.session_id; }
+  catch { return null; }
 }
 
 // ---------- kept fork ----------
@@ -2064,6 +2074,7 @@ function finishCleanup(s, by) {
 }
 
 async function manageSession(s, action, by) {
+  if (s.interrupting) throw new Error("owned foreground work is stopping");
   if (s.managing) throw new Error("session cleanup already in progress");
   if (s.cleanup && s.cleanup.action !== action) throw new Error(`retry session.${s.cleanup.action} first`);
   s.managing = true;
@@ -2426,6 +2437,7 @@ async function handlePackSlash(client, s, cmd) {
  *  dedup is restart-durable: a replay after a host restart is still a
  *  duplicate, never a second run. */
 function submitPrompt(s, incoming, nonce, options = {}) {
+  if (s.interrupting) throw new Error("owned foreground work is stopping");
   let text = incoming;
   const queued = s.steeringQueue;
   if (queued.length > 0) {
@@ -2458,7 +2470,7 @@ function submitTimerPrompt(cwd, timer, nonce) {
   const s = sessions.get(timer.session);
   if (!s || path.resolve(s.cwd) !== path.resolve(cwd)) return { error: "no_session_in_workspace" };
   if (s.journal.some((e) => e.event === "user_message" && e.data?.nonce === nonce)) return { ok: true, duplicate: true };
-  if (shuttingDown || s.deleted || s.cleanup || s.managing || s.resumeInterrupted || s.working || s.compacting || s.compactRequested) return { error: "session_busy" };
+  if (shuttingDown || s.deleted || s.cleanup || s.managing || s.forking || s.interrupting || s.resumeInterrupted || s.working || s.compacting || s.compactRequested) return { error: "session_busy" };
   submitPrompt(s, timer.prompt, nonce, { durableRequired: true });
   return { ok: true };
 }
@@ -2558,6 +2570,7 @@ async function handleCommand(client, frame) {
   }
   if (client.phase !== "live") return;
   const target = sessions.get(frame.id ?? frame.session);
+  if (target?.interrupting && !["interrupt", "session.subscribe", "session.unsubscribe"].includes(frame.cmd)) return sendError(client, "busy", "owned foreground work is stopping", frame.cmd);
   if (target?.forking && frame.cmd !== "session.unsubscribe") return sendError(client, "busy", "session fork in progress", frame.cmd);
   if (target && (target.managing || target.cleanup) &&
       !["session.delete", "session.clear", "session.unsubscribe"].includes(frame.cmd)) {
@@ -2889,6 +2902,31 @@ async function handleCommand(client, frame) {
         sendError(client, "no_session", `unknown session ${frame.session}`);
         return;
       }
+      if (s.interrupting) return; // one cascade/parent interrupt per active stop
+      const parent = { epoch: s.epoch, turn: s.turnNonce, child: s.child, bridge: s.bridge };
+      // Stop owned crew work before signalling the parent tool process group:
+      // otherwise that signal could kill the leased cleanup owner mid-hook.
+      if (CREW) {
+        const sessionId = s.dextSessionId ?? readCoreSessionId(s);
+        if (sessionId && CREW.foregroundOwned(sessionId).length) {
+          s.killed = true; // prevents queued-turn drain and crash auto-resume
+          persistIndex();
+          s.interrupting = CREW.stopOwned(sessionId);
+        }
+      }
+      if (s.interrupting) {
+        try {
+          const results = await s.interrupting;
+          for (const r of results) {
+            broadcastControl("x-agentlinkd.crew.control", { ...r, verb: "stop", by: client.id });
+            if (!r.ok) publish(journalData(s, "warn", `crew ${r.run} stop failed: ${r.message}`));
+          }
+        } catch (err) { publish(journalData(s, "warn", `owned crew stop failed: ${err.message}`)); }
+        finally { s.interrupting = null; }
+      }
+      // Cleanup can outlive the parent turn, or a deferred recycle can replace
+      // its child. Never signal a different child/turn after the await.
+      if (s.deleted || s.epoch !== parent.epoch || s.turnNonce !== parent.turn || s.child !== parent.child || s.bridge !== parent.bridge) return;
       // Idle persistent bridge: no turn in flight. Killing the warm child
       // would drop the live seat and approval wiring for nothing; the
       // interruptible part is any queued steering.

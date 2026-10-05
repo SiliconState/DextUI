@@ -14,7 +14,8 @@ import { execFile } from "node:child_process";
 import { createContinuationMonitor } from "./crew-continuation.mjs";
 import { checkedPath } from "./session-files.mjs";
 
-export const RUN_ID_RE = /^run-[a-f0-9]{12}$/;
+// Match crew's portable validate_run_id grammar, including keyed/custom ids.
+export const RUN_ID_RE = /^(?!\.{1,2}$)[A-Za-z0-9_.-]{1,64}$/;
 export const SUMMARY_CAP = 8;
 export const TAIL_MAX_LINES = 80;
 const TAIL_READ_BYTES = 64 * 1024;
@@ -272,6 +273,8 @@ export function createCrewAdapter({ roots = [], crewBin = "crew", dextBin, env =
   const watched = new Set();
   const watchers = new Set();
   const inflight = new Set(); // run ids with a resume in progress (first answer wins)
+  const stopping = new Map(); // manifest path -> shared stop result
+  const ownerRecords = new Map(); // uncapped path identities; display ids may collide across roots
   let timer = null;
   let heartbeat = null;
   let lastPayload = "";
@@ -288,10 +291,10 @@ export function createCrewAdapter({ roots = [], crewBin = "crew", dextBin, env =
     return e;
   }
 
-  function scanRoot(root, seen, now) {
+  function scanRoot(root, seen, now, paths, force) {
     let entries;
     try {
-      if (!fs.existsSync(root) || fs.lstatSync(root).isSymbolicLink()) return;
+      if (!checkedPath(root)) return;
       entries = fs.readdirSync(root, { withFileTypes: true });
     } catch {
       return;
@@ -300,8 +303,8 @@ export function createCrewAdapter({ roots = [], crewBin = "crew", dextBin, env =
       if (!e.isDirectory()) continue;
       // Two layouts: `<cwd>/.crew/runs/run-*` (explicit --runs-dir) and crew's
       // default `~/.dext/crew/runs/project-<hash>/run-*` — one level deeper.
-      if (/^project-[a-f0-9]{16}$/.test(e.name)) {
-        scanRoot(path.join(root, e.name), seen, now);
+      if (/^project-[a-f0-9]{16}$/.test(e.name) && !fs.existsSync(path.join(root, e.name, "manifest.json"))) {
+        scanRoot(path.join(root, e.name), seen, now, paths, force);
         continue;
       }
       if (!RUN_ID_RE.test(e.name)) continue;
@@ -315,10 +318,14 @@ export function createCrewAdapter({ roots = [], crewBin = "crew", dextBin, env =
         continue;
       }
       seen.add(e.name);
+      paths.add(file);
       const prev = runs.get(e.name);
       const live = prev && (prev.summary.status === "running" || prev.summary.status === "pending" || prev.detail.continuation);
       // Re-read on mtime change; live runs also re-project so `.state` timing stays fresh.
-      if (prev && prev.mtimeMs === st.mtimeMs && !live) continue;
+      if (!force && prev && prev.dir === dir && prev.mtimeMs === st.mtimeMs && !live) {
+        ownerRecords.set(file, prev);
+        continue;
+      }
       try {
         const read = readJson(file, MANIFEST_CAP);
         if (!read) continue;
@@ -334,17 +341,22 @@ export function createCrewAdapter({ roots = [], crewBin = "crew", dextBin, env =
             proj.detail.paused_reason = launch.message || "continuation exited without a terminal manifest";
           }
         }
-        runs.set(e.name, { dir, manifest, mtimeMs: read.mtimeMs, detailKey: prev?.detailKey, ...proj });
+        const record = { dir, manifest, mtimeMs: read.mtimeMs, detailKey: prev?.detailKey, ...proj };
+        runs.set(e.name, record);
+        ownerRecords.set(file, record);
       } catch (err) {
         log(`crew: skipping ${file}: ${err.message}`);
       }
     }
   }
 
-  function scan() {
+  function scan(force = false) {
+    ownerRecords.clear(); // invalid/replaced manifests must never retain stale ownership
     const now = Date.now();
     const seen = new Set();
-    for (const root of roots) scanRoot(root, seen, now);
+    const paths = new Set();
+    for (const root of roots) scanRoot(root, seen, now, paths, force);
+    for (const file of ownerRecords.keys()) if (!paths.has(file)) ownerRecords.delete(file);
     for (const id of [...runs.keys()]) if (!seen.has(id)) runs.delete(id);
     // Ages tick even without disk changes; compare on the parts that matter.
     const payload = summaries();
@@ -492,22 +504,47 @@ export function createCrewAdapter({ roots = [], crewBin = "crew", dextBin, env =
     }
   }
 
-  function crew(args, cwd) {
+  function crew(args, cwd, timeout = 30_000) {
     return new Promise((resolve) => {
-      execFile(crewBin, args, { cwd, env: childEnv(), timeout: 30_000, maxBuffer: 1024 * 1024 }, (err, stdout, stderr) => {
+      execFile(crewBin, args, { cwd, env: childEnv(), timeout, maxBuffer: 1024 * 1024 }, (err, stdout, stderr) => {
         resolve({ ok: !err, out: String(stdout ?? ""), err: String(stderr ?? "").trim() || err?.message || "" });
       });
     });
+  }
+
+  async function stopRecord(r) {
+    const file = path.join(r.dir, "manifest.json");
+    if (stopping.has(file)) return stopping.get(file);
+    const pending = crew(["stop", file, "--cwd", r.summary.cwd || r.dir], r.summary.cwd || undefined, 45_000)
+      .then((res) => { schedule(); return { ok: res.ok, message: res.ok ? "stopped" : res.err.slice(0, 200) }; })
+      .finally(() => stopping.delete(file));
+    stopping.set(file, pending);
+    return pending;
   }
 
   async function stop(id) {
     const r = runs.get(id);
     if (!r) return { ok: false, message: "unknown run" };
     if (!["running", "pending", "paused"].includes(r.summary.status)) return { ok: false, message: `run is ${r.summary.status}` };
-    // Address the run by manifest path: independent of which runs root it lives in.
-    const res = await crew(["stop", path.join(r.dir, "manifest.json"), "--cwd", r.summary.cwd || r.dir], r.summary.cwd || undefined);
-    schedule();
-    return { ok: res.ok, message: res.ok ? "stopped" : res.err.slice(0, 200) };
+    return stopRecord(r);
+  }
+
+  /** Fresh, uncapped discovery by core owner identity; no background/legacy
+   * runs participate. Path keys prevent identical ids in separate roots from
+   * cancelling the wrong run. Stop promises coalesce concurrent interrupts. */
+  function foregroundOwned(sessionId) {
+    if (typeof sessionId !== "string" || !sessionId || sessionId.length > 256) return [];
+    scan(true);
+    return [...ownerRecords.values()].filter((r) => {
+      const owner = r.manifest.owner;
+      return owner && owner.session === sessionId && owner.mode === "foreground" &&
+        typeof owner.call_id === "string" && !!owner.call_id && owner.call_id.length <= 256 &&
+        ["pending", "running", "paused"].includes(r.manifest.status);
+    });
+  }
+  async function stopOwned(sessionId) {
+    const records = foregroundOwned(sessionId);
+    return Promise.all(records.map(async (r) => ({ run: r.summary.id, ...(await stopRecord(r)) })));
   }
 
   /** The crew owner records the answer and supervisor intent under its run lease. */
@@ -607,5 +644,5 @@ export function createCrewAdapter({ roots = [], crewBin = "crew", dextBin, env =
   heartbeat.unref();
   for (const root of [...roots]) addRoot(root);
   try { scan(); } catch (err) { log(`crew: initial scan failed: ${err.message}`); }
-  return { addRoot, scan, schedule, summaries, detail, tail, logSource, eventSource, file, stop, resume, remove, clearFinished, close, runs };
+  return { addRoot, scan, schedule, summaries, detail, tail, logSource, eventSource, file, stop, foregroundOwned, stopOwned, resume, remove, clearFinished, close, runs };
 }

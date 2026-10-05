@@ -1195,7 +1195,7 @@ export const CAPABILITIES = [
 
 /** Client commands under the crew extension (`cmd: "x-agentlinkd.crew.<verb>"`). */
 export const CREW_COMMANDS = ["open", "close", "tail", "file", "stop", "resume", "remove", "clear"] as const;
-export const CREW_RUN_ID_RE = /^run-[a-f0-9]{12}$/;
+export const CREW_RUN_ID_RE = /^(?!\.{1,2}$)[A-Za-z0-9_.-]{1,64}$/;
 
 // ---------- helpers ----------
 
