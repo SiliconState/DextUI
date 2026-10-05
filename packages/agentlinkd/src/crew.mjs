@@ -350,7 +350,7 @@ export function createCrewAdapter({ roots = [], crewBin = "crew", dextBin, env =
     }
   }
 
-  function scan(force = false) {
+  function scan(force = false, notify = true) {
     ownerRecords.clear(); // invalid/replaced manifests must never retain stale ownership
     const now = Date.now();
     const seen = new Set();
@@ -358,9 +358,13 @@ export function createCrewAdapter({ roots = [], crewBin = "crew", dextBin, env =
     for (const root of roots) scanRoot(root, seen, now, paths, force);
     for (const file of ownerRecords.keys()) if (!paths.has(file)) ownerRecords.delete(file);
     for (const id of [...runs.keys()]) if (!seen.has(id)) runs.delete(id);
+    if (!notify) return; // idle checks must not recursively publish/tick the host
     // Ages tick even without disk changes; compare on the parts that matter.
     const payload = summaries();
-    const key = JSON.stringify([payload.omitted, payload.runs.map((r) => [r.id, r.state, r.counts, r.task, r.escalation?.question ?? null])]);
+    // A hidden run can finish without changing the capped summaries. Still
+    // notify the host of uncapped activity transitions so queued restarts wake.
+    const activity = [...ownerRecords].map(([file, r]) => [file, r.manifest.status, r.detail.continuation?.state]);
+    const key = JSON.stringify([payload.omitted, payload.runs.map((r) => [r.id, r.state, r.counts, r.task, r.escalation?.question ?? null]), activity, [...stopping.keys()], [...inflight]]);
     if (key !== lastPayload) {
       lastPayload = key;
       onChanged?.(payload);
@@ -434,6 +438,21 @@ export function createCrewAdapter({ roots = [], crewBin = "crew", dextBin, env =
 
   function summaries() {
     return capRuns([...runs.values()].map((r) => r.summary));
+  }
+
+  /** Uncapped path identities, freshly read without publishing display changes. */
+  function activeRuns() {
+    scan(true, false);
+    const active = new Map([...ownerRecords.values()].filter((r) =>
+      ["pending", "running"].includes(r.manifest.status) || inflight.has(r.summary.id) ||
+      ["pending", "running", "unknown"].includes(r.detail.continuation?.state)
+    ).map((r) => {
+      const manifest = path.join(r.dir, "manifest.json");
+      return [manifest, { id: r.summary.id, manifest }];
+    }));
+    // A manifest can disappear/become unreadable before a leased stop exits.
+    for (const manifest of stopping.keys()) active.set(manifest, { id: path.basename(path.dirname(manifest)), manifest });
+    return [...active.values()];
   }
 
   function detail(id) {
@@ -644,5 +663,5 @@ export function createCrewAdapter({ roots = [], crewBin = "crew", dextBin, env =
   heartbeat.unref();
   for (const root of [...roots]) addRoot(root);
   try { scan(); } catch (err) { log(`crew: initial scan failed: ${err.message}`); }
-  return { addRoot, scan, schedule, summaries, detail, tail, logSource, eventSource, file, stop, foregroundOwned, stopOwned, resume, remove, clearFinished, close, runs };
+  return { addRoot, scan, schedule, summaries, activeRuns, detail, tail, logSource, eventSource, file, stop, foregroundOwned, stopOwned, resume, remove, clearFinished, close, runs };
 }

@@ -21,6 +21,7 @@ test("fork mapping uses exact complete message identities, not journal counts", 
   for (const n of [-1, 2.5, 999]) assert.throws(() => forkBoundary(messages, journal, n));
   assert.throws(() => forkBoundary([...messages, messages[0]], journal, 8), /ambiguous/);
   assert.throws(() => forkBoundary(messages.slice(1), journal, 8), /compacted away/);
+  assert.throws(() => forkBoundary([{ role: "user", content: [{ type: "tool_result" }] }], [{ seq: 1, event: "tool_call_result", data: {} }], 1), /ambiguous/);
 });
 test("fork projection excludes control state and reconstructs only retained messages", () => {
   const events = forkEvents(messages);
@@ -37,5 +38,9 @@ test("fork source refuses linked, invalid and wrong-seat checkpoints", (t) => {
   assert.throws(() => readForkSource(file, "dextui-other"), /identity/);
   fs.symlinkSync(file, path.join(root, "linked.jsonl"));
   assert.throws(() => readForkSource(path.join(root, "linked.jsonl"), "dextui-1234"), /symlink/);
+  for (const content of [[null], [123], [{}]]) {
+    fs.writeFileSync(file, [header, { role: "user", content }].map(JSON.stringify).join("\n") + "\n");
+    assert.throws(() => readForkSource(file, "dextui-1234"), /invalid messages/);
+  }
   fs.writeFileSync(file, "{"); assert.throws(() => readForkSource(file, "dextui-1234"));
 });

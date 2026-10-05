@@ -841,7 +841,11 @@ function handleCommand(client, frame) {
       const fork = makeSession({ title: `${source.title} (fork)`, fixture: null, approvalFlow: false, live: true });
       fork.cwd = source.cwd; fork.model = source.model; fork.provider = source.provider;
       const cutoff = frame.at_seq ?? source.seq;
-      for (const e of source.journal.filter((e) => e.seq <= cutoff)) journalData(fork, e.event, e.data);
+      const retained = new Set(["user_message", "text_block_complete", "thinking_block_complete", "tool_call_preview", "tool_call_start", "tool_call_result", "compact_end"]);
+      for (const e of source.journal.filter((e) => e.seq <= cutoff && retained.has(e.event))) {
+        const data = e.event === "user_message" ? { text: e.data.text } : e.data;
+        journalData(fork, e.event, data);
+      }
       publish(journalData(fork, "turn_end", { usage: usage(0, 0), failed: false }));
       sendControl(client, "session.forked", { meta: metaOf(fork), source_id: source.id, seat: `mock-${fork.id}`, session_id: `core-${fork.id}`, at: cutoff });
       return;

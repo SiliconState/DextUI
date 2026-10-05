@@ -765,12 +765,14 @@ export class Connection {
         break;
       }
       case "error": {
-        const d = env.data as { code: string; message: string; cmd?: string; data?: Record<string, unknown> };
-        // A rejection answers exactly one in-flight command when unambiguous
-        // (one pending send of that cmd kind) — resolve it as failed delivery.
+        const d = env.data as { code: string; message: string; cmd?: string; nonce?: string; data?: Record<string, unknown> };
+        // Exact correlation resolves concurrent sends independently. Legacy
+        // hosts without a nonce are safe only with one pending command kind.
         if (typeof d.cmd === "string" && d.cmd) {
           const hits = [...this.pendingAcks.entries()].filter(([, p]) => p.cmd === d.cmd);
-          const hitNonce = hits.length === 1 ? hits[0]?.[0] : undefined;
+          const hitNonce = typeof d.nonce === "string"
+            ? (this.pendingAcks.get(d.nonce)?.cmd === d.cmd ? d.nonce : undefined)
+            : hits.length === 1 ? hits[0]?.[0] : undefined;
           if (hitNonce !== undefined) {
             this.pendingAcks.delete(hitNonce);
             this.opts.onCmdAck?.(hitNonce, false, { cmd: d.cmd, message: d.message });

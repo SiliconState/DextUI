@@ -57,6 +57,18 @@ export function parseRestartRequest(text) {
   return { reason: t.slice(0, 200), by: "file" };
 }
 
+/** Restart safety must use complete activity, never a capped display list. */
+export function restartBusyDetail(sessions, crewRuns = [], launches = []) {
+  const out = [];
+  for (const s of sessions) {
+    const kind = s.interrupting ? "cleanup" : s.cleanup ? "cleanup" : s.forking ? "fork" : s.managing ? "management" : s.compacting || s.compactRequested ? "compact" : s.working ? "turn" : s.background?.current ? "background" : null;
+    if (kind) out.push({ kind, session: s.id, title: String(s.title ?? "").slice(0, 40) });
+  }
+  for (const r of crewRuns) out.push({ kind: "crew", run: r.id, manifest: r.manifest });
+  for (const l of launches) if (l.state === "starting") out.push({ kind: "flow", launch: l.id });
+  return out;
+}
+
 export function createSelfEdit({ repoRoot, stateDir, staticDir, broadcast, isIdle, busyDetail, onRestart, log = () => {} }) {
   const enabled = buildable(repoRoot);
   const { dist, lkg } = distPaths(repoRoot);
@@ -64,6 +76,9 @@ export function createSelfEdit({ repoRoot, stateDir, staticDir, broadcast, isIdl
   let building = null; // { id, started_at, step, steps_total, tail }
   let last = null; // last build summary
   let restartPending = null; // { reason, by, at }
+  let restartTimer = null;
+  let restartForced = false;
+  let restarting = false;
   let buildSeq = 0;
   let distTimer = null;
   let lastVersion = distVersion(dist)?.id ?? null;
@@ -95,6 +110,7 @@ export function createSelfEdit({ repoRoot, stateDir, staticDir, broadcast, isIdl
   /** Start a build. Resolves with the summary; rejects nothing (errors are data). */
   function build({ check = true, tests = false, by = "host" } = {}) {
     if (!enabled) return Promise.resolve({ ok: false, error: "not_buildable" });
+    if (restarting) return Promise.resolve({ ok: false, error: "busy", message: "host restart in progress" });
     if (building) return Promise.resolve({ ok: false, error: "busy", message: `build ${building.id} already running (${building.step})` });
     const id = `b${++buildSeq}-${Date.now().toString(36)}`;
     building = { id, started_at: Date.now(), step: "start", steps_total: 0, tail: "", by };
@@ -103,7 +119,10 @@ export function createSelfEdit({ repoRoot, stateDir, staticDir, broadcast, isIdl
     return new Promise((resolve) => {
       let stdout = "";
       let child;
+      let finished = false;
       const finish = (summary) => {
+        if (finished) return;
+        finished = true;
         building = null;
         last = { ...summary, id, at: Date.now(), by };
         if (summary.ok) {
@@ -114,6 +133,7 @@ export function createSelfEdit({ repoRoot, stateDir, staticDir, broadcast, isIdl
           broadcast("x-agentlinkd.ui.build", { id, phase: "fail", error: summary.error, failed: summary.failed, tail: (summary.tail ?? summary.message ?? "").slice(-TAIL_CHARS) });
         }
         resolve(last);
+        tick(); // a restart queued during this build may now proceed
       };
       try {
         child = spawn(process.execPath, args, { cwd: repoRoot, env: { ...process.env, CI: "1" }, stdio: ["ignore", "pipe", "pipe"] });
@@ -126,6 +146,7 @@ export function createSelfEdit({ repoRoot, stateDir, staticDir, broadcast, isIdl
         stdout = (stdout + d.toString("utf8")).slice(-200_000);
       });
       child.stderr.on("data", (d) => {
+        if (!building) return;
         const text = d.toString("utf8");
         building.tail = (building.tail + text).slice(-TAIL_CHARS);
         // The script prints `[ui-build] n/total label` per step only in text
@@ -211,8 +232,9 @@ export function createSelfEdit({ repoRoot, stateDir, staticDir, broadcast, isIdl
   function requestRestart({ reason = "", by = "host", force = false } = {}) {
     if (restartPending) return { ok: true, pending: true, already: true, ...restartPending };
     restartPending = { reason: String(reason).slice(0, 200), by, at: Date.now() };
+    restartForced = force;
     broadcast("x-agentlinkd.host.restart", { phase: "pending", ...restartPending, busy: !isIdle() ? busyDetail() : null, force });
-    if (force || isIdle()) {
+    if (force || (!building && isIdle())) {
       doRestart();
       return { ok: true, pending: false, ...restartPending };
     }
@@ -222,23 +244,39 @@ export function createSelfEdit({ repoRoot, stateDir, staticDir, broadcast, isIdl
   function cancelRestart() {
     if (!restartPending) return false;
     restartPending = null;
+    clearTimeout(restartTimer);
+    restartTimer = null;
+    restartForced = false;
     try { fs.rmSync(requestFile(), { force: true }); } catch { /* best effort */ }
     broadcast("x-agentlinkd.host.restart", { phase: "cancelled" });
     return true;
   }
 
   function doRestart() {
-    const req = restartPending ?? { reason: "", by: "host", at: Date.now() };
-    try { fs.rmSync(requestFile(), { force: true }); } catch { /* best effort */ }
+    if (!restartPending || restartTimer) return;
+    const req = restartPending;
     broadcast("x-agentlinkd.host.restart", { phase: "restarting", ...req, exit_code: RESTART_EXIT_CODE });
-    log(`restarting (exit ${RESTART_EXIT_CODE}) — ${req.by}${req.reason ? `: ${req.reason}` : ""}`);
-    // Let the broadcast flush before the sockets die.
-    setTimeout(() => onRestart(RESTART_EXIT_CODE), 250);
+    // Activity can start, cancellation can arrive, or a build can begin while
+    // this notice flushes. Recheck at the actual shutdown boundary.
+    restartTimer = setTimeout(() => {
+      restartTimer = null;
+      if (restartPending !== req) return;
+      if (!restartForced && (building || !isIdle())) {
+        broadcast("x-agentlinkd.host.restart", { phase: "pending", ...req, busy: busyDetail() });
+        return;
+      }
+      try { fs.rmSync(requestFile(), { force: true }); } catch { /* best effort */ }
+      log(`restarting (exit ${RESTART_EXIT_CODE}) — ${req.by}${req.reason ? `: ${req.reason}` : ""}`);
+      restartPending = null;
+      restartForced = false;
+      restarting = true;
+      onRestart(RESTART_EXIT_CODE);
+    }, 250);
   }
 
   /** Call at every idle boundary (turn end, crew change, build end). */
   function tick() {
-    if (restartPending && !building && isIdle()) doRestart();
+    if (restartPending && (restartForced || (!building && isIdle()))) doRestart();
   }
 
   /** The agent's path: write `<state>/restart.request` from a workbench turn. */

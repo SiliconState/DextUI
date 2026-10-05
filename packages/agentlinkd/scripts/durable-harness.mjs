@@ -88,5 +88,11 @@ export async function durableHost(t, { bridge = false, args = [], env = {}, bin,
   }
   if (setup) await setup({ temp, home, state, cwd });
   await start();
-  return { temp, home, state, cwd, journal, index, start, stop, client, open };
+  return { temp, home, state, cwd, journal, index, start, stop, client, open,
+    get child() { return child; },
+    request(route, init = {}) {
+      const token = child.spawnargs.find((arg) => arg.startsWith("--token="))?.slice(8);
+      return fetch(base + route, { ...init, headers: { Authorization: `Bearer ${token}`, ...init.headers } });
+    },
+  };
 }

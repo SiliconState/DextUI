@@ -8,7 +8,7 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { buildUi, buildable, distPaths, distVersion, rollbackDist, swapDist } from "./ui-build.mjs";
-import { RESTART_EXIT_CODE, RESTART_REQUEST_FILE, createSelfEdit, parseRestartRequest, resolveStaticDir } from "../src/selfedit.mjs";
+import { RESTART_EXIT_CODE, RESTART_REQUEST_FILE, createSelfEdit, parseRestartRequest, restartBusyDetail, resolveStaticDir } from "../src/selfedit.mjs";
 
 const root = path.resolve("packages/agentlinkd");
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -184,6 +184,40 @@ test("createSelfEdit: restart is immediate when idle, queued when busy, honored 
   await sleep(350);
   assert.deepEqual(restarts, [RESTART_EXIT_CODE]);
   assert.equal(fs.existsSync(path.join(state, RESTART_REQUEST_FILE)), false, "request file consumed");
+});
+
+test("restart activity includes cleanup, management, forks, background jobs and starting flows", () => {
+  const flags = [{ interrupting: Promise.resolve() }, { cleanup: { action: "clear" } }, { managing: true }, { forking: true }, { compactRequested: true }, { working: true }, { background: { current: {} } }];
+  const details = restartBusyDetail(flags.map((flags, i) => ({ id: `s${i}`, title: "test", ...flags })), [{ id: "same", manifest: "/a" }, { id: "same", manifest: "/b" }], [{ id: "launch", state: "starting" }, { id: "done", state: "started" }]);
+  assert.deepEqual(details.map((d) => d.kind), ["cleanup", "cleanup", "management", "fork", "compact", "turn", "background", "crew", "crew", "flow"]);
+  assert.deepEqual(restartBusyDetail([{ id: "idle" }]), []);
+});
+
+test("restart flush delay rechecks new activity, coalesces ticks and honors cancellation", async (t) => {
+  const repo = fakeRepo(t), state = path.join(repo, "state"); fs.mkdirSync(state);
+  let idle = true; const restarts = [];
+  const se = createSelfEdit({ repoRoot: repo, stateDir: state, staticDir: distPaths(repo).dist, broadcast: () => {}, isIdle: () => idle, busyDetail: () => idle ? [] : [{ kind: "fork" }], onRestart: (code) => restarts.push(code) });
+  se.requestRestart(); se.tick(); se.tick();
+  idle = false; await sleep(320);
+  assert.deepEqual(restarts, [], "new work inside the flush delay prevents shutdown");
+  assert.ok(se.restartPending());
+  idle = true; se.tick(); se.tick(); assert.equal(se.cancelRestart(), true);
+  await sleep(320); assert.deepEqual(restarts, [], "cancellation clears an already scheduled restart");
+  se.requestRestart(); se.tick(); se.tick(); await sleep(320);
+  assert.deepEqual(restarts, [RESTART_EXIT_CODE], "one shutdown per request");
+  assert.equal(se.restartPending(), null);
+});
+
+test("a nonforced restart waits for a build and build completion wakes the pending request", async (t) => {
+  const repo = fakeRepo(t), state = path.join(repo, "state"); fs.mkdirSync(state);
+  const restarts = [];
+  // The fake checkout deliberately lacks workspace scripts: build fails without
+  // touching the real UI, but still owns a live subprocess until completion.
+  const se = createSelfEdit({ repoRoot: repo, stateDir: state, staticDir: distPaths(repo).dist, broadcast: () => {}, isIdle: () => true, busyDetail: () => [], onRestart: (code) => restarts.push(code) });
+  const build = se.build(); assert.equal(se.isBuilding(), true);
+  assert.equal(se.requestRestart().pending, true);
+  assert.deepEqual(restarts, []); await build; await sleep(320);
+  assert.deepEqual(restarts, [RESTART_EXIT_CODE]);
 });
 
 test("createSelfEdit: rollback broadcasts ui.rebuilt; external dist swaps are noticed", async (t) => {

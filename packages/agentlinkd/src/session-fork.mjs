@@ -17,7 +17,7 @@ export function readForkSource(file, seat) {
     const bytes = buffer.subarray(0, size);
     const [header, ...messages] = bytes.toString("utf8").split("\n").filter((l) => l.trim()).map(JSON.parse);
     if (!header?.session_id || header.seat?.id !== seat || !header.sandbox) throw new Error("source checkpoint identity does not match the session");
-    if (messages.some((m) => !m || typeof m.role !== "string" || !Array.isArray(m.content))) throw new Error("source checkpoint contains invalid messages");
+    if (messages.some((m) => !m || !["user", "assistant", "system"].includes(m.role) || !Array.isArray(m.content) || m.content.some((b) => !b || typeof b !== "object" || typeof b.type !== "string"))) throw new Error("source checkpoint contains invalid messages");
     return { header, messages, bytes };
   } finally { fs.closeSync(fd); }
 }
@@ -32,7 +32,7 @@ export function forkBoundary(messages, journal, atSeq) {
     const blocks = m.content;
     if (event.event === "user_message" && m.role === "user" && blocks.some((b) => b.type === "text" && typeof event.data?.text === "string" && plain(b.text) === plain(event.data.text))) matches.push(i + 1);
     if (event.event === "text_block_complete" && m.role === "assistant" && blocks.some((b) => b.type === "text" && b.text === event.data)) matches.push(i + 1);
-    if (event.event === "tool_call_result" && blocks.some((b) => b.type === "tool_result" && b.tool_use_id === event.data?.call_id)) matches.push(i + 1);
+    if (event.event === "tool_call_result" && typeof event.data?.call_id === "string" && event.data.call_id && blocks.some((b) => b.type === "tool_result" && b.tool_use_id === event.data.call_id)) matches.push(i + 1);
   });
   if (matches.length !== 1) throw new Error("selection is ambiguous, unsupported, or compacted away; choose another complete message");
   return matches[0];

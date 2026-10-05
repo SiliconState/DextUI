@@ -35,7 +35,7 @@ import { GALLERY_DEFAULTS, PACK_NAME_RE, buildCatalog, listPackFiles, listPackTr
 import { subscribeLog } from "./crew-stream.mjs";
 import { subscribeEvents, replyPermission } from "./crew-events.mjs";
 import { RUN_ID_RE as CREW_RUN_ID_RE, TAIL_MAX_LINES, createCrewAdapter } from "./crew.mjs";
-import { createSelfEdit, resolveStaticDir } from "./selfedit.mjs";
+import { createSelfEdit, restartBusyDetail, resolveStaticDir } from "./selfedit.mjs";
 import { confine, createDir, listDirs } from "./dirs.mjs";
 import { applyCredentialPatch, mergedPackCredentialEnv, packCredentialStatus, readPackCredentials, writePackCredentials } from "./pack-credentials.mjs";
 import { createConnectors } from "./connectors.mjs";
@@ -661,13 +661,7 @@ function hostIdle() {
   return busyDetail().length === 0;
 }
 function busyDetail() {
-  const out = [];
-  for (const s of sessions.values()) {
-    if (s.compacting || s.compactRequested) out.push({ kind: "compact", session: s.id, title: s.title.slice(0, 40) });
-    else if (s.working) out.push({ kind: "turn", session: s.id, title: s.title.slice(0, 40) });
-  }
-  if (CREW) for (const r of CREW.summaries().runs) if (r.status === "running" || r.status === "pending") out.push({ kind: "crew", run: r.id });
-  return out;
+  return restartBusyDetail(sessions.values(), CREW?.activeRuns() ?? [], LAUNCH_BY_ID.values());
 }
 SELF = createSelfEdit({
   repoRoot,
@@ -702,7 +696,7 @@ async function handleCrewCommand(client, frame) {
   }
   const run = typeof frame.run === "string" && CREW_RUN_ID_RE.test(frame.run) ? frame.run : null;
   if (!run && verb !== "clear") {
-    sendError(client, "bad_request", "run must match run-<12 hex>");
+    sendError(client, "bad_request", "run needs 1..64 ASCII letters, digits, dot, underscore or hyphen (not . or ..)");
     return;
   }
   switch (verb) {
@@ -1402,7 +1396,10 @@ function handleBridgeEvent(s, v) {
       persistIndex();
       return;
     case "background_compaction":
-      if (acceptBackground(s.background, d, s.dextSessionId)) publishEphemeral(s, v.event, d);
+      if (acceptBackground(s.background, d, s.dextSessionId)) {
+        publishEphemeral(s, v.event, d);
+        if (!s.background.current) SELF?.tick();
+      }
       return;
     case "input_ack":
       // Form answers are committed only after core confirms correlation. A
@@ -1464,6 +1461,7 @@ function handleBridgeEvent(s, v) {
       }
       // fall through: legacy blocking compaction
     case "compact_failed":
+      s.compactOperation = null;
       s.compacting = false;
       s.compactRequested = false;
       s.killed = false;
@@ -1868,6 +1866,13 @@ function signalChild(child, signal) {
 }
 
 function killChild(s, interrupted = true) {
+  s.compactOperation = null; // invalidate a command awaiting bridge readiness
+  if (s.compactRequested && !s.bridge?.ready) {
+    s.compactRequested = false;
+    s.compacting = false;
+    s.turnStartedAt = null;
+    publish(journalData(s, "compact_failed", { message: "compaction cancelled before core was ready" }));
+  }
   const hadBackground = !!s.background.current;
   clearBackgroundStatus(s);
   if (interrupted) {
@@ -1943,12 +1948,12 @@ function readCoreSessionId(s) {
 // ---------- kept fork ----------
 
 async function forkSession(s, atSeq) {
-  if (s.managing || s.cleanup || s.working || s.compacting || s.compactRequested || s.background.current || s.child && !s.bridge) throw new Error("fork requires an idle session without pending background work");
+  if (shuttingDown || s.deleted || s.interrupting || s.managing || s.cleanup || s.working || s.compacting || s.compactRequested || s.background.current || s.child && !s.bridge) throw new Error("fork requires an idle session without pending background work");
   s.managing = true;
   s.forking = true;
   const seat = `dextui-${crypto.randomBytes(8).toString("hex")}`;
   const snapshot = path.join(STATE_DIR, `.fork-${crypto.randomBytes(8).toString("hex")}.jsonl`);
-  let fork, targetCreated = false;
+  let fork;
   try {
     const dir = findDextSessionDir(s);
     if (!dir) throw new Error("session has no saved core checkpoint to fork");
@@ -1960,7 +1965,6 @@ async function forkSession(s, atSeq) {
     const events = result.out.split("\n").filter((l) => l.trim()).map(JSON.parse);
     const data = events.length === 1 && events[0].event === "session_fork" ? events[0].data : null;
     if (!data || data.seat !== seat || data.source_session_id !== source.header.session_id || typeof data.session_id !== "string" || !Number.isSafeInteger(data.at) || data.at < 0 || data.at > at) throw new Error("core returned an invalid fork result");
-    targetCreated = true;
     fork = makeSession({ cwd: s.cwd, approval: s.approval, seat, persist: false });
     fork.title = `${s.title} (fork)`.slice(0, 80);
     fork.provider = s.provider; fork.model = source.header.model ?? s.model;
@@ -1973,19 +1977,27 @@ async function forkSession(s, atSeq) {
       if (fork.lastAppendFailed) throw new Error("cannot persist fork transcript");
     }
     journalData(fork, "turn_end", { usage: zeroUsage(), failed: false }, { durable: true });
+    if (fork.lastAppendFailed) throw new Error("cannot persist fork transcript");
     journalData(fork, "info", `Forked from ${s.title}; ${data.at} core messages retained.`, { durable: true });
     if (fork.lastAppendFailed) throw new Error("cannot persist fork transcript");
     persistIndex(true, true);
     scheduleList();
     return { meta: metaOf(fork), source_id: s.id, seat, session_id: data.session_id, at: data.at };
   } catch (err) {
-    if (fork) { sessions.delete(fork.id); removeJournalFile(fork); persistIndex(true); }
-    if (targetCreated) try { purgeSeat(seat); } catch (cleanup) { console.error(`agentlinkd: failed fork seat cleanup: ${cleanup.message}`); }
+    if (fork) {
+      sessions.delete(fork.id);
+      try { removeJournalFile(fork); } catch (cleanup) { console.error(`agentlinkd: failed fork journal cleanup: ${cleanup.message}`); }
+      persistIndex(true);
+    }
+    // Malformed output or a timeout can follow a successful seat save. The
+    // random target is ours; clean it even when the response cannot be trusted.
+    try { purgeSeat(seat); } catch (cleanup) { console.error(`agentlinkd: failed fork seat cleanup: ${cleanup.message}`); }
     throw err;
   } finally {
     s.managing = false;
     s.forking = false;
     try { fs.rmSync(snapshot, { force: true }); } catch (err) { console.error(`agentlinkd: fork snapshot cleanup failed: ${err.message}`); }
+    SELF?.tick();
   }
 }
 
@@ -2045,6 +2057,9 @@ function finishCleanup(s, by) {
   s.autoResumeAttempted = null;
   s.resumeInterrupted = false;
   s.working = false;
+  s.compacting = false;
+  s.compactRequested = false;
+  s.compactOperation = null;
   s.turnStartedAt = null;
   if (intent.action === "delete") {
     sessions.delete(s.id);
@@ -2093,6 +2108,7 @@ async function manageSession(s, action, by) {
     finishCleanup(s, by);
   } finally {
     s.managing = false;
+    SELF?.tick();
   }
 }
 
@@ -2115,10 +2131,17 @@ function sendControl(client, event, data) {
 // full command frame: an ACKABLE frame's nonce is then marked REJECTED so a
 // reconnect replay receives this same error instead of an ok-ack.
 function sendError(client, code, message, cmd, data) {
-  const frame = cmd && typeof cmd === "object" ? cmd : null;
+  // A scoped command client carries correlation through nested slash/pack
+  // handlers without sharing mutable request state with concurrent commands.
+  const frame = cmd && typeof cmd === "object" ? cmd : client.commandFrame ?? null;
+  if (client.commandFrame) client.commandRejected = true;
   const name = frame?.cmd ?? (typeof cmd === "string" ? cmd : undefined);
-  if (frame?.nonce && ACKABLE_CMDS.has(frame.cmd)) noteRejected(frame, code, message);
-  sendControl(client, "error", { code, message, ...(name ? { cmd: name } : {}), ...(data ? { data } : {}) });
+  const tracked = typeof frame?.nonce === "string" && NONCE_RE.test(frame.nonce) && ACKABLE_CMDS.has(frame.cmd);
+  if (tracked) {
+    if (!seenNonces.has(frame.nonce)) nonceRecord(frame.nonce, { ts: Date.now() });
+    noteRejected(frame, code, message);
+  }
+  sendControl(client, "error", { code, message, ...(name ? { cmd: name } : {}), ...(tracked ? { nonce: frame.nonce } : {}), ...(data ? { data } : {}) });
 }
 
 const HOST_HELP = [
@@ -2253,25 +2276,33 @@ async function handleSlash(client, s, raw) {
       sendError(client, "busy", "context compaction starts between turns — wait for the current work to finish");
       return;
     }
+    const blocking = !compact[1];
+    const epoch = s.epoch;
+    const operation = Symbol("compact");
+    if (blocking) {
+      // Reserve admission before readiness: a second prompt/fork must not move
+      // this session under the async bridge handshake.
+      s.compactOperation = operation;
+      s.compactRequested = true;
+      s.compacting = true;
+      s.killed = false;
+      s.turnStartedAt = Date.now();
+      publish(journalData(s, "compact_start"));
+      persistIndex();
+    }
     try {
       const bridge = await ensureBridge(s);
-      if (s.deleted || s.bridge !== bridge) return;
-      if (!bridge.control(trimmed)) {
-        sendError(client, "not_live", "dext bridge could not accept the compaction command");
+      if (s.deleted || s.epoch !== epoch || s.bridge !== bridge || s.killed || s.interrupting || s.managing || s.working || shuttingDown || (blocking && s.compactOperation !== operation)) {
+        sendError(client, "cancelled", "compaction request was cancelled or the session changed");
         return;
       }
-      s.compactRequested = !compact[1];
-      if (s.compactRequested) {
+      if (!bridge.control(trimmed)) throw new Error("dext bridge could not accept the compaction command");
+      if (blocking) {
         clearBackgroundStatus(s); // manual compact invalidates speculation
-        s.killed = false;
-        s.compacting = true;
-        s.turnStartedAt = Date.now();
-        publish(journalData(s, "compact_start"));
-        persistIndex();
         scheduleList();
-        SELF.tick();
         setTimeout(() => {
-          if (!s.compactRequested || s.bridge !== bridge || s.deleted) return;
+          if (!s.compactRequested || s.compactOperation !== operation || s.bridge !== bridge || s.deleted) return;
+          s.compactOperation = null;
           s.compactRequested = false;
           s.compacting = false;
           s.turnStartedAt = null;
@@ -2282,6 +2313,15 @@ async function handleSlash(client, s, raw) {
         }, 5000);
       }
     } catch (error) {
+      if (blocking && s.compactOperation === operation) {
+        s.compactOperation = null;
+        s.compactRequested = false;
+        s.compacting = false;
+        s.turnStartedAt = null;
+        publish(journalData(s, "compact_failed", { message: String(error?.message ?? error) }));
+        persistIndex();
+        SELF.tick();
+      }
       sendError(client, "not_live", `could not start compaction: ${String(error?.message ?? error)}`);
     }
     return;
@@ -2437,7 +2477,7 @@ async function handlePackSlash(client, s, cmd) {
  *  dedup is restart-durable: a replay after a host restart is still a
  *  duplicate, never a second run. */
 function submitPrompt(s, incoming, nonce, options = {}) {
-  if (s.interrupting) throw new Error("owned foreground work is stopping");
+  if (shuttingDown || s.deleted || s.interrupting || s.managing || s.cleanup || s.forking) throw new Error("session activity is stopping or managed");
   let text = incoming;
   const queued = s.steeringQueue;
   if (queued.length > 0) {
@@ -2513,6 +2553,7 @@ function noteRejected(frame, code, message) {
 }
 function ackOk(client, frame, duplicate = false) {
   const n = frame?.nonce;
+  if (client.commandRejected || seenNonces.get(n)?.status === "rejected") return;
   if (typeof n !== "string" || !ACKABLE_CMDS.has(frame.cmd)) return;
   if (seenNonces.has(n)) seenNonces.set(n, { ...(seenNonces.get(n) ?? {}), ts: Date.now(), status: "accepted" });
   // `durable` reports whether THIS command's journal append actually landed.
@@ -2569,15 +2610,6 @@ async function handleCommand(client, frame) {
     return;
   }
   if (client.phase !== "live") return;
-  const target = sessions.get(frame.id ?? frame.session);
-  if (target?.interrupting && !["interrupt", "session.subscribe", "session.unsubscribe"].includes(frame.cmd)) return sendError(client, "busy", "owned foreground work is stopping", frame.cmd);
-  if (target?.forking && frame.cmd !== "session.unsubscribe") return sendError(client, "busy", "session fork in progress", frame.cmd);
-  if (target && (target.managing || target.cleanup) &&
-      !["session.delete", "session.clear", "session.unsubscribe"].includes(frame.cmd)) {
-    sendError(client, "busy", "session cleanup pending; retry delete/clear before using it", frame.cmd);
-    return;
-  }
-
   // Delivery dedup: identity + outcome. A replayed ACCEPTED nonce is acked as
   // duplicate and never re-run; a replayed REJECTED nonce gets its error again
   // — an ack must never claim a command ran when it was refused.
@@ -2594,7 +2626,19 @@ async function handleCommand(client, frame) {
       });
       return;
     }
-    ackOk(client, frame, true);
+    if (prior?.status === "accepted") ackOk(client, frame, true);
+    // A still-pending async command has no outcome to acknowledge yet. Its
+    // original completion owns the result; never claim success or run it twice.
+    return;
+  }
+
+  if (shuttingDown) return sendError(client, "busy", "host is shutting down; reconnect before retrying", frame);
+  const target = sessions.get(frame.id ?? frame.session);
+  if (target?.interrupting && !["interrupt", "session.subscribe", "session.unsubscribe"].includes(frame.cmd)) return sendError(client, "busy", "owned foreground work is stopping", frame);
+  if (target?.forking && frame.cmd !== "session.unsubscribe") return sendError(client, "busy", "session fork in progress", frame);
+  if (target && (target.managing || target.cleanup) &&
+      !["session.delete", "session.clear", "session.unsubscribe"].includes(frame.cmd)) {
+    sendError(client, "busy", "session cleanup pending; retry delete/clear before using it", frame);
     return;
   }
 
@@ -2846,8 +2890,9 @@ async function handleCommand(client, frame) {
       // anything is journaled, then follows the normal prompt/steering path.
       const packCmd = parsePackSlash(frame.text);
       if (packCmd && packCmd.sub !== "run") {
-        await handlePackSlash(client, s, packCmd);
-        ackOk(client, frame);
+        const commandClient = Object.assign(Object.create(client), { commandFrame: frame, commandRejected: false });
+        await handlePackSlash(commandClient, s, packCmd);
+        ackOk(commandClient, frame);
         return;
       }
       if (packCmd && guardPackRun(client, s, packCmd, frame)) return;
@@ -2922,7 +2967,7 @@ async function handleCommand(client, frame) {
             if (!r.ok) publish(journalData(s, "warn", `crew ${r.run} stop failed: ${r.message}`));
           }
         } catch (err) { publish(journalData(s, "warn", `owned crew stop failed: ${err.message}`)); }
-        finally { s.interrupting = null; }
+        finally { s.interrupting = null; SELF?.tick(); }
       }
       // Cleanup can outlive the parent turn, or a deferred recycle can replace
       // its child. Never signal a different child/turn after the await.
@@ -3016,11 +3061,12 @@ async function handleCommand(client, frame) {
     case "slash": {
       const s = sessions.get(frame.session);
       if (!s) {
-        sendError(client, "no_session", `unknown session ${frame.session}`);
+        sendError(client, "no_session", `unknown session ${frame.session}`, frame);
         return;
       }
-      await handleSlash(client, s, frame.raw);
-      ackOk(client, frame);
+      const commandClient = Object.assign(Object.create(client), { commandFrame: frame, commandRejected: false });
+      await handleSlash(commandClient, s, frame.raw);
+      ackOk(commandClient, frame);
       return;
     }
 
@@ -3324,6 +3370,7 @@ function launchSummaries(cwd) {
  *  command and every trigger. Returns `{ ok, spec_path, launch }` or
  *  `{ error, code }`; never throws. */
 function startFlowRun(cwd, name, { by = "host", reason = "" } = {}) {
+  if (shuttingDown) return { error: "host is shutting down", code: "busy" };
   if (!CREW_BIN) return { error: "flows run on crew; no crew binary on this host", code: "unsupported" };
   const r = readFlow(cwd, name);
   if (r.error) return { error: `flow '${name}': ${r.error}`, code: r.error === "no_flow" ? "no_flow" : "bad_request" };
@@ -4352,7 +4399,7 @@ server.on("upgrade", (req, socket, head) => {
       }
       void handleCommand(client, frame).catch((err) => {
         console.error(`agentlinkd: ${frame?.cmd} failed: ${err.message}`);
-        sendError(client, "operation_failed", `${frame?.cmd}: ${err.message}`);
+        sendError(client, "operation_failed", `${frame?.cmd}: ${err.message}`, frame);
       });
     },
     onClose: () => {

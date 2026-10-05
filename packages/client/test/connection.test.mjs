@@ -525,6 +525,18 @@ test("an error envelope resolves the one pending command of its kind as failed",
   conn.cancelPending(b);
 });
 
+test("nonce-correlated rejections resolve concurrent commands without failing the wrong draft", (t) => {
+  const acks = [];
+  const { conn } = setup(t, { onCmdAck: (...a) => acks.push(a) });
+  const ws = goLive(conn), a = conn.prompt("s1", "a"), b = conn.prompt("s1", "b");
+  ws.receive({ v: 1, ts: 2, event: "error", data: { code: "busy", message: "cleanup", cmd: "prompt.submit", nonce: b } });
+  assert.deepEqual(acks, [[b, false, { cmd: "prompt.submit", message: "cleanup" }]]);
+  ws.receive({ v: 1, ts: 3, event: "error", data: { code: "busy", message: "late b", cmd: "prompt.submit", nonce: b } });
+  assert.equal(acks.length, 1, "resolved nonce must not reject the other pending command");
+  ws.receive({ v: 1, ts: 4, event: "cmd_ack", data: { cmd: "prompt.submit", nonce: a, ok: true } });
+  assert.equal(acks.at(-1)[0], a); assert.equal(acks.at(-1)[1], true);
+});
+
 test("cancelPending drops a command without an ack callback", (t) => {
   const acks = [];
   const { conn } = setup(t, { onCmdAck: (...a) => acks.push(a) });

@@ -190,3 +190,23 @@ workers. It checks cleanup before parent interruption, one cleanup execution,
 foreground reaping, same-session background survival and repeated-stop safety.
 Real-core workspaces live outside the checkout so checkpoint capture cannot
 race other tests' repository scratch files. No live host/state is used.
+
+## Safe host restarts
+
+Nonforced `/ui restart` and `POST /__self/restart` wait for all session work:
+turns, compaction (including background jobs), kept forks, management and leased
+crew cleanup. Crew activity uses fresh uncapped manifest-path identities, not
+the eight-row Team display. In-flight flow launches and UI builds also prevent
+an idle restart. Unknown continuation state is not treated as idle.
+
+A restart notice has a short flush delay. The host rechecks activity immediately
+before shutdown, coalesces duplicate notices and cancels the scheduled timer
+when the request is cancelled. Work that starts during the delay postpones the
+restart; operation/build/hidden-run completion wakes the pending request.
+Already connected clients cannot start work after shutdown begins. Explicit
+`force:true` remains an operator override, not the default rollout path.
+
+`restart-safety.test.mjs` uses disposable hosts to verify hidden active crew,
+terminal-before-cleanup-end, in-flight forks, new work during the notice delay,
+and cold-bridge compaction admission/cancellation. Self-edit unit tests cover
+cancellation, duplicate ticks and build-completion restart ordering.

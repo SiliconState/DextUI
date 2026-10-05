@@ -53,6 +53,17 @@ test("owner discovery is fresh, uncapped and path-keyed, refusing stale or inval
   assert.equal(a.foregroundOwned("core-1").length, 12, "project-like custom ids and nested project buckets both participate");
 });
 
+test("restart activity retains a leased stop whose manifest disappeared", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "crew-stop-activity-")); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const runs = path.join(root, "runs"), dir = record(runs, "custom-stop", owner());
+  const bin = path.join(root, "crew"), marker = path.join(root, "stopping");
+  fs.writeFileSync(bin, `#!/usr/bin/env node\nimport fs from 'node:fs';fs.unlinkSync(process.argv[3]);fs.writeFileSync(${JSON.stringify(marker)},'x');setTimeout(()=>process.exit(0),500);\n`, { mode: 0o700 });
+  const a = createCrewAdapter({ roots: [runs], crewBin: bin }); t.after(() => a.close());
+  const stop = a.stopOwned("core-1"); await until(() => fs.existsSync(marker));
+  assert.deepEqual(a.activeRuns(), [{ id: "custom-stop", manifest: path.join(dir, "manifest.json") }]);
+  await stop; assert.deepEqual(a.activeRuns(), []);
+});
+
 test("concurrent owned stops coalesce by manifest path and exclude background owners", async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "crew-stop-owned-")); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const runs = path.join(root, "runs");
@@ -105,8 +116,9 @@ for (const active of [false, true]) test(`slow cleanup fences admission when the
   c.send("interrupt", { session: id });
   await until(() => fs.existsSync(started));
   const at = c.events.length;
-  c.send("prompt.submit", { session: id, text: "Rejected prompt" });
-  await c.wait((e) => e.event === "error" && e.data.code === "busy", at);
+  c.send("prompt.submit", { session: id, text: "Rejected prompt", nonce: "cleanupnonce1" });
+  const rejected = await c.wait((e) => e.event === "error" && e.data.code === "busy", at);
+  assert.equal(rejected.data.nonce, "cleanupnonce1");
   const steeringAt = c.events.length;
   c.send("steering.inject", { session: id, text: "Rejected steering" });
   await c.wait((e) => e.event === "error" && e.data.code === "busy", steeringAt);
@@ -119,6 +131,10 @@ for (const active of [false, true]) test(`slow cleanup fences admission when the
   await c.wait((e) => e.event === "x-agentlinkd.crew.control");
   assert.ok(!h.journal(id).some((e) => JSON.stringify(e.data).includes("Rejected")));
   assert.equal(c.events.filter((e) => e.event === "x-agentlinkd.crew.control").length, 1);
+  const replayAt = c.events.length;
+  c.send("prompt.submit", { session: id, text: "Rejected prompt", nonce: "cleanupnonce1" });
+  await c.wait((e) => e.event === "error" && e.data.duplicate === true && e.data.code === "busy", replayAt);
+  assert.ok(!h.journal(id).some((e) => e.data?.text === "Rejected prompt"), "refused identity cannot later run on reconnect");
   const nextAt = c.events.length;
   c.send("prompt.submit", { session: id, text: "Next accepted turn" });
   const next = await c.wait((e) => e.event === "turn_start", nextAt);
