@@ -10,12 +10,20 @@
   import type { ProviderAuth } from "@dextui/protocol";
   import { providers, closeProviders, refreshProviders, loginProvider, logoutProvider } from "../lib/connectors.svelte";
   import { useDialog } from "../lib/dialog.svelte";
+  import { app } from "../lib/state.svelte";
 
   const dlg = useDialog(() => providers.open);
   let editing = $state<string | null>(null);
   let credential = $state("");
   let reveal = $state(false);
   let fieldEl = $state<HTMLInputElement | null>(null);
+  $effect(() => {
+    if (!providers.open || app.phase !== "live") {
+      editing = null;
+      credential = "";
+      reveal = false;
+    }
+  });
 
   // Markers that mean no usable credential: dext can say failed/expired when
   // a stored login stopped working — those rows get "Sign in" back.
@@ -41,6 +49,7 @@
   const ordered = $derived([...connected, ...available]);
 
   function begin(id: string) {
+    if (providers.pending || app.phase !== "live") return;
     editing = id;
     credential = "";
     reveal = false;
@@ -55,7 +64,7 @@
     e.preventDefault();
     const id = editing;
     const value = credential.trim();
-    if (!id || !value) return;
+    if (!id || !value || providers.pending || app.phase !== "live") return;
     loginProvider(id, value);
     credential = "";
     reveal = false;
@@ -72,6 +81,8 @@
   }
 </script>
 
+<svelte:window onoffline={cancel} />
+
 {#if providers.open}
   <div class="insp-scrim" data-agent-id="providers.scrim" onclick={closeProviders} onkeydown={() => {}} role="presentation"></div>
   <div class="insp gallery-overlay providers" role="dialog" aria-modal="true" aria-label="Providers" tabindex="-1" use:dlg.ref data-agent-id="providers.overlay" data-state={providers.pending ? "pending" : "ready"} onkeydown={onKey}>
@@ -80,7 +91,7 @@
       <span class="dim">Who runs your models</span>
       {#if providers.pending}<span class="faint pulse saving" data-agent-id="providers.saving">saving…</span>{/if}
       <span class="insp-acts">
-        <button class="act" data-agent-id="providers.refresh" onclick={refreshProviders}>Refresh</button>
+        <button class="act" data-agent-id="providers.refresh" disabled={providers.pending || app.phase !== "live"} onclick={refreshProviders}>Refresh</button>
         <button class="act" data-agent-id="providers.close" onclick={closeProviders}>esc</button>
       </span>
     </div>
@@ -121,10 +132,10 @@
       {#if editing !== p.id}
         <div class="acts">
           {#if signedIn(p.auth)}
-            <button class="act" disabled={providers.pending} data-agent-id={`providers.relogin.${p.id}`} onclick={() => begin(p.id)} title="Paste a new credential — replaces the stored one">Replace key</button>
-            <button class="act" disabled={providers.pending} data-agent-id={`providers.logout.${p.id}`} onclick={() => logoutProvider(p.id)}>Sign out</button>
+            <button class="act" disabled={providers.pending || app.phase !== "live"} data-agent-id={`providers.relogin.${p.id}`} onclick={() => begin(p.id)} title="Paste a new credential — replaces the stored one">Replace key</button>
+            <button class="act" disabled={providers.pending || app.phase !== "live"} data-agent-id={`providers.logout.${p.id}`} onclick={() => logoutProvider(p.id)}>Sign out</button>
           {:else}
-            <button class="act accent" disabled={providers.pending} data-agent-id={`providers.login.${p.id}`} onclick={() => begin(p.id)}>Sign in</button>
+            <button class="act accent" disabled={providers.pending || app.phase !== "live"} data-agent-id={`providers.login.${p.id}`} onclick={() => begin(p.id)}>Sign in</button>
           {/if}
         </div>
       {/if}

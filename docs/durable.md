@@ -133,7 +133,9 @@ return correlated errors, never success ACKs, including same-nonce replay.
 After a failed save, an idle status query resyncs CORE's safely-off in-memory
 value; the original change still reports failure. Snapshots and seq-only
 reconnects include the current value and pending admission state. Nonforced
-host restart waits for setting settlement.
+host restart waits for setting settlement. Bridge readiness is bounded to
+30 seconds; a stalled or invalid bootstrap is retired and late startup events
+cannot revive it or keep session admission locked indefinitely.
 
 Verification: regular tests cover setting defaults, per-session scope,
 pre-ready fencing, failures/refusals, persistence, reconnect, restart admission,

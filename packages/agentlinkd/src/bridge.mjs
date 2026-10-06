@@ -56,7 +56,7 @@ export function bridgeArgs({ cwd, approval, effort, seat, resume, backgroundComp
  *   onStderr(text)          stderr chunks
  *   onExit(code, signal)    once, after stdout is drained
  */
-export function spawnBridge({ bin, args, cwd, env, maxBuffer = 4 * 1024 * 1024, maxInputBuffer = 1024 * 1024, onEvent, onNoise, onStderr, onExit }) {
+export function spawnBridge({ bin, args, cwd, env, maxBuffer = 4 * 1024 * 1024, maxInputBuffer = 1024 * 1024, readyTimeoutMs = 30_000, onEvent, onNoise, onStderr, onExit }) {
   const child = spawn(bin, args, {
     cwd,
     env,
@@ -77,8 +77,20 @@ export function spawnBridge({ bin, args, cwd, env, maxBuffer = 4 * 1024 * 1024, 
     readyReject = reject;
   });
   readyPromise.catch(() => {}); // callers that never await still must not crash
+  let startupFailed = false;
+  const failStartup = (message) => {
+    if (ready || startupFailed) return;
+    startupFailed = true;
+    clearTimeout(readyTimer);
+    readyReject(new Error(message));
+  };
+  const readyTimer = setTimeout(() => {
+    failStartup("dext did not become ready before the startup deadline");
+    signal(child, "SIGKILL");
+  }, readyTimeoutMs);
 
   const handleLine = (line) => {
+    if (startupFailed) return;
     const t = line.trim();
     if (!t) return;
     let v;
@@ -91,6 +103,7 @@ export function spawnBridge({ bin, args, cwd, env, maxBuffer = 4 * 1024 * 1024, 
     if (!v || typeof v.event !== "string") return;
     if (v.event === "ready" && !ready) {
       ready = v.data ?? {};
+      clearTimeout(readyTimer);
       readyResolve(ready);
     }
     onEvent?.(v);
@@ -120,12 +133,13 @@ export function spawnBridge({ bin, args, cwd, env, maxBuffer = 4 * 1024 * 1024, 
     if (finished) return;
     finished = true;
     exited = true;
+    clearTimeout(readyTimer);
     if (!oversized) {
       buf += decoder.end();
       if (buf.trim()) handleLine(buf);
     }
     buf = "";
-    if (!ready) readyReject(new Error(`dext exited before ready (code ${code ?? sig ?? "?"})`));
+    if (!ready) failStartup(`dext exited before ready (code ${code ?? sig ?? "?"})`);
     onExit?.(code, sig);
   };
   child.on("error", (err) => {
@@ -172,6 +186,7 @@ export function spawnBridge({ bin, args, cwd, env, maxBuffer = 4 * 1024 * 1024, 
     /** Graceful stop: close frame + EOF; dext autosaves and exits. */
     close: () => {
       write({ type: "close" });
+      if (!ready) failStartup("dext bridge closed before ready");
       try {
         child.stdin.end();
       } catch {

@@ -48,7 +48,7 @@ import { bridgeArgs, probeNdjsonSupport, probePackUiSupport, spawnBridge, suppor
 import { normalizeUiRequest, progressKey, validUiResponse } from "./pack-ui.mjs";
 import { acceptBackground, acceptBackgroundApplication, backgroundState, clearBackground } from "./background-compaction.mjs";
 import { readForkSource, forkBoundary, forkEvents } from "./session-fork.mjs";
-import { authStatusError } from "./auth-errors.mjs";
+import { authStatusError, authWriteError, normaliseAuthMarker } from "./auth-errors.mjs";
 
 const here = path.dirname(url.fileURLToPath(import.meta.url));
 const repoRoot = path.join(here, "..", "..", "..");
@@ -190,7 +190,6 @@ function dextOutput(args) {
 // "key" ("a credential is held"), never the value itself. Declared before the
 // boot-time discovery below, which parses `auth status --json` with them.
 const PROVIDER_ID_RE = /^[a-z0-9][a-z0-9_.-]{0,39}$/i;
-const AUTH_MARKERS = new Set(["auth", "key", "none", "web", "oauth", "token", "session", "failed", "expired", "missing", "absent", "unknown", "present", "ok", "disabled", "off"]);
 
 function parseModels(text) {
   const groups = [];
@@ -280,6 +279,13 @@ if (DEFAULT_MODEL.provider && DEFAULT_MODEL.model) {
   if (!group.models.includes(DEFAULT_MODEL.model)) group.models.unshift(DEFAULT_MODEL.model);
 }
 
+function updateDefaultModel(status) {
+  const active = status.providers.find((p) => p.id === status.active) ?? status.providers.find((p) => p.active);
+  if (!active?.model) return;
+  DEFAULT_MODEL.provider = active.id;
+  DEFAULT_MODEL.model = active.model;
+}
+
 // Provider sign-in state, parsed from `dext auth status` (one line per
 // provider: `[*] id  Label…  model=… … auth=<auth|key|none|…>`). Reused by the
 // web's Providers dialog; login/logout shell out to `dext auth login|logout`
@@ -292,8 +298,7 @@ function parseProviderStatus(text) {
   for (const line of text.split("\n")) {
     const m = /^\s*(\*)?\s*(\S+)\s+(.*?)\s+model=(\S+)(.*)$/.exec(line);
     if (!m || !PROVIDER_ID_RE.test(m[2])) continue;
-    const raw = (/\bauth=(\S+)/.exec(m[5])?.[1] ?? "none").replace(/^[^\w]+|[^\w]+$/g, "").toLowerCase();
-    providers.push({ id: m[2], label: m[3].trim() || m[2], model: m[4], auth: AUTH_MARKERS.has(raw) ? raw : "key", active: !!m[1] || m[2] === active });
+    providers.push({ id: m[2], label: m[3].trim() || m[2], model: m[4], auth: normaliseAuthMarker(/\bauth=(\S+)/.exec(m[5])?.[1]), active: !!m[1] || m[2] === active });
   }
   return { active, providers };
 }
@@ -309,12 +314,11 @@ function parseProviderStatusJson(text) {
   const providers = [];
   for (const p of doc.providers) {
     if (!p || typeof p.id !== "string" || !PROVIDER_ID_RE.test(p.id)) continue;
-    const raw = String(p.auth ?? "none").replace(/[^\w].*$/, "").toLowerCase();
     providers.push({
       id: p.id,
       label: typeof p.label === "string" && p.label.trim() ? p.label.trim() : p.id,
       model: typeof p.default_model === "string" ? p.default_model : "",
-      auth: AUTH_MARKERS.has(raw) ? raw : "key",
+      auth: normaliseAuthMarker(p.auth),
       active: p.active === true || p.id === active,
     });
   }
@@ -336,6 +340,8 @@ async function providerStatusAsync() {
 // is authenticated): refresh the catalog in place so hello_ok and the status
 // reply agree.
 let modelRefresh = null;
+let providerWrite = null;
+let providerRevision = 0;
 function refreshModelCatalog() {
   modelRefresh ??= reloadModelCatalog().finally(() => { modelRefresh = null; });
   return modelRefresh;
@@ -676,7 +682,7 @@ function hostIdle() {
   return busyDetail().length === 0;
 }
 function busyDetail() {
-  return restartBusyDetail(sessions.values(), CREW?.activeRuns() ?? [], LAUNCH_BY_ID.values());
+  return [...restartBusyDetail(sessions.values(), CREW?.activeRuns() ?? [], LAUNCH_BY_ID.values()), ...(providerWrite ? [{ kind: "provider_auth", provider: providerWrite.provider }] : [])];
 }
 SELF = createSelfEdit({
   repoRoot,
@@ -1468,6 +1474,12 @@ function ensureBridge(s) {
       throw new Error("dext stdin closed before pack UI capabilities were advertised");
     }
     return bridge;
+  }).catch((error) => {
+    // Do not cache a rejected bootstrap forever or let late startup events
+    // overwrite the authoritative preference after a failed handshake.
+    if (s.bridge === bridge) recycleBridge(s);
+    if (!bridge.exited) bridge.kill("SIGKILL");
+    throw error;
   });
   return bridge.whenConfigured;
 }
@@ -1592,8 +1604,11 @@ function handleBridgeEvent(s, v) {
         thinking_effort: s.thinkingEffort,
         model_locked: false,
       }));
-      publish(journalData(s, "turn_end", d));
+      const ended = journalData(s, "turn_end", d);
+      // A cross-process observer can read the index immediately on receipt.
+      // Publish completion only after the idle/recovery projection is saved.
       persistIndex();
+      publish(ended);
       // Deferred restart (/approval during a live turn) lands here so the new
       // profile applies to the very next spawn, not "whenever the child dies".
       if (s.recycleOnTurnEnd) {
@@ -1743,7 +1758,7 @@ function runBridgedTurn(s, prompt, options) {
     bridge.turnSeq = s.turnSeq;
     if (!bridge.user(withDisplayContext(text))) throw new Error("dext stdin closed");
   }).catch((err) => {
-    if (!current()) return;
+    if (!current() || !s.working) return; // onExit may already have closed this turn
     publish(journalData(s, "error", String(err?.message ?? err)));
     publish(journalData(s, "turn_end", { usage: zeroUsage(), failed: true }));
     s.working = false;
@@ -3352,13 +3367,39 @@ async function handleConnectorsCommand(client, frame) {
 // goes to `dext auth login <provider>` over the child's stdin, never argv,
 // shell history or a browser response.
 async function handleAuthCommand(client, frame) {
-  try { await applyAuthCommand(client, frame); }
-  catch (err) { sendError(client, "auth_status_failed", err.message, frame.cmd); }
-}
-async function applyAuthCommand(client, frame) {
+  const credential = typeof frame.credential === "string" ? frame.credential.trim() : "";
+  delete frame.credential; // never retain a key in an async request/error frame
   const op = frame.cmd.slice("x-agentlinkd.auth.".length);
   if (op === "status") {
+    if (providerWrite) await providerWrite.done;
+    if (shuttingDown) return sendError(client, "busy", "host is shutting down; reconnect before refreshing providers", frame.cmd);
+    try { await applyAuthCommand(client, frame); }
+    catch (err) { sendError(client, "auth_status_failed", err.message, frame.cmd); }
+    return;
+  }
+  if (op !== "login" && op !== "logout") return sendError(client, "unknown_command", `unsupported cmd ${frame.cmd}`);
+  if (providerWrite) return sendError(client, "busy", "a provider credential change is already in progress; wait before retrying", frame.cmd);
+  if (op === "login" && (!credential || credential.length > 8192 || /[\r\n\0]/.test(credential))) return sendError(client, "bad_request", "paste the API key or token (single line)", frame.cmd);
+  if (op === "login" && /^(?:--)?(?:web|browser|reauth|import|reuse|cancel)$/i.test(credential)) return sendError(client, "bad_request", "browser and import flows are not available here; paste an API key or token", frame.cmd);
+  let settle;
+  const write = { provider: typeof frame.provider === "string" && PROVIDER_ID_RE.test(frame.provider) ? frame.provider : "", done: new Promise((resolve) => { settle = resolve; }) };
+  providerWrite = write; // global reservation before the first async inspection
+  providerRevision += 1;
+  try { await applyAuthCommand(client, frame, credential); }
+  catch (err) { sendError(client, "auth_status_failed", err.message, frame.cmd); }
+  finally {
+    if (providerWrite === write) providerWrite = null;
+    settle();
+    SELF?.tick();
+  }
+}
+async function applyAuthCommand(client, frame, credential = "") {
+  const op = frame.cmd.slice("x-agentlinkd.auth.".length);
+  if (op === "status") {
+    const revision = providerRevision;
     const [status] = await Promise.all([providerStatusAsync(), refreshModelCatalog()]);
+    if (providerWrite || revision !== providerRevision) return sendError(client, "busy", "provider state changed during refresh; refresh again after the credential change", frame.cmd);
+    updateDefaultModel(status);
     sendControl(client, "x-agentlinkd.auth.status", { ...status, model_catalog: MODEL_CATALOG });
     return;
   }
@@ -3371,18 +3412,9 @@ async function applyAuthCommand(client, frame) {
     sendError(client, "bad_request", "unknown provider", frame.cmd);
     return;
   }
+  if (shuttingDown) return sendError(client, "busy", "host is shutting down; reconnect before changing providers", frame.cmd);
   let args;
-  let credential = "";
   if (op === "login") {
-    credential = typeof frame.credential === "string" ? frame.credential.trim() : "";
-    if (!credential || credential.length > 8192 || /[\r\n]/.test(credential)) {
-      sendError(client, "bad_request", "paste the API key or token (single line)", frame.cmd);
-      return;
-    }
-    if (/^(web|import|cancel)$/i.test(credential)) {
-      sendError(client, "bad_request", "browser and import flows are not available here — paste an API key or token", frame.cmd);
-      return;
-    }
     // Credential goes over stdin, never argv (visible in /proc/<pid>/cmdline
     // to the same user). Binaries predating patches/dext/0001 see no
     // credential and report "awaiting" instead of logging in.
@@ -3393,17 +3425,21 @@ async function applyAuthCommand(client, frame) {
   const r = await runDext(args, 60_000, op === "login" ? credential : null);
   const awaiting = r.ok && op === "login" && /remains incomplete|paste/i.test(r.stdout) && !/stored|saved|logged in|active ->/i.test(r.stdout);
   if (!r.ok || awaiting) {
-    let line = `${r.stderr}\n${r.stdout}`.split("\n").map((l) => l.trim()).filter(Boolean).at(-1) ?? "dext refused";
-    // Never let the pasted value ride back out, whatever dext printed.
-    if (credential) line = line.split(credential).join("…");
-    if (awaiting) line = "this dext build cannot take the credential over stdin; apply patches/dext/0001 or run `dext auth login` locally";
-    sendError(client, "tool_failed", `${op} failed: ${line.slice(0, 200)}`, frame.cmd);
+    const message = awaiting ? "This Dext build cannot take the credential over stdin; use a current CORE build or sign in locally." : authWriteError(r, op);
+    sendError(client, "tool_failed", message, frame.cmd);
     return;
   }
+  // A read admitted before login may still be resolving with the old catalog.
+  if (modelRefresh) await modelRefresh;
   await refreshModelCatalog();
   let current;
   try { current = await providerStatusAsync(); }
   catch (err) { return sendError(client, "auth_refresh_failed", `${op === "login" ? "Credential saved" : "Sign-out completed"}, but status refresh failed. ${err.message}`, frame.cmd); }
+  const saved = current.providers.find((p) => p.id === provider);
+  if (!saved || op === "login" && ["none", "missing", "failed", "expired", "absent", "unknown", "disabled", "off"].includes(saved.auth)) {
+    return sendError(client, "auth_unconfirmed", "The provider change could not be confirmed. Refresh status before retrying; no successful sign-in is reported.", frame.cmd);
+  }
+  updateDefaultModel(current);
   const status = { ...current, model_catalog: MODEL_CATALOG, changed: provider };
   broadcastControl("x-agentlinkd.auth.status", status);
 }

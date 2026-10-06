@@ -133,6 +133,7 @@ test('provider credentials are live-only and are never replayed from the offline
   assert.equal(ws.frames('x-agentlinkd.auth.login').length, 1);
   ws.drop();
   assert.equal(conn.authLogin('deepseek', 'must-not-queue'), false);
+  assert.equal(conn.authLogout('deepseek'), false, 'sign-out must not replay after reconnect either');
   mock.timers.tick(1100);
   const next = FakeWebSocket.instances.at(-1); next.open(); next.receive(helloOk());
   assert.equal(next.frames('x-agentlinkd.auth.login').length, 0);

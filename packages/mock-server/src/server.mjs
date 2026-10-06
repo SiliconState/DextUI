@@ -1373,8 +1373,11 @@ function handleCommand(client, frame) {
         mockAuthFailure = true;
         return sendControl(client, "error", { cmd: frame.cmd, code: "auth_status_failed", message: "Dext cannot read providers.json: unsafe permissions 0664. Ask the host owner to make that file owner-only (0600), then refresh providers." });
       }
-      MOCK_AUTH.set(frame.provider, frame.cmd.endsWith(".login") ? "key" : "none");
-      broadcastControl("x-agentlinkd.auth.status", mockAuthStatus({ changed: frame.provider }));
+      const isLogin = frame.cmd.endsWith(".login");
+      setTimeout(() => {
+        MOCK_AUTH.set(frame.provider, isLogin ? "key" : "none");
+        broadcastControl("x-agentlinkd.auth.status", mockAuthStatus({ changed: frame.provider }));
+      }, 600);
       return;
     }
 

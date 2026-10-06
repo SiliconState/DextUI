@@ -3,14 +3,25 @@
 Open Settings > Providers to paste a provider API key or token. Credentials
 travel once over the live connection and CORE's stdin, never command-line
 arguments, the reconnect outbox, or the chat journal. The field clears after
-submission. A stored credential is not proof that the provider accepts it;
+submission, dialog close, browser offline and disconnect. Sign-out is live-only
+too. A stored credential is not proof that the provider accepts it;
 these controls do not make a paid provider request.
 
 The provider list and model catalog refresh after sign-in. Failed status
 inspection keeps the last known list instead of replacing it with an empty
 one. The dialog shows an actionable error and a Refresh button. A successful
 credential write followed by failed status inspection is reported separately;
-it is not displayed as a successful sign-in or sign-out.
+it is not displayed as a successful sign-in or sign-out. Error messages use
+reviewed categories only, never raw tool output or credential fragments.
+
+Credential writes are globally serialized across tabs. An overlapping write
+is refused before CORE runs; refresh waits for the current write to settle.
+Nonforced restart waits through the write and final status check. This host
+reservation does not serialize independent terminal/other-host writes and
+cannot protect a forced termination during a write. Unresolved credentials
+are shown as missing, not signed in. A zero exit code alone is not a saved
+sign-in receipt. New sessions use the current active provider after a saved
+login or status refresh; existing sessions keep their chosen provider/model.
 
 ## Unsafe permissions after login
 

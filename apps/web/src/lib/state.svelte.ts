@@ -8,7 +8,7 @@ import { onPackControl } from "./packsheet.svelte";
 import { acceptSelf, onSelfControl, onSelfReconnected } from "./selfedit.svelte";
 import { onDirsControl, onFolderEvent } from "./folders.svelte";
 import { onPackCredsControl } from "./packcreds.svelte";
-import { onConnectorsControl } from "./connectors.svelte";
+import { onConnectorsControl, onProviderConnectionLost } from "./connectors.svelte";
 import { onFlowsControl } from "./flows.svelte";
 import { onTasksControl } from "./tasks.svelte";
 import { clearAttachments } from "./uploads.svelte";
@@ -204,7 +204,7 @@ function rebuildQueue(): void {
   for (const id of [...autoSubscribed]) {
     if (id === app.activeId || hydrating.has(id)) continue;
     const st = c.session(id).state;
-    if (st.pending.size === 0 && !st.pendingUi && !st.working && !st.compacting && !st.backgroundCompaction) {
+    if (st.pending.size === 0 && !st.pendingUi && !st.working && !st.compacting && !st.backgroundCompaction && !st.backgroundCompactPending) {
       c.unsubscribe(id);
       autoSubscribed.delete(id);
     }
@@ -493,6 +493,7 @@ export function start(token: string): void {
       const wasLive = app.phase === "live";
       app.phase = p;
       app.phaseDetail = detail ?? "";
+      if (p !== "live") onProviderConnectionLost();
       if (p === "failed") {
         app.caps = [];
         app.modelCatalog = [];
@@ -813,7 +814,7 @@ export function activate(id: string): void {
   if (!c) return;
   if (prev && prev !== id && c.subscribed.has(prev)) {
     const ps = c.session(prev).state;
-    if (!ps.working && !ps.compacting && !ps.backgroundCompaction && ps.pending.size === 0 && !ps.pendingUi) c.unsubscribe(prev);
+    if (!ps.working && !ps.compacting && !ps.backgroundCompaction && !ps.backgroundCompactPending && ps.pending.size === 0 && !ps.pendingUi) c.unsubscribe(prev);
   }
   const meta = app.sessions.find((s) => s.id === id);
   if (meta && meta.status === "cold") c.openSession({ id });

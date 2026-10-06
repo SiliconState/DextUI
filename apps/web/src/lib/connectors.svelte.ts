@@ -135,26 +135,40 @@ export function openProviders(): void {
   refreshProviders();
 }
 export function refreshProviders(): void {
-  if (!providersEnabled() || !app.conn) return;
+  if (!providersEnabled() || !app.conn || providers.pending) return;
   providers.error = "";
   app.conn.authStatus();
 }
 export function closeProviders(): void {
   providers.open = false;
 }
+let pendingProvider: string | null = null;
+export function onProviderConnectionLost(): void {
+  if (providers.pending) providers.error = "Connection lost before confirmation. Refresh provider status before retrying.";
+  providers.pending = false;
+  pendingProvider = null;
+}
 export function loginProvider(id: string, credential: string): void {
-  if (!providersEnabled() || !app.conn) return;
+  if (!providersEnabled() || !app.conn || providers.pending) return;
+  pendingProvider = id;
   providers.pending = true;
   providers.error = "";
   if (!app.conn.authLogin(id, credential)) {
     providers.pending = false;
+    pendingProvider = null;
     providers.error = "Not sent: reconnect before pasting a credential again.";
   }
 }
 export function logoutProvider(id: string): void {
-  if (!providersEnabled() || !app.conn) return;
+  if (!providersEnabled() || !app.conn || providers.pending) return;
+  pendingProvider = id;
   providers.pending = true;
-  app.conn.authLogout(id);
+  providers.error = "";
+  if (!app.conn.authLogout(id)) {
+    providers.pending = false;
+    pendingProvider = null;
+    providers.error = "Not sent: reconnect before signing out.";
+  }
 }
 
 /** Control-plane tap (wired from state.svelte.ts). */
@@ -225,7 +239,6 @@ export function onConnectorsControl(env: Envelope): void {
     const d = env.data as AuthStatusReply;
     if (!d || !Array.isArray(d.providers)) return;
     if (d.providers.length === 0) {
-      providers.pending = false;
       providers.error = "Provider status is unavailable. The last known list is kept; refresh after checking the host.";
       return;
     }
@@ -235,9 +248,9 @@ export function onConnectorsControl(env: Envelope): void {
     providers.loaded = true;
     if (Array.isArray(d.model_catalog) && d.model_catalog.length > 0) app.modelCatalog = d.model_catalog.map((g) => ({ ...g, models: [...g.models] }));
     if (d.changed) {
-      providers.pending = false;
+      if (pendingProvider === d.changed) { providers.pending = false; pendingProvider = null; }
       const p = providers.items.find((x) => x.id === d.changed);
-      pushToast("ok", p && p.auth !== "none" ? `Signed in to ${p.label}` : `Signed out of ${p?.label ?? d.changed}`);
+      if (p) pushToast("ok", ["none", "failed", "expired", "missing", "absent", "unknown", "disabled", "off"].includes(p.auth) ? `Signed out of ${p.label}` : `Signed in to ${p.label}`);
     }
     return;
   }
@@ -258,7 +271,7 @@ export function onConnectorsControl(env: Envelope): void {
       }
       pushToast("warn", d.message);
     } else if (d.cmd.startsWith("x-agentlinkd.auth.")) {
-      providers.pending = false;
+      if (d.cmd.endsWith(".login") || d.cmd.endsWith(".logout")) { providers.pending = false; pendingProvider = null; }
       providers.error = d.message;
       pushToast("warn", d.message);
     }

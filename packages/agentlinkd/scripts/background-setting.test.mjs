@@ -111,6 +111,19 @@ for (const interrupt of [false, true]) test(`setting admission stays reserved wh
   assert.ok(!h.journal(id).some((e) => e.event === "user_message"));
 });
 
+test("invalid CORE readiness retires bootstrap, ends a turn once and admits a clean retry", async (t) => {
+  const h = await durableHost(t, { bridge: true, env: feature }); const c = await h.client(), id = await h.open(c);
+  fs.mkdirSync(h.home, { recursive: true }); const invalid = path.join(h.home, "fake-invalid-ready"); fs.writeFileSync(invalid, "fixture");
+  c.send("prompt.submit", { session: id, text: "Readiness must fail", nonce: "invalidReady1" });
+  await c.wait((e) => e.event === "turn_end"); await sleep(100);
+  assert.equal(h.journal(id).filter((e) => e.event === "turn_end").length, 1);
+  assert.equal(h.index()[0].working, false);
+  fs.rmSync(invalid);
+  const at = c.events.length; c.send("prompt.submit", { session: id, text: "Clean retry", nonce: "validReady2" });
+  assert.equal((await c.wait((e) => e.event === "turn_end", at)).data.failed, false);
+  assert.equal(h.journal(id).filter((e) => e.event === "turn_end").length, 2);
+});
+
 test("legacy host metadata respects a saved core false preference over startup environment", async (t) => {
   const h = await durableHost(t, { bridge: true, env: feature, setup({ home, state, cwd }) {
     const dir = path.join(home, "projects/fixture/sessions/saved-off"); fs.mkdirSync(dir, { recursive: true });

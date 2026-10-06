@@ -529,8 +529,8 @@ export class Connection {
     return this.sendLive(cmd(`${AUTH_EXT}.login`, { provider, credential }));
   }
 
-  authLogout(provider: string): void {
-    this.sendRaw(cmd(`${AUTH_EXT}.logout`, { provider }));
+  authLogout(provider: string): boolean {
+    return this.sendLive(cmd(`${AUTH_EXT}.logout`, { provider }));
   }
 
   // ---------- pack file editing (host-prefixed until promoted) ----------

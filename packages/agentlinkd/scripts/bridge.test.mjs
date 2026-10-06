@@ -173,6 +173,25 @@ test("spawnBridge: bounded writes refuse before enqueue, preserve seq=0", { time
   assert.equal(b.user("hello"), false);
 });
 
+test("spawnBridge: bounded startup rejects and reaps a child that never emits ready", { timeout: 5000 }, async (t) => {
+  const events = [];
+  const b = spawnBridge({ bin: process.execPath, args: ["-e", "setInterval(() => {}, 1000)"], readyTimeoutMs: 150, onEvent: (e) => events.push(e) });
+  t.after(() => b.kill("SIGKILL"));
+  await assert.rejects(b.whenReady(), /startup deadline/);
+  b.child.stdout.emit("data", Buffer.from('{"event":"ready","data":{}}\n'));
+  assert.equal(b.ready, null, "late ready cannot revive failed bootstrap");
+  assert.deepEqual(events, []);
+  if (!b.exited) await new Promise((resolve) => b.child.once("close", resolve));
+  assert.equal(b.exited, true);
+});
+
+test("spawnBridge: close cancels pending readiness without waiting for the deadline", async (t) => {
+  const b = spawnBridge({ bin: process.execPath, args: ["-e", "process.stdin.resume();process.stdin.on('end',()=>process.exit(0));"], readyTimeoutMs: 30_000 });
+  t.after(() => b.kill("SIGKILL"));
+  b.close(); await assert.rejects(b.whenReady(), /closed before ready/);
+  if (!b.exited) await new Promise((resolve) => b.child.once("close", resolve));
+});
+
 test("spawnBridge: exit before ready rejects whenReady", async () => {
   const b = spawnBridge({ bin: process.execPath, args: ["-e", "process.exit(3)"], cwd: os.tmpdir(), env: process.env });
   await assert.rejects(b.whenReady(), /exited before ready/);

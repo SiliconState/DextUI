@@ -36,6 +36,12 @@ if (process.argv[2] === "auth" && process.argv[3] === "models") {
 }
 if (process.argv[2] === "auth" && (process.argv[3] === "status" || process.argv[3] === "providers")) {
   const a = readAuth();
+  const delay = path.join(path.dirname(AUTH_FILE), "fake-status-delay");
+  if (fs.existsSync(delay)) {
+    const ms = Number(fs.readFileSync(delay, "utf8")); fs.rmSync(delay);
+    fs.writeFileSync(path.join(path.dirname(AUTH_FILE), "fake-status-started"), "started");
+    await new Promise((resolve) => setTimeout(resolve, ms));
+  }
   process.stdout.write(
     `active provider: fake-a\n* fake-a Fake A model=alpha contract=fake api=fake spec=model auth=${a["fake-a"] ?? "none"} base=http://fake\n  fake-b Fake B model=beta contract=fake api=fake spec=model auth=${a["fake-b"] ?? "None."} base=http://fake\n  fake-c Fake C model=gamma contract=fake api=fake spec=model auth=sk-fake-9f2a7b1c3d4e base=http://fake\n`,
   );
@@ -48,6 +54,13 @@ if (process.argv[2] === "auth" && process.argv[3] === "login") {
   credential = credential.trim();
   if (!credential) { process.stderr.write("[err] missing credential on stdin\n"); process.exit(1); }
   if (!["fake-a", "fake-b"].includes(provider)) { process.stderr.write(`[err] unknown provider ${provider}\n`); process.exit(1); }
+  if (process.env.FAKE_DEXT_AUTH_ECHO_FAILURE === "1") { process.stderr.write(`rejected extracted credential ${credential.replace(/^Bearer\s+/i, "")}\n`); process.exit(1); }
+  if (process.env.FAKE_DEXT_AUTH_DELAY_MS) {
+    fs.mkdirSync(path.dirname(AUTH_FILE), { recursive: true });
+    fs.writeFileSync(path.join(path.dirname(AUTH_FILE), "fake-auth-started"), "started");
+    await new Promise((resolve) => setTimeout(resolve, Number(process.env.FAKE_DEXT_AUTH_DELAY_MS)));
+  }
+  if (process.env.FAKE_DEXT_AUTH_NO_SAVE === "1") { process.stdout.write("done\n"); process.exit(0); }
   const a = readAuth();
   a[provider] = "key";
   writeAuth(a);
@@ -111,7 +124,7 @@ if (process.argv.includes("--input") && process.argv[process.argv.indexOf("--inp
     session_id: "fake-ndjson-1",
     model: process.env.DEXT_MODEL || "alpha",
     provider: process.env.DEXT_PROVIDER || "fake-a",
-    ...(process.env.FAKE_DEXT_BACKGROUND_SETTING === "1" ? { background_compact: backgroundEnabled } : {}),
+    ...(process.env.FAKE_DEXT_BACKGROUND_SETTING === "1" && !fs.existsSync(path.join(process.env.DEXT_HOME ?? "/nonexistent", "fake-invalid-ready")) ? { background_compact: backgroundEnabled } : {}),
     ui_protocol: 1,
     frames: ["user", "steer", "control", "interrupt", "permission", "ui.capabilities", "ui.response", "close"],
   });

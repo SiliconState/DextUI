@@ -229,7 +229,16 @@ agent-browser eval 'document.querySelector(`[data-agent-id="settings.open"]`)?.c
 agent-browser wait '[data-agent-id="providers.open"]' >/dev/null
 agent-browser click '[data-agent-id="providers.open"]' >/dev/null
 wait_js 'document.querySelector(`[data-agent-id="providers.row.deepseek"]`)?.dataset.state === "out"' || { echo "FAIL: DeepSeek provider fixture missing"; exit 1; }
+note "closing provider editor clears an unsubmitted API key"
 agent-browser click '[data-agent-id="providers.login.deepseek"]' >/dev/null
+agent-browser fill '[data-agent-id="providers.credential"]' 'fixture-unsent-close' >/dev/null
+agent-browser click '[data-agent-id="providers.close"]' >/dev/null
+agent-browser eval 'document.querySelector(`[data-agent-id="settings.open"]`)?.click();true' >/dev/null
+agent-browser click '[data-agent-id="providers.open"]' >/dev/null
+wait_js '!!document.querySelector(`[data-agent-id="providers.overlay"]`) && !document.querySelector(`[data-agent-id="providers.credential"]`)' || { echo "FAIL: provider editor retained a key after close"; exit 1; }
+agent-browser click '[data-agent-id="providers.login.deepseek"]' >/dev/null
+agent-browser wait '[data-agent-id="providers.credential"]' >/dev/null
+wait_js 'document.querySelector(`[data-agent-id="providers.credential"]`)?.value === "" && document.querySelector(`[data-agent-id="providers.credential"]`)?.type === "password"' || { echo "FAIL: reopened credential field not empty/private"; exit 1; }
 agent-browser fill '[data-agent-id="providers.credential"]' 'fixture-refuse' >/dev/null
 agent-browser click '[data-agent-id="providers.submit"]' >/dev/null
 wait_js 'document.querySelector(`[data-agent-id="providers.error"]`)?.textContent.includes("0664") && !!document.querySelector(`[data-agent-id="providers.row.deepseek"]`) && !document.querySelector(`[data-agent-id="providers.credential"]`) && document.querySelector(`[data-agent-id="providers.overlay"]`)?.dataset.state === "ready"' || { echo "FAIL: provider failure blanked dialog or left credential/pending"; exit 1; }
@@ -240,7 +249,15 @@ wait_js '!document.querySelector(`[data-agent-id="providers.error"]`) && documen
 agent-browser click '[data-agent-id="providers.login.deepseek"]' >/dev/null
 agent-browser fill '[data-agent-id="providers.credential"]' 'fixture-success' >/dev/null
 agent-browser click '[data-agent-id="providers.submit"]' >/dev/null
+wait_js 'document.querySelector(`[data-agent-id="providers.overlay"]`)?.dataset.state === "pending" && !!document.querySelector(`[data-agent-id="providers.refresh"]`)?.disabled' || { echo "FAIL: auth write not reserved in provider UI"; exit 1; }
 wait_js 'document.querySelector(`[data-agent-id="providers.row.deepseek"]`)?.dataset.state === "in" && !document.querySelector(`[data-agent-id="providers.credential"]`) && !document.querySelector(`[data-agent-id="providers.error"]`)' || { echo "FAIL: provider retry did not sign in"; exit 1; }
+note "browser offline clears unsubmitted provider keys without replay"
+agent-browser click '[data-agent-id="providers.relogin.deepseek"]' >/dev/null
+agent-browser fill '[data-agent-id="providers.credential"]' 'fixture-unsent-disconnect' >/dev/null
+agent-browser set offline on >/dev/null
+agent-browser wait 2500 >/dev/null
+agent-browser set offline off >/dev/null
+wait_js '!document.querySelector(`[data-agent-id="providers.credential"]`) && !document.querySelector(`[data-agent-id="providers.refresh"]`)?.disabled' || { echo "FAIL: provider credential survived disconnect or controls stayed stuck"; exit 1; }
 agent-browser click '[data-agent-id="providers.close"]' >/dev/null
 
 note "charts render and follow theme via settings menu (echo session — fixture sessions replay canned text)"
