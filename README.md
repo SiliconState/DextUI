@@ -13,6 +13,7 @@ thinking; DextUI presents, supervises, and gets out of the way.
 ```bash
 npm install
 npm run build
+mkdir -p $HOME/my-project   # or use any existing project directory
 npm run serve -- --cwd=$HOME/my-project --approval=auto-read
 ```
 

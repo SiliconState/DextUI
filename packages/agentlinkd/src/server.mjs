@@ -118,7 +118,13 @@ const PACK_UI_METHODS = ["form", "progress"];
 if (!Number.isInteger(PORT) || PORT < 0 || PORT > 65535) throw new Error(`invalid --port '${PORT}'`);
 if (!TOKEN) throw new Error("pairing token must not be empty");
 if (!APPROVALS.has(DEFAULT_APPROVAL)) throw new Error(`invalid --approval '${DEFAULT_APPROVAL}'`);
-if (!fs.existsSync(DEFAULT_CWD) || !fs.statSync(DEFAULT_CWD).isDirectory()) {
+if (!fs.existsSync(DEFAULT_CWD)) {
+  throw new Error(
+    `--cwd does not exist: ${DEFAULT_CWD}\n` +
+      `Create it first (mkdir -p "${DEFAULT_CWD}") or point --cwd at an existing project directory.`,
+  );
+}
+if (!fs.statSync(DEFAULT_CWD).isDirectory()) {
   throw new Error(`--cwd is not a directory: ${DEFAULT_CWD}`);
 }
 
