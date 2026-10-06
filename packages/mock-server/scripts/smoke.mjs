@@ -128,8 +128,14 @@ async function main() {
     a.send({ v: 1, cmd: "session.subscribe", id: toolSession.id, since_seq: 0 });
     const live = await a.waitFor((e) => isData(e, "session.state") && e.data.status === "live", 5000, "session.state live");
     ok("cold wake reaches live", live?.seq > 0);
-    const seqs = a.events.filter((e) => e.session === toolSession.id).map((e) => e.seq);
-    ok("journal replay is gapless", seqs.every((s, i) => i === 0 || s === seqs[i - 1] + 1), `seq 1..${seqs.at(-1)}`);
+    const backgroundSetting = await a.waitFor(
+      (e) => isData(e, "x-agentlinkd.background_compaction_setting") && e.session === toolSession.id,
+      5000,
+      "replay background setting",
+    );
+    ok("replay restores ephemeral background preference", backgroundSetting.seq === undefined && backgroundSetting.data.enabled === true && backgroundSetting.data.pending === false);
+    const seqs = a.events.filter((e) => e.session === toolSession.id && typeof e.seq === "number").map((e) => e.seq);
+    ok("journal replay is gapless", seqs[0] === 1 && seqs.every((s, i) => i === 0 || s === seqs[i - 1] + 1), `seq 1..${seqs.at(-1)}`);
 
     // --- D: full approval turn ---
     a.send({ v: 1, cmd: "prompt.submit", session: toolSession.id, text: "run the fixture tool" });

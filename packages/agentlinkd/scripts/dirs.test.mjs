@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
 import { DIR_NAME_RE, confine, createDir, listDirs } from "../src/dirs.mjs";
 
@@ -75,6 +75,38 @@ test("createDir: names validated, no parents created, no dot-dirs, exists report
 });
 
 // ---------- host surface ----------
+
+test("host startup: missing cwd has a creation hint; a file is not a directory; neither creates state", (t) => {
+  const temp = fs.mkdtempSync(path.join(root, ".dirs-test-"));
+  t.after(() => fs.rmSync(temp, { recursive: true, force: true }));
+  const missing = path.join(temp, "missing project");
+  const file = path.join(temp, "notes.txt");
+  fs.writeFileSync(file, "not a workspace");
+  const state = path.join(temp, "state");
+  const home = path.join(temp, "dext");
+  for (const cwd of [missing, file]) {
+    const result = spawnSync(process.execPath, [path.join(root, "src/server.mjs"),
+      "--port=0", `--cwd=${cwd}`, `--state-dir=${state}`,
+      `--dext=${path.join(root, "scripts/fake-dext.mjs")}`], {
+      env: { ...process.env, DEXT_HOME: home }, encoding: "utf8", timeout: 10000,
+    });
+    assert.equal(result.error, undefined);
+    assert.equal(result.status, 1, result.stderr);
+    assert.ok(!result.stdout.includes("listening on"), "invalid workspace never starts the host");
+    if (cwd === missing) {
+      assert.ok(result.stderr.includes(`--cwd does not exist: ${cwd}`));
+      assert.ok(result.stderr.includes(`mkdir -p "${cwd}"`));
+      assert.ok(!result.stderr.includes("--cwd is not a directory"));
+    } else {
+      assert.ok(result.stderr.includes(`--cwd is not a directory: ${cwd}`));
+      assert.ok(!result.stderr.includes("Create it first"));
+    }
+    assert.equal(fs.existsSync(state), false, "startup refusal must precede durable state creation");
+    assert.equal(fs.existsSync(home), false, "startup refusal must precede agent probes");
+  }
+  assert.equal(fs.existsSync(missing), false, "a typo must not silently create a workspace");
+  assert.equal(fs.readFileSync(file, "utf8"), "not a workspace");
+});
 
 async function host(t, dirsRoot) {
   const temp = fs.mkdtempSync(path.join(root, ".dirs-test-"));

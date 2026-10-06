@@ -13,7 +13,8 @@ thinking; DextUI presents, supervises, and gets out of the way.
 ```bash
 npm install
 npm run build
-npm run serve -- --cwd=$HOME/my-project --approval=auto-read
+mkdir -p "$HOME/my-project"   # or use any existing project directory
+npm run serve -- --cwd="$HOME/my-project" --approval=auto-read
 ```
 
 Open http://127.0.0.1:8788 and pair with the printed token. Every prompt runs a
