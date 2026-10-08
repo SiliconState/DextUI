@@ -82,7 +82,17 @@
   const view = $derived(sess.view);
   const pendingList = $derived(view ? [...view.pending.values()] : []);
   const pendingUi = $derived(view?.pendingUi);
-  const blockingOverlay = $derived(app.paletteOpen || app.shortcutsOpen || !!artifact.document || !!pendingUi || !!inspect || app.eventsOpen || app.galleryOpen || app.settingsOpen || app.statusDetailsOpen || app.sessionCtlOpen || app.todosOpen || app.inlineDiffOpen || providers.open || packSheet.open || packSheet.panelOpen || !!crew.openId || folders.open || flows.open || tasks.open || packCreds.open);
+  const blockingOverlay = $derived(app.paletteOpen || app.shortcutsOpen || !!artifact.document || !!pendingUi || !!inspect || app.eventsOpen || app.galleryOpen || app.settingsOpen || app.statusDetailsOpen || app.contextOpen || app.sessionCtlOpen || app.todosOpen || app.inlineDiffOpen || providers.open || packSheet.open || packSheet.panelOpen || !!crew.openId || folders.open || flows.open || tasks.open || packCreds.open);
+  const pendingFormId = $derived(pendingUi?.id);
+  $effect(() => {
+    if (!pendingFormId) return;
+    // A runtime form owns focus. Header popovers must not remain interactive
+    // beside it or retain their own competing focus traps.
+    untrack(() => {
+      closeSessionCtl(); closeSettings(); closeFolderPicker();
+      app.contextOpen = false; app.statusDetailsOpen = false; app.todosOpen = false;
+    });
+  });
   const pendingUiError = $derived(view?.uiResponseError);
   const pendingUiErrorRev = $derived(view?.uiResponseErrorRev ?? 0);
 
@@ -116,6 +126,7 @@
       closeArtifact(); // artifact URLs are scoped to the previous host/session
       closeSessionCtl();
       app.statusDetailsOpen = false;
+      app.contextOpen = false;
       app.todosOpen = false;
       closeFolderPicker();
     });
@@ -129,6 +140,7 @@
       closeSessionCtl();
       closeSettings();
       app.statusDetailsOpen = false;
+      app.contextOpen = false;
       app.todosOpen = false;
       closeFolderPicker();
     });
@@ -204,6 +216,7 @@
         if (artifact.document) closeArtifact();
         else if (inspect) inspect = null;
         else if (app.todosOpen) app.todosOpen = false;
+        else if (app.contextOpen) app.contextOpen = false;
         else if (app.statusDetailsOpen) app.statusDetailsOpen = false;
         else if (app.sessionCtlOpen) closeSessionCtl();
         else if (app.settingsOpen) closeSettings();
@@ -380,6 +393,7 @@
     </aside>
     {#if indexOpen}
       <div class="index-scrim" onclick={() => (indexOpen = false)} onkeydown={() => {}} role="presentation"></div>
+      <div class="index-safe-top" aria-hidden="true" data-agent-id="index.safe-top"></div>
     {/if}
 
     <main class="main" inert={blockingOverlay || (mobileLayout && indexOpen)}>
@@ -450,7 +464,7 @@
       {/each}
     </div>
 
-    <div class="statusline" inert={(mobileLayout && indexOpen) || (blockingOverlay && !app.statusDetailsOpen)}>
+    <div class="statusline" inert={(mobileLayout && indexOpen) || (blockingOverlay && !app.statusDetailsOpen && !app.contextOpen)}>
       <StatusLine store={activeStore} {indexOpen} onToggleIndex={toggleNavigation} onNavigate={navigateHeader} />
     </div>
   </div>

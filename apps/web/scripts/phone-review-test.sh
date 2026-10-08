@@ -85,7 +85,7 @@ for size in ${REVIEW_SIZES:-390x844 768x1024 1280x900}; do
     "${B[@]}" eval '(()=>{const s=document.querySelector(`.sb`);s.scrollTop=0;return true})()' >/dev/null
     check 'document.documentElement.scrollWidth<=innerWidth && Math.abs(document.querySelector(`[data-agent-id="app.root"]`).getBoundingClientRect().height-visualViewport.height)<2'
     if [ "$width" -le 900 ]; then
-      check 'document.querySelector(`[data-agent-id="status.hud"]`).getBoundingClientRect().bottom<=document.querySelector(`[data-agent-id="transcript.root"]`).getBoundingClientRect().top && document.querySelector(`[data-agent-id="composer.root"]`).getBoundingClientRect().bottom<=visualViewport.height && document.querySelector(`[data-agent-id="status.session-state"]`).textContent==="Done"'
+      check 'document.querySelector(`[data-agent-id="status.hud"]`).getBoundingClientRect().bottom<=document.querySelector(`[data-agent-id="transcript.root"]`).getBoundingClientRect().top && document.querySelector(`[data-agent-id="composer.root"]`).getBoundingClientRect().bottom<=visualViewport.height && document.querySelector(`[data-agent-id="status.session-state"] .state-label`).textContent==="Idle"'
     else
       check '!document.querySelector(`[data-agent-id="session.rail.wrap"]`).inert && document.querySelector(`[data-agent-id="status.hud"]`).getBoundingClientRect().bottom<=document.querySelector(`[data-agent-id="transcript.root"]`).getBoundingClientRect().top && document.querySelectorAll(`[data-agent-id="status.hud"]`).length===1'
     fi
@@ -157,7 +157,7 @@ for size in ${REVIEW_SIZES:-390x844 768x1024 1280x900}; do
     "${B[@]}" click "[data-agent-id=\"theme.set.$theme\"]" >/dev/null
     "${B[@]}" press Escape >/dev/null
     wait_js "document.documentElement.dataset.theme===\"$theme\""
-    check 'document.querySelector(`[data-agent-id="status.session-state"]`).textContent==="Review"'
+    check 'document.querySelector(`[data-agent-id="status.session-state"] .state-label`).textContent==="Needs input"'
     check '(()=>{const b=document.querySelector(`[data-agent-id^="approval."][data-agent-id$=".once"]`),r=b.getBoundingClientRect();return r.left>=0&&r.right<=innerWidth&&r.bottom<=visualViewport.height&&(innerWidth>600||r.height>=44)})()'
     capture "$width-$theme-approval"
   done

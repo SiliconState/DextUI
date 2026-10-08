@@ -25,6 +25,7 @@ function set(state = stateName, fullAuto = auto, stress = false) {
   stateName = state;
   auto = fullAuto;
   app.statusDetailsOpen = false;
+  app.contextOpen = false;
   app.sessionCtlOpen = false;
   app.settingsOpen = false;
   app.todosOpen = false;
@@ -46,6 +47,7 @@ function set(state = stateName, fullAuto = auto, stress = false) {
       { kind: "marker", level: "warn", text: "bash advisory: Keep this guidance inside work" },
       { kind: "marker", level: "warn", text: "Workspace policy warning remains visible" },
       { kind: "marker", level: "warn", text: "Batch: 1 tool call(s) failed." },
+      { kind: "marker", level: "warn", text: "runtime guidance: objective checkpoints still look unresolved: log decisions and follow-up improvements. Before ending this turn, address them or explicitly say why each remaining item is not applicable / blocked." },
     );
   }
   if (state === "failed") blocks.push({ kind: "marker", level: "error", text: `Build failed. ${long}` });
@@ -114,4 +116,4 @@ window.fetch = async (input, init) => {
 };
 set();
 mount(App, { target: document.getElementById("app")! });
-Object.assign(window, { __headerReview: { set, history, mixedWork, event, resetHost: () => { app.hostEpoch++; }, shareReport: () => openArtifact({ name: "fixture.html", html: report, sessionId: store.state.id }), needsToken: (value: boolean) => { app.needsToken = value; }, stress: () => set("done", false, true), theme: setTheme, long, setNoContext: () => { store.state.contextTokens = undefined; store.state.contextChars = undefined; store.apply({ v: 1, session: store.state.id, event: "info", ts: Date.now(), data: "Context unavailable" }); }, other: () => { app.activeId = "other-fixture"; }, back: () => { app.activeId = "header-fixture"; } } });
+Object.assign(window, { __headerReview: { liveSteering: (value: boolean) => { app.caps = value ? [...app.caps, "steering.live"] : app.caps.filter((cap) => cap !== "steering.live"); }, requestForm: () => { event("ui.request", { id: "streaming-form", pack: "fixture", request_id: "form", method: "form", received_at: Date.now(), params: { title: "Streaming decision", submit_label: "Continue", fields: [{ id: "answer", label: "Your answer", type: "text" }] } }); }, set, history, mixedWork, event, context: (pct: number) => { store.state.diagnostics = { ...store.state.diagnostics, context_window: 200000 }; event("history_context_updated", { chars: pct * 2000 * 4, tokens: pct * 2000 }); }, model: (model: string, effort: ThinkingEffort) => { event("session.configured", { provider: model.startsWith("claude") ? "anthropic" : "openai", model, thinking_effort: effort }); }, phase: (phase: typeof app.phase) => { app.phase = phase; }, resetHost: () => { app.hostEpoch++; }, shareReport: () => openArtifact({ name: "fixture.html", html: report, sessionId: store.state.id }), needsToken: (value: boolean) => { app.needsToken = value; }, stress: () => set("done", false, true), theme: setTheme, long, setNoContext: () => { store.state.contextTokens = undefined; store.state.contextChars = undefined; store.apply({ v: 1, session: store.state.id, event: "info", ts: Date.now(), data: "Context unavailable" }); }, other: () => { app.activeId = "other-fixture"; }, back: () => { app.activeId = "header-fixture"; } } });

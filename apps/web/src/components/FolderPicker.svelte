@@ -164,6 +164,7 @@
     if (listing) navigate(`${listing.path}/${d.name}`);
   }
   function onKey(e: KeyboardEvent) {
+    if (e.isComposing || e.keyCode === 229) return;
     dlg.onKey(e); // Tab trap while the modal is open
     if (creating || connectors.formOpen) {
       if (e.key === "Escape") { creating = false; closeConnect(); e.preventDefault(); e.stopPropagation(); }
@@ -180,7 +181,7 @@
     else if (e.key === "ArrowUp") { cursor = Math.max(-1, cursor - 1); e.preventDefault(); }
     else if (e.key === "ArrowRight" && selected && !q) { enter(selected); e.preventDefault(); } // (→ moves the filter caret while typing)
     else if (e.key === "ArrowLeft" && listing?.parent && !q) { navigate(listing.parent); e.preventDefault(); }
-    else if (e.key === "Enter") { useTarget(e.shiftKey); e.preventDefault(); }
+    else if (e.key === "Enter" && !(e.target instanceof HTMLButtonElement)) { useTarget(e.shiftKey); e.preventDefault(); }
     else if (e.key === "n" && !e.metaKey && !e.ctrlKey && !(e.target instanceof HTMLInputElement)) { creating = true; newName = ""; e.preventDefault(); }
   }
 

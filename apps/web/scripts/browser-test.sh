@@ -111,7 +111,7 @@ wait_js '[...document.querySelectorAll(`[data-agent-id="block.text"]`)].some(x=>
 note "background compaction stays idle, accepts input, reconnects, applies once and cancels"
 agent-browser fill '[data-agent-id="composer.input"]' 'background compaction start' >/dev/null
 agent-browser press Enter >/dev/null
-wait_js 'document.querySelector(`[data-agent-id="status.operation"][data-background-phase]`)?.dataset.backgroundPhase === "running" && document.querySelector(`[data-agent-id="composer.input"]`)?.dataset.state === "idle" && !!document.querySelector(`[data-agent-id="composer.stop"]`) && document.querySelector(`[data-agent-id="status.hud"]`)?.dataset.state!=="working"' || { echo "FAIL: background-only status became busy"; FAIL=1; }
+wait_js 'document.querySelector(`[data-agent-id="status.operation"][data-background-phase]`)?.dataset.backgroundPhase === "running" && document.querySelector(`[data-agent-id="composer.input"]`)?.dataset.state === "idle" && !!document.querySelector(`[data-agent-id="composer.stop"]`) && document.querySelector(`[data-agent-id="status.hud"]`)?.dataset.state!=="active"' || { echo "FAIL: background-only status became busy"; FAIL=1; }
 agent-browser open "$B" >/dev/null
 sleep 0.4
 agent-browser eval '(()=>{const t=document.querySelector(`[data-agent-id="connect.token"]`);if(!t)return false;t.value="browsertest";document.querySelector(`[data-agent-id="connect.submit"]`).click();return true})()' >/dev/null
@@ -157,10 +157,17 @@ note "session fork controls and label stay inside the popout at desktop and phon
 for SIZE in '1280 900' '320 640' '375 667' '390 844' '430 932' '600 800' '900 700'; do
   read -r WIDTH HEIGHT <<< "$SIZE"
   agent-browser set viewport "$WIDTH" "$HEIGHT" >/dev/null
-  if [ "$WIDTH" -le 900 ]; then agent-browser eval '(()=>{const b=document.querySelector(`[data-agent-id="session.controls.more"]`);if(b?.getAttribute("aria-expanded")==="false")b.click();return true})()' >/dev/null; fi
+  if [ "$WIDTH" -le 900 ]; then
+    wait_js '!!document.querySelector(`[data-agent-id="status.model.picker"]`) && !!document.querySelector(`[data-agent-id="session.controls.more"]`)' || exit 1
+    agent-browser eval '(()=>{const b=document.querySelector(`[data-agent-id="session.controls.more"]`);if(b?.getAttribute("aria-expanded")==="false")b.click();return true})()' >/dev/null
+  else
+    wait_js '!!document.querySelector(`[data-agent-id="status.model.select"]`)' || exit 1
+  fi
   wait_js '(()=>{const menu=document.querySelector(`[data-agent-id="session.controls.overlay"]`),button=document.querySelector(`[data-agent-id="session.fork"]`),input=document.querySelector(`[data-agent-id="session.fork.seq"]`);if(!menu||!button||!input)return false;const m=menu.getBoundingClientRect(),b=button.getBoundingClientRect(),i=input.getBoundingClientRect(),range=document.createRange();range.selectNodeContents(button);const text=range.getBoundingClientRect();return m.left>=0&&m.right<=innerWidth&&menu.scrollWidth<=menu.clientWidth&&((innerWidth<=900&&getComputedStyle(input).display==="none")||(innerWidth>900&&Math.abs(b.left-i.left)<1&&Math.abs(b.width-i.width)<1))&&text.left>=b.left&&text.right<=b.right&&text.top>=b.top&&text.bottom<=b.bottom})()' || { echo "FAIL: fork label/control overflow ($SIZE)"; exit 1; }
 done
 agent-browser set viewport 1280 900 >/dev/null
+wait_js '!!document.querySelector(`[data-agent-id="status.model.select"]`)' || exit 1
+agent-browser eval '(()=>{document.querySelector(`[data-agent-id="session.fork"]`)?.scrollIntoView({block:"nearest"});return true})()' >/dev/null
 wait_js '(()=>{const b=document.querySelector(`[data-agent-id="session.fork"]`);if(!b||b.disabled)return false;const r=b.getBoundingClientRect();const box=[r.x,r.y,r.width,r.height].join(",");const stable=window.__forkStableBox===box;window.__forkStableBox=box;return stable})()' || { echo "FAIL: fork action did not settle after resize"; exit 1; }
 agent-browser click '[data-agent-id="session.fork"]' >/dev/null
 wait_js '[...document.querySelectorAll(`[data-agent-id="block.text"]`)].some(x=>x.textContent.includes("Foreground answer complete")) && [...document.querySelectorAll(`[data-agent-id^="session."][data-agent-id$=".open"]`)].some(x=>x.dataset.state==="active"&&x.textContent.includes("fork"))' || { echo "FAIL: kept fork activation/history"; exit 1; }
@@ -184,8 +191,8 @@ note "native slash compaction updates CTX and keeps summary collapsed (backgroun
 agent-browser fill '[data-agent-id="composer.input"]' '/compact' >/dev/null
 wait_js 'document.querySelector(`[data-agent-id="composer.send"]`)?.dataset.state === "ready"' || { echo "FAIL: compaction session composer not ready"; FAIL=1; }
 agent-browser press Enter >/dev/null
-wait_js 'document.querySelector(`[data-agent-id="block.compact"]`)?.dataset.state === "running" && document.querySelector(`[data-agent-id="status.hud"]`)?.dataset.state==="working" && document.querySelector(`[data-agent-id="composer.input"]`)?.dataset.state === "compacting"' || { echo "FAIL: compaction progress state"; FAIL=1; }
-wait_js '(()=>{const b=document.querySelector(`[data-agent-id="block.compact"]`);const c=document.querySelector(`[data-agent-id="status.ctx"]`);return b?.dataset.state==="complete"&&!b.open&&!b.querySelector(`[data-agent-id="block.compact.summary"]`)&&b.textContent.includes("48 → 11 messages")&&b.textContent.includes("1.2k context")&&c?.dataset.source==="history"&&c.title.includes("Context after compaction: 1.2k")&&document.querySelector(`[data-agent-id="status.hud"]`)?.dataset.state!=="working"})()' || { echo "FAIL: compact history/CTX projection"; FAIL=1; }
+wait_js 'document.querySelector(`[data-agent-id="block.compact"]`)?.dataset.state === "running" && document.querySelector(`[data-agent-id="status.hud"]`)?.dataset.state==="active" && document.querySelector(`[data-agent-id="composer.input"]`)?.dataset.state === "compacting"' || { echo "FAIL: compaction progress state"; FAIL=1; }
+wait_js '(()=>{const b=document.querySelector(`[data-agent-id="block.compact"]`);const c=document.querySelector(`[data-agent-id="status.ctx"]`);return b?.dataset.state==="complete"&&!b.open&&!b.querySelector(`[data-agent-id="block.compact.summary"]`)&&b.textContent.includes("48 → 11 messages")&&b.textContent.includes("1.2k context")&&c?.dataset.source==="history"&&c.title.includes("Context after compaction:")&&c.title.includes("1.2k")&&document.querySelector(`[data-agent-id="status.hud"]`)?.dataset.state!=="active"})()' || { echo "FAIL: compact history/CTX projection"; FAIL=1; }
 agent-browser click '[data-agent-id="block.compact"] summary' >/dev/null
 wait_js 'document.querySelector(`[data-agent-id="block.compact.summary"]`)?.textContent.includes("current objective")' || { echo "FAIL: compact summary details"; FAIL=1; }
 

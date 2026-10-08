@@ -44,6 +44,44 @@ Session-scoped popups now close on switching, host resets and authentication los
 
 Verification: 378 tests, all browser gates, the 144-case matrix, expanded-work stress, picker routing/focus/keyboard checks and multi-turn history checks. Captures are local under `patches/meticulous-review/final/`. Physical-device keyboard and native-share certification remain outstanding.
 
+## PWA edge surfaces and header meaning
+
+The page audit found the viewport-fit setting and zero-margin shell already present. The problem addressed here is inconsistent surfaces and safe-area ownership, not a second mobile app. At <=900px the page edges, header safe area and composer bottom band now use the existing header token. The transcript keeps its own reading surface and content gutters. Keyboard sizing continues to use the existing visual viewport variables.
+
+Part 1 implementation files/selectors:
+
+| File | Selectors or mechanism | Change |
+|---|---|---|
+| apps/web/src/app.css | html, body, #app; .shell | Header-token edge background; no mobile margin, max-width, border or rounding; dynamic minimum height |
+| apps/web/src/app.css | .shell > .statusline | Opaque header surface; top and landscape safe-area padding; no backdrop filter |
+| apps/web/src/app.css | .shell > .main, .shell > .todos-row | Landscape safe-area content padding; transcript reading surface retained |
+| apps/web/src/app.css | .shell > .composer, .shell > .index | Matching composer bottom/side surface, max(12px, bottom inset); drawer top inset |
+| apps/web/src/components/StatusLine.svelte | .session-header | Explicit opaque token background and no backdrop filter |
+| apps/web/index.html | viewport and theme-color metadata; early theme script | viewport-fit=cover retained; light/dark chrome metadata and saved/system theme before app mount |
+| apps/web/src/lib/state.svelte.ts | applyTheme, ensureStarted | Chrome metadata derives from CSS tokens and updates on theme/mobile breakpoint changes |
+
+The pill now describes activity, not completion: Active, Idle, Needs input, Error or Offline. Mobile model controls show actual model/effort aliases side by side, using uniform 12px header type, a neutral model icon and an effort-level color dot; exact values remain available in controls and accessible text. The activity capsule has a quiet outline and tint rather than a heavy fill; Idle stays neutral. At the narrowest widths the workspace uses a short Work label rather than an arbitrary long title. The context ring design remains unchanged; it now has its own usage popup, neutral/amber/red thresholds and independent accessible meter semantics. Popup-to-controls transitions preserve focus.
+
+Recognized runtime-guidance markers, including objective checkpoint reminders, stay in mobile work details with their full text. This does not classify user checklists or assistant narration as guidance.
+
+Browser verification covers 320/375px in light/dim/dark, Active/Idle and 40/70/92% context with the popup open, matching edge backgrounds, simulated 47px top/34px bottom portrait insets, 44px landscape notch insets, reduced motion, keyboard bounds and focus restoration. Captures: local patches/pwa-edge-review/final/. Physical Safari/Home Screen status-bar sampling and rubber-band overscroll remain manual acceptance; viewport emulation does not certify them.
+
+## One-line polish and fresh-eyes fixes
+
+Model and effort no longer stack. Header identity, model/effort and state inherit the same mobile system typography; a neutral chip icon identifies the model, and only effort uses level coloring. Narrow phones shorten display aliases without changing selections or losing the full accessible name. Active and Idle use a restrained outlined capsule, with reduced-motion-safe activity signaling and unchanged state navigation. Pending input retains its full screen-reader/live-region label even when the visible copy shortens.
+
+The code review fixed unbounded unbroken model aliases, Settings return focus after leaving overflow, saved-theme browser-chrome mismatch before mount, and an invented medium selection when effort was unreported. Regression coverage now includes the 192-case width/theme/state/permission matrix and 63 model/effort/width variants, plus pre-mount theme tests. New captures are local under patches/inline-header-review/final/. Physical-device checks remain outstanding.
+
+## Streaming and boundary acceptance
+
+A second review traced real session events rather than only static snapshots. Reset effects now depend on stable session IDs instead of the per-frame view object, so streaming does not dismiss context/details, clear model search, reset effort choices or cancel Full auto confirmation. Todo reads refresh on activation, todo changes and turn completion instead of every transcript event; elapsed time keeps ticking during continuous output.
+
+Shared popovers reserve landscape and bottom safe areas and constrain tall desktop menus to the available height. Workspace buttons retain native Enter activation, and IME Enter does not select a workspace. Incoming runtime forms dismiss competing header sheets. Full auto remains in the workspace button's accessible name. Composer follow-up labels distinguish live steering from next-turn queueing without changing delivery semantics.
+
+The Sessions drawer scrim no longer tints the clock/battery safe-area band: a full-width, untransformed header-colored layer stays above the sliding drawer and its scrim. Drawer padding uses the same inset tokens as the shell. Repeated hamburger open/close and details-open/close sequences verify that this band stays consistent across themes.
+
+Acceptance includes streaming persistence, exact todo fetch counts, form focus ownership, workspace keyboard activation, short-desktop bounds, drawer safe-area cycles and landscape popup insets, in addition to the existing header, history and work matrices. Final captures: local patches/final-audit/final/. Physical iPhone checks remain manual.
+
 ## Deliberate tradeoffs
 
 - **No change to steering.** The existing host capability determines whether a running follow-up is applied live or queued for a later turn. Relabeling this as a guaranteed queue would be misleading. Stop keeps the unsent draft and sends no new instruction.

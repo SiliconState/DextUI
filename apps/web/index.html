@@ -2,8 +2,20 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-    <meta name="theme-color" content="#0b0d10" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#ebe9e1" />
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#11141a" />
+    <script>
+      // Paint the saved/system theme before CSS and the PWA shell arrive.
+      try {
+        const saved = localStorage.getItem("dextui.theme");
+        const theme = ["light", "dim", "dark"].includes(saved) ? saved : matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+        document.documentElement.dataset.theme = theme;
+        const mobile = matchMedia("(max-width: 900px)").matches;
+        const colors = { light: ["#f4f2ec", "#ebe9e1"], dim: ["#1b1f27", "#21262f"], dark: ["#0b0d10", "#11141a"] };
+        for (const meta of document.querySelectorAll('meta[name="theme-color"]')) meta.content = colors[theme][mobile ? 1 : 0];
+      } catch { /* The app resolves the theme once storage becomes available. */ }
+    </script>
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="icon" href="/icon.svg?v=2" type="image/svg+xml" />
     <link rel="icon" href="/icon-192.png?v=2" type="image/png" sizes="192x192" />

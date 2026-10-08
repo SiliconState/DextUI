@@ -5,7 +5,29 @@ import ts from "typescript";
 
 const source = fs.readFileSync(new URL("../../../apps/web/src/lib/phone-presentation.ts", import.meta.url), "utf8");
 const { outputText } = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } });
-const { phoneCopyIds, phoneWorkCounts, toolResultMetadata, readableOutput, phoneTranscriptItems, phoneWorkRows, tipSummary, isAdvisoryMarker, isBatchFailureMarker } = await import(`data:text/javascript;base64,${Buffer.from(outputText).toString("base64")}`);
+const { phoneCopyIds, phoneWorkCounts, toolResultMetadata, readableOutput, phoneTranscriptItems, phoneWorkRows, tipSummary, isAdvisoryMarker, isBatchFailureMarker, isRuntimeGuidanceMarker } = await import(`data:text/javascript;base64,${Buffer.from(outputText).toString("base64")}`);
+
+test("runtime checkpoint guidance stays in work without capturing narration or private user text", () => {
+  const text = "runtime guidance: objective checkpoints still look unresolved: log decisions and follow-up improvements. Before ending this turn, address them or explicitly say why each remaining item is not applicable / blocked.";
+  const guidance = { id: 4, kind: "marker", level: "warn", text };
+  const blocks = [
+    { id: 1, kind: "user", text: "- Systems involved - Private ERP and storefront\n- What you built yourself - A private integration" },
+    { id: 2, kind: "tool", call_id: "a", name: "read_file", status: "ok", summary: "Read" },
+    { id: 3, kind: "text", complete: true, text },
+    guidance,
+    { id: 5, kind: "marker", level: "error", text },
+    { id: 6, kind: "marker", level: "warn", text, auth: { tool: "http", message: "Sign in" } },
+    { id: 7, kind: "marker", level: "warn", text: "Provider sign-in failed" },
+  ];
+  for (const compact of [true, false]) {
+    const items = phoneTranscriptItems(blocks, compact);
+    assert.ok(items.some((item) => item.kind === "work" && item.blocks.includes(guidance)));
+    for (const id of [1, 3, 5, 6, 7]) assert.ok(items.some((item) => item.kind === "block" && item.id === id));
+  }
+  for (const prefix of ["runtime guidance:", "[runtime-note] runtime guidance:", "final objective warning:", "queued update unresolved:"]) assert.equal(isRuntimeGuidanceMarker({ ...guidance, text: `${prefix} review checkpoint` }), true);
+  assert.equal(isRuntimeGuidanceMarker({ ...guidance, text: "We discussed runtime guidance: previously" }), false);
+  assert.equal(isRuntimeGuidanceMarker({ ...guidance, text: "runtime guidance:" }), false);
+});
 
 test("phone work counts report tool outcomes without inventing success for unfinished steps", () => {
   const blocks = [

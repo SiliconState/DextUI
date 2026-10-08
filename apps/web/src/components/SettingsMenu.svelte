@@ -10,7 +10,7 @@
   import { popoverPos } from "../lib/popover";
   import { useDialog } from "../lib/dialog.svelte";
 
-  const dlg = useDialog(() => app.settingsOpen);
+  const dlg = useDialog(() => app.settingsOpen, () => app.settingsReturnTarget ? document.querySelector<HTMLElement>(app.settingsReturnTarget) : null);
 
   const THEMES: { value: Theme; label: string }[] = [
     { value: "system", label: "System" },

@@ -14,6 +14,7 @@
 
   let { view }: { view: SessionState } = $props();
 
+  const sessionId = $derived(view.id);
   type Picker = "model" | "effort" | "approval";
   let picker = $state<Picker | null>(null);
   let modelQuery = $state("");
@@ -42,7 +43,7 @@
     media.addEventListener("change", update);
     return () => media.removeEventListener("change", update);
   });
-  const dlg = useDialog(() => app.sessionCtlOpen);
+  const dlg = useDialog(() => app.sessionCtlOpen, () => app.sessionCtlReturnTarget ? document.querySelector<HTMLElement>(app.sessionCtlReturnTarget) : null);
   let layoutRevision = $state(0);
   $effect(() => {
     if (!app.sessionCtlOpen) return;
@@ -159,7 +160,7 @@
   }
 
   let forkSeq = $state("");
-  $effect(() => { void view.id; void app.hostEpoch; forkSeq = ""; confirmAuto = false; picker = null; modelQuery = ""; });
+  $effect(() => { void sessionId; void app.hostEpoch; forkSeq = ""; confirmAuto = false; picker = null; modelQuery = ""; });
   $effect(() => { if (!app.sessionCtlOpen) { confirmAuto = false; advanced = false; picker = null; modelQuery = ""; } });
   const canFork = $derived(app.phase === "live" && app.caps.includes("session_fork") && !view.working && !view.compacting && !view.backgroundCompaction && !view.backgroundCompactPending);
   function fork() {
@@ -169,6 +170,7 @@
   }
 
   function onKey(e: KeyboardEvent) {
+    if (e.isComposing || e.keyCode === 229) return;
     dlg.onKey(e);
     if (e.key === "Escape") {
       if (phone && picker) returnToControls();
@@ -216,7 +218,7 @@
       {:else if picker === "effort"}
         <p class="picker-hint">{liveEffort ? "Applies to this session, including during work." : "Reasoning effort for the next turn."}</p>
         <div class="choices" role="group" aria-label="Thinking effort" data-agent-id="session.picker.choices">
-          {#each app.effortOptions as effort (effort)}<button class="choice" aria-pressed={(view.thinkingEffort ?? "medium") === effort} disabled={!canSelectEffort} data-agent-id={`session.effort.option.${effort}`} onclick={() => chooseEffort(effort)}><span class="choice-text effort-label">{effort}</span><span class="choice-check" aria-hidden="true">{(view.thinkingEffort ?? "medium") === effort ? "✓" : ""}</span></button>{/each}
+          {#each app.effortOptions as effort (effort)}<button class="choice" aria-pressed={view.thinkingEffort === effort} disabled={!canSelectEffort} data-agent-id={`session.effort.option.${effort}`} onclick={() => chooseEffort(effort)}><span class="choice-text effort-label">{effort}</span><span class="choice-check" aria-hidden="true">{view.thinkingEffort === effort ? "✓" : ""}</span></button>{/each}
         </div>
       {:else}
         <p class="picker-hint">What the agent may do without asking.</p>
@@ -258,16 +260,17 @@
     {#if app.caps.includes("effort_select") && app.effortOptions.length > 0}
       <div class="sec">
         <span class="lbl">Thinking</span>
-        {#if phone}<button class="picker-value" data-agent-id="status.effort.picker" aria-label={`Choose thinking effort. Current: ${view.thinkingEffort ?? "medium"}`} aria-haspopup="dialog" disabled={!canSelectEffort} onclick={() => openPicker("effort")}><span class="effort-label">{view.thinkingEffort ?? "medium"}</span><span aria-hidden="true">›</span></button>
+        {#if phone}<button class="picker-value" data-agent-id="status.effort.picker" aria-label={`Choose thinking effort. Current: ${view.thinkingEffort ?? "Not reported"}`} aria-haspopup="dialog" disabled={!canSelectEffort} onclick={() => openPicker("effort")}><span class="effort-label">{view.thinkingEffort ?? "Not reported"}</span><span aria-hidden="true">›</span></button>
         {:else}<select
           class="ctl effort"
-          value={view.thinkingEffort ?? "medium"}
+          value={view.thinkingEffort ?? ""}
           onchange={selectEffort}
           disabled={!canSelectEffort}
           title="Reasoning effort for the next turn"
           aria-label="Thinking effort" data-agent-id="status.effort.select"
           data-state={canSelectEffort ? "ready" : "disabled"}
         >
+          {#if !view.thinkingEffort}<option value="" disabled>Not reported</option>{:else if !app.effortOptions.includes(view.thinkingEffort)}<option value={view.thinkingEffort} disabled>{view.thinkingEffort} (current)</option>{/if}
           {#each app.effortOptions as effort (effort)}
             <option value={effort}>{effort}</option>
           {/each}

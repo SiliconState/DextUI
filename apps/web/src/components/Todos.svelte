@@ -14,7 +14,10 @@
 
   const sess = useSession(() => store);
   const view = $derived(sess.view ?? store.state);
-  const sessCwd = $derived(app.sessions.find((s) => s.id === view.id)?.cwd ?? "");
+  const sessionId = $derived(view.id);
+  const working = $derived(view.working);
+  const todosVersion = $derived(view.todosVersion ?? 0);
+  const sessCwd = $derived(app.sessions.find((s) => s.id === sessionId)?.cwd ?? "");
 
   let open = $state(localStorage.getItem("dextui.todosOpen") === "1");
   let mobile = $state(matchMedia("(max-width: 900px)").matches);
@@ -69,6 +72,7 @@
       seenReveal = reveal;
       if (mobile) {
         app.statusDetailsOpen = false;
+        app.contextOpen = false;
         app.sessionCtlOpen = false;
         app.settingsOpen = false;
         app.todosOpen = true;
@@ -122,7 +126,7 @@
   // under the new session's name until the fetch lands.
   let shownSid = "";
   $effect(() => {
-    const sid = view.id;
+    const sid = sessionId;
     const scope = `${app.hostEpoch}:${sid}`;
     if (scope !== shownSid) {
       shownSid = scope;
@@ -139,8 +143,8 @@
   // turn_end refresh: working true → false, debounced 250 ms.
   let wasWorking = false;
   $effect(() => {
-    const w = view.working;
-    const sid = view.id;
+    const w = working;
+    const sid = sessionId;
     if (w) {
       wasWorking = true;
       return;
@@ -154,8 +158,8 @@
   // the panel follows the agent's list mid-turn instead of at turn_end.
   let seenVersion = 0;
   $effect(() => {
-    const v = view.todosVersion ?? 0;
-    const sid = view.id;
+    const v = todosVersion;
+    const sid = sessionId;
     if (v !== seenVersion) {
       seenVersion = v;
       if (v > 0 && sid && supported) schedule(sid, 100);

@@ -254,7 +254,7 @@
   }
 
   function onWindowKey(e: KeyboardEvent) {
-    if (e.isComposing || app.sessionAction) return;
+    if (e.defaultPrevented || e.isComposing || app.sessionAction) return;
     dlg.onKey(e);
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
       e.preventDefault();

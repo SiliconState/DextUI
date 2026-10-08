@@ -150,9 +150,10 @@
     lastPinnedCount = view.blocks.length;
   });
 
+  const busy = $derived(view.working || view.compacting);
   let now = $state(Date.now());
   $effect(() => {
-    if (!view.working && !view.compacting) return;
+    if (!busy) return;
     const t = setInterval(() => {
       now = Date.now();
     }, 1000);

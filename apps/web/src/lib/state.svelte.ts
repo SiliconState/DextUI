@@ -50,6 +50,7 @@ export const app = $state({
   inlineDiffOpen: false,
   /** Settings popover (theme · work details · notifications · providers · sign out). */
   settingsOpen: false,
+  settingsReturnTarget: null as string | null,
   /** Viewport rect of the trigger, so the popover anchors to it and opens
    *  away from the nearest edge; null → default bottom-right corner. */
   settingsAnchor: null as { top: number; bottom: number; right: number } | null,
@@ -59,7 +60,9 @@ export const app = $state({
   sessionCtlOpen: false,
   /** Mobile status overflow is a sheet, never an expanded toolbar. */
   statusDetailsOpen: false,
+  contextOpen: false,
   sessionCtlAnchor: null as { top: number; bottom: number; right: number } | null,
+  sessionCtlReturnTarget: null as string | null,
   sidebarCollapsed: false,
   theme: "dark" as Theme,
   /** Resolved (never "system") — drives <html data-theme>. "dim" is a
@@ -377,10 +380,9 @@ function applyTheme(t: Theme): void {
   app.resolvedTheme = resolved;
   document.documentElement.dataset.theme = resolved;
   // Keep installed-PWA/browser chrome in sync with the resolved scheme.
-  document.querySelector<HTMLMetaElement>('meta[name="theme-color"]')?.setAttribute(
-    "content",
-    resolved === "light" ? "#f4f2ec" : resolved === "dim" ? "#1b1f27" : "#0b0d10",
-  );
+  const mobile = matchMedia("(max-width: 900px)").matches;
+  const surface = getComputedStyle(document.documentElement).getPropertyValue(mobile ? "--bg1" : "--bg").trim();
+  for (const meta of document.querySelectorAll<HTMLMetaElement>('meta[name="theme-color"]')) meta.content = surface;
 }
 
 /** dark → dim → light → system → dark */
@@ -404,7 +406,9 @@ export function setCompactTools(compact: boolean): void {
 
 /** Open the settings popover, anchored to the trigger's viewport rect so it
  *  opens away from the nearest edge; pass nothing to fall back to the corner. */
-export function openSettings(anchor?: { top: number; bottom: number; right: number }): void {
+export function openSettings(anchor?: { top: number; bottom: number; right: number }, returnTarget?: string): void {
+  app.settingsReturnTarget = returnTarget ?? null;
+  app.contextOpen = false;
   app.todosOpen = false;
   app.statusDetailsOpen = false;
   app.sessionCtlOpen = false;
@@ -416,12 +420,17 @@ export function openSettings(anchor?: { top: number; bottom: number; right: numb
 export function closeSettings(): void {
   app.settingsOpen = false;
   app.settingsAnchor = null;
+  app.settingsReturnTarget = null;
 }
 
 /** Open the session-controls popover (model · effort · approval), anchored to
  *  the chip's viewport rect so it opens away from the nearest edge; pass
  *  nothing to fall back to the corner (Finder entry). */
-export function openSessionCtl(anchor?: { top: number; bottom: number; right: number }): void {
+export function openSessionCtl(anchor?: { top: number; bottom: number; right: number }, returnTarget?: string): void {
+  // Capture before removing the source popup; browsers can move focus to body
+  // immediately when its focused trigger is unmounted or made inert.
+  app.sessionCtlReturnTarget = returnTarget ?? null;
+  app.contextOpen = false;
   app.todosOpen = false;
   app.statusDetailsOpen = false;
   app.settingsOpen = false;
@@ -433,6 +442,7 @@ export function openSessionCtl(anchor?: { top: number; bottom: number; right: nu
 export function closeSessionCtl(): void {
   app.sessionCtlOpen = false;
   app.sessionCtlAnchor = null;
+  app.sessionCtlReturnTarget = null;
 }
 
 /** Preserve the exact resolved palette for interactive reports. */
@@ -475,6 +485,7 @@ export function ensureStarted(): void {
         : "on"
       : "off";
   applyTheme(theme);
+  matchMedia("(max-width: 900px)").addEventListener("change", () => applyTheme(app.theme));
   // Follow OS scheme changes live while in system mode.
   sysDark.addEventListener("change", () => {
     if (app.theme === "system") applyTheme("system");

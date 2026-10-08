@@ -100,6 +100,7 @@
   // Real hosts may not support mid-turn steering; honor the hello capability
   // (snapshotted into reactive app.caps at phase=live).
   const canSteer = $derived(app.caps.includes("steering"));
+  const liveSteer = $derived(app.caps.includes("steering.live"));
   // Attachments (files_write): chips upload into <cwd>/uploads and their
   // paths ride the prompt tail; a send waits for in-flight uploads.
   const canAttach = $derived(app.caps.includes("files_write") && live);
@@ -148,7 +149,7 @@
       if (view.status === "exited" || view.status === "cold") return "Session closed";
       if (!live) return "Waking session…";
       if (view.compacting) return "Compacting…";
-      if (view.working) return canSteer ? "Add a follow-up…" : "Working…";
+      if (view.working) return canSteer ? liveSteer ? "Add a live follow-up…" : "Add a follow-up…" : "Working…";
       return "Message Dext…";
     }
     if (view.status === "exited") return `session closed — ${MOD}n for a new one`;
@@ -156,7 +157,7 @@
     if (!live) return "waking session…";
     if (view.compacting) return "compacting context…";
     if (view.working) {
-      return canSteer ? "type to queue — delivers as the next turn… (^c to stop)" : "turn running… (^c to stop)";
+      return canSteer ? liveSteer ? "type to steer — applies live… (^c to stop)" : "type to queue — delivers as the next turn… (^c to stop)" : "turn running… (^c to stop)";
     }
     const parts = ["type a request…"];
     if (commands.length > 0) parts.push("/ commands");
@@ -629,8 +630,8 @@
       <button
         class="act accent send-control"
         class:empty-working={view.working && !text.trim() && !atts.some((a) => a.status === "done")}
-        aria-label={view.working && canSteer ? "Queue follow-up" : "Send message"}
-        title={view.working && canSteer ? "Queue follow-up for the next turn" : "Send message"}
+        aria-label={view.working && canSteer ? liveSteer ? "Send live follow-up" : "Queue follow-up" : "Send message"}
+        title={view.working && canSteer ? liveSteer ? "Send a follow-up to the running agent" : "Queue follow-up for the next turn" : "Send message"}
         onpointerdown={(e) => { if (phone) e.preventDefault(); }}
         data-agent-id={view.working && canSteer ? "composer.steer" : "composer.send"}
         data-state={canSend ? "ready" : "disabled"}

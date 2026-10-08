@@ -34,8 +34,11 @@ export function useDialog(getOpen: () => boolean, getReturnTarget?: () => HTMLEl
 
   $effect(() => {
     if (getOpen()) {
-      const fromOverflow = document.activeElement instanceof HTMLElement && !!document.activeElement.closest('[data-agent-id="status.details.overlay"]');
-      prev = getReturnTarget?.() ?? (fromOverflow ? document.querySelector<HTMLElement>('[data-agent-id="status.details"]') : document.activeElement instanceof HTMLElement ? document.activeElement : null);
+      const active = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      const removedTrigger = active?.closest('[data-agent-id="status.details.overlay"]')
+        ? '[data-agent-id="status.details"]'
+        : active?.closest('[data-agent-id="status.context.overlay"]') ? '[data-agent-id="status.ctx"]' : null;
+      prev = getReturnTarget?.() ?? (removedTrigger ? document.querySelector<HTMLElement>(removedTrigger) : active);
       const frame = requestAnimationFrame(() => {
         if (!node || !available(node)) return;
         const initial = node.querySelector<HTMLElement>("[data-dialog-initial]");

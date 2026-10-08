@@ -13,7 +13,7 @@ trap cleanup EXIT
 [ -z "${SCREENSHOTS:-}" ] || mkdir -p "$SCREENSHOTS"
 capture() { [ -z "${SCREENSHOTS:-}" ] || "${B[@]}" screenshot "$SCREENSHOTS/$1.png" >/dev/null; }
 wait_js() { if ! "${B[@]}" wait --fn "$1" >/dev/null; then echo "FAIL waiting: $1"; "${B[@]}" snapshot; "${B[@]}" eval '({focus:document.activeElement?.dataset.agentId,tag:document.activeElement?.tagName,mainInert:document.querySelector(`main`)?.inert,diff:!!document.querySelector(`[data-agent-id="diff.overlay"]`),launch:[...document.querySelectorAll(`[data-agent-id="diff.open"]`)].map(e=>({connected:e.isConnected,inert:!!e.closest(`[inert]`),rects:e.getClientRects().length,visibility:getComputedStyle(e).visibility,display:getComputedStyle(e).display,top:e.getBoundingClientRect().top})),history:document.querySelector(`.sb`)?.scrollTop})'; capture failure; exit 1; fi; }
-check() { local out; out=$("${B[@]}" eval "$1"); if [ "$out" != true ]; then echo "FAIL: $1"; echo "$out"; "${B[@]}" eval 'JSON.stringify({failures:window.__fitFailures,width:innerWidth,work:{summaries:[...document.querySelectorAll(`section[data-agent-id^="phone.work."] > button`)].map(e=>({label:e.getAttribute("aria-label"),text:e.textContent,state:e.parentElement.dataset.state})),steps:document.querySelectorAll(`section[data-agent-id^="phone.work."] .step`).length,tips:[...document.querySelectorAll(`[data-agent-id="phone.work.tip"]`)].map(e=>e.textContent),markers:[...document.querySelectorAll(`.b-marker`)].map(e=>e.textContent)},popup:(()=>{const p=document.querySelector(`[data-agent-id="session.controls.overlay"]`);return p?{height:p.getBoundingClientRect().height,width:p.getBoundingClientRect().width,text:p.textContent,sections:[...p.querySelectorAll(`.sec`)].map(e=>[e.textContent,e.getBoundingClientRect().height])}:null})(),header:(()=>{const h=document.querySelector(`[data-agent-id="status.hud"]`),t=h.querySelector(`.session-name`);return {height:h.getBoundingClientRect().height,scroll:h.scrollWidth,client:h.clientWidth,titleWidth:t.clientWidth,titleScroll:t.scrollWidth,buttons:[...h.querySelectorAll(`:scope > button`)].map(x=>[x.dataset.agentId,x.getBoundingClientRect().height,x.getBoundingClientRect().width])}})()})' || true; capture failure; exit 1; fi; }
+check() { local out; out=$("${B[@]}" eval "$1"); if [ "$out" != true ]; then echo "FAIL: $1"; echo "$out"; "${B[@]}" eval 'JSON.stringify({failures:window.__fitFailures,width:innerWidth,work:{summaries:[...document.querySelectorAll(`section[data-agent-id^="phone.work."] > button`)].map(e=>({label:e.getAttribute("aria-label"),text:e.textContent,state:e.parentElement.dataset.state})),steps:document.querySelectorAll(`section[data-agent-id^="phone.work."] .step`).length,tips:[...document.querySelectorAll(`[data-agent-id="phone.work.tip"]`)].map(e=>e.textContent),markers:[...document.querySelectorAll(`.b-marker`)].map(e=>e.textContent)},popup:(()=>{const p=document.querySelector(`[data-agent-id="session.controls.overlay"]`);return p?{height:p.getBoundingClientRect().height,width:p.getBoundingClientRect().width,text:p.textContent,sections:[...p.querySelectorAll(`.sec`)].map(e=>[e.textContent,e.getBoundingClientRect().height])}:null})(),header:(()=>{const h=document.querySelector(`[data-agent-id="status.hud"]`),t=h.querySelector(`.session-name`);return {height:h.getBoundingClientRect().height,scroll:h.scrollWidth,client:h.clientWidth,titleWidth:t.clientWidth,titleScroll:t.scrollWidth,buttons:[...h.querySelectorAll(`:scope > button`)].map(x=>[x.dataset.agentId,x.getBoundingClientRect().height,x.getBoundingClientRect().width,getComputedStyle(x).fontSize,x.querySelector(`.pill-label`)?{font:getComputedStyle(x.querySelector(`.pill-label`)).fontSize,padding:getComputedStyle(x.querySelector(`.pill-label`)).padding}:null])}})()})' || true; capture failure; exit 1; fi; }
 (cd apps/web && npm exec -- vite build --config scripts/header-review.vite.ts >"$TMP/build.log" 2>&1) || { cat "$TMP/build.log"; exit 1; }
 node packages/mock-server/src/server.mjs --port="$PORT" --static="$OUT" >"$TMP/server.log" 2>&1 &
 SRV=$!
@@ -22,16 +22,17 @@ sleep 1
 wait_js '!!window.__headerReview && !!document.querySelector(`[data-agent-id="status.hud"]`)'
 "${B[@]}" eval '(()=>{window.__fits=selector=>{const roots=[...document.querySelectorAll(selector)];window.__fitFailures=[];for(const root of roots){const r=root.getBoundingClientRect();for(const child of root.querySelectorAll(`button,input,select,.session-name,.subtitle,.full-auto,.cell-value,.art,.tabs,.search,.appr-actions`)){const c=child.getBoundingClientRect();if(!c.width||!c.height)continue;if(c.left<r.left-1||c.right>r.right+1)window.__fitFailures.push({root:selector,id:child.dataset.agentId,tag:child.tagName,left:c.left,right:c.right,rootLeft:r.left,rootRight:r.right});}}return roots.length>0&&window.__fitFailures.length===0};return true})()' >/dev/null
 COUNT=0
-for width in ${HEADER_WIDTHS:-360 390 499 501 768 1280}; do
+for width in ${HEADER_WIDTHS:-320 360 375 390 499 501 768 1280}; do
   "${B[@]}" set viewport "$width" 844 >/dev/null
   "${B[@]}" wait 220 >/dev/null
   for theme in ${HEADER_THEMES:-light dim dark}; do
     for state in working review done failed; do
       for auto in false true; do
         "${B[@]}" eval "(()=>{window.__headerReview.theme(\"$theme\");window.__headerReview.set(\"$state\",$auto);return true})()" >/dev/null
-        wait_js "document.querySelector(\`[data-agent-id=\"status.hud\"]\`).dataset.state===\"$state\" && !!document.querySelector(\`[data-agent-id=\"status.full-auto\"]\`)===$auto"
-        check '(()=>{const h=document.querySelector(`[data-agent-id="status.hud"]`),r=h.getBoundingClientRect(),title=h.querySelector(`.session-name`),s=getComputedStyle(title),children=[...h.children].filter(e=>e.tagName===`BUTTON`);return r.height===(innerWidth<=900||matchMedia(`(pointer: coarse)`).matches||matchMedia(`(hover: none)`).matches?44:32)&&h.scrollWidth<=h.clientWidth&&document.querySelectorAll(`[data-agent-id="status.hud"]`).length===1&&document.querySelectorAll(`[data-agent-id="status.ctx"]`).length===1&&document.querySelectorAll(`[data-agent-id="status.session-state"]`).length===1&&title.scrollWidth>title.clientWidth&&s.textOverflow===`ellipsis`&&s.whiteSpace===`nowrap`&&children.every(e=>{const b=e.getBoundingClientRect();return b.top>=r.top&&b.bottom<=r.bottom&&b.height>=(innerWidth<=900?44:28)})&&window.__fits(`[data-agent-id="status.hud"]`)})()'
-        if [ "$auto" = true ]; then check '(()=>{const flag=document.querySelector(`[data-agent-id="status.full-auto"]`),copy=document.querySelector(`.subtitle-copy`),f=flag.getBoundingClientRect(),c=copy.getBoundingClientRect();return f.width>0&&f.height>0&&(innerWidth<=900?getComputedStyle(document.querySelector(`.auto-label`)).display==="none":f.left>=c.right&&Math.abs(f.top-c.top)<4)})()'; fi
+        case "$state" in working) activity=active;; review) activity='needs input';; done) activity=idle;; failed) activity=error;; esac
+        wait_js "document.querySelector(\`[data-agent-id=\"status.hud\"]\`).dataset.state===\"$activity\" && !!document.querySelector(\`[data-agent-id=\"status.full-auto\"]\`)===$auto"
+        check '(()=>{const h=document.querySelector(`[data-agent-id="status.hud"]`),r=h.getBoundingClientRect(),title=h.querySelector(`.session-name`),s=getComputedStyle(title),children=[...h.children].filter(e=>e.tagName===`BUTTON`);return r.height===(innerWidth<=900||matchMedia(`(pointer: coarse)`).matches||matchMedia(`(hover: none)`).matches?44:32)&&h.scrollWidth<=h.clientWidth&&document.querySelectorAll(`[data-agent-id="status.hud"]`).length===1&&document.querySelectorAll(`[data-agent-id="status.ctx"]`).length===1&&document.querySelectorAll(`[data-agent-id="status.session-state"]`).length===1&&(innerWidth<=420?getComputedStyle(h.querySelector(`.compact-workspace`)).display!==`none`:title.scrollWidth>title.clientWidth&&s.textOverflow===`ellipsis`&&s.whiteSpace===`nowrap`)&&children.every(e=>{const b=e.getBoundingClientRect();return b.top>=r.top&&b.bottom<=r.bottom&&b.height>=(innerWidth<=900?44:28)})&&window.__fits(`[data-agent-id="status.hud"]`)})()'
+        if [ "$auto" = true ]; then check 'document.querySelector(`[data-agent-id="status.workspace"]`).getAttribute("aria-label").includes("Full auto: actions without asking")'; check '(()=>{const flag=document.querySelector(`[data-agent-id="status.full-auto"]`),copy=document.querySelector(`.subtitle-copy`),f=flag.getBoundingClientRect(),c=copy.getBoundingClientRect();return f.width>0&&f.height>0&&(innerWidth<=900?getComputedStyle(document.querySelector(`.auto-label`)).display==="none":f.left>=c.right&&Math.abs(f.top-c.top)<4)})()'; fi
         check "!!document.querySelector(\`[data-agent-id=\"status.progress\"]\`) === (\"$state\"===\"working\"||\"$state\"===\"review\")"
         if [ "$state" = working ]; then check 'document.querySelector(`.subtitle-copy`).textContent==="5 of 8 · Rebuilding report" && document.querySelector(`[data-agent-id="status.progress"]`).value===5 && document.querySelector(`[data-agent-id="status.progress"]`).max===8'; fi
         if [ "$width" -le 600 ]; then
@@ -44,6 +45,7 @@ for width in ${HEADER_WIDTHS:-360 390 499 501 768 1280}; do
         "${B[@]}" click '[data-agent-id="status.session-state"]' >/dev/null
         if [ "$state" = review ]; then wait_js 'document.querySelector(`[data-agent-id="approval.dock"]`).contains(document.activeElement)'; fi
         if [ "$state" = failed ]; then wait_js 'document.activeElement?.textContent.includes("Build failed")'; fi
+        if [ "$width" -le 900 ]; then check '(()=>{const h=document.querySelector(`[data-agent-id="status.hud"]`),n=h.querySelector(`.model-name`),e=h.querySelector(`.model-effort`),p=h.querySelector(`.pill-label`),type=h.querySelector(`.compact-workspace`).getClientRects().length?h.querySelector(`.compact-workspace`):h.querySelector(`.session-name`),style=x=>getComputedStyle(x),nr=n.getBoundingClientRect(),er=e.getBoundingClientRect();return style(n).fontSize===style(e).fontSize&&style(e).fontSize===style(p).fontSize&&style(p).fontSize===style(type).fontSize&&style(n).fontFamily===style(p).fontFamily&&Math.abs((nr.top+nr.bottom)/2-(er.top+er.bottom)/2)<1&&er.left>=nr.right&&e.scrollWidth<=e.clientWidth+1&&p.scrollWidth<=p.clientWidth+1&&!n.querySelector(`i`)&&!!n.querySelector(`svg.model-icon`)&&style(p).borderRadius===`999px`&&style(p).borderTopWidth===`1px`&&[...h.querySelectorAll(`:scope > button`)].every(b=>b.getBoundingClientRect().width>=44)})()'; fi
         capture "$width-$theme-$state-auto-$auto"
         COUNT=$((COUNT+1))
       done
@@ -51,8 +53,25 @@ for width in ${HEADER_WIDTHS:-360 390 499 501 768 1280}; do
   done
   "${B[@]}" eval '(()=>{window.__headerReview.set(`done`,true);return true})()' >/dev/null
   "${B[@]}" click '[data-agent-id="status.ctx"]' >/dev/null
+  wait_js '!!document.querySelector(`[data-agent-id="status.context.overlay"]`)'
+  check 'window.__fits(`[data-agent-id="status.context.overlay"]`) && document.querySelector(`[data-agent-id="status.context.overlay"]`).textContent.includes("Context: 40% used") && document.querySelector(`[role="meter"]`).getAttribute("aria-valuenow")==="40" && !document.querySelector(`[data-agent-id="session.controls.overlay"]`)'
+  capture "$width-context"
+  "${B[@]}" click '[data-agent-id="status.context.controls"]' >/dev/null
+  wait_js '!!document.querySelector(`[data-agent-id="session.controls.overlay"]`) && !document.querySelector(`[data-agent-id="status.context.overlay"]`)'
+  "${B[@]}" press Escape >/dev/null
+  wait_js 'document.activeElement?.dataset.agentId==="status.ctx"'
+  if [ "$width" -le 1099 ]; then
+    "${B[@]}" click '[data-agent-id="status.details"]' >/dev/null
+    wait_js '!!document.querySelector(`[data-agent-id="status.details.overlay"]`)'
+    "${B[@]}" click '[data-agent-id="settings.open"]' >/dev/null
+    wait_js '!!document.querySelector(`[data-agent-id="settings.overlay"]`) && document.querySelector(`[data-agent-id="settings.overlay"]`).contains(document.activeElement)'
+    "${B[@]}" press Escape >/dev/null
+    wait_js 'document.activeElement?.dataset.agentId==="status.details"'
+  fi
+  "${B[@]}" click '[data-agent-id="status.model-chip"]' >/dev/null
   wait_js '!!document.querySelector(`[data-agent-id="session.controls.overlay"]`)'
   "${B[@]}" wait 180 >/dev/null
+  check '(innerWidth<=900?document.querySelector(`[data-agent-id="status.effort.picker"]`).textContent.includes(`Not reported`):document.querySelector(`[data-agent-id="status.effort.select"]`).value===``)'
   if [ "$width" -le 900 ]; then check 'document.querySelector(`[data-agent-id="session.controls.overlay"]`).getBoundingClientRect().width<=304 && document.querySelector(`[data-agent-id="session.controls.overlay"]`).getBoundingClientRect().height<360 && !document.querySelector(`[data-agent-id="session.background.select"]`)'; fi
   capture "$width-controls"
   check '(innerWidth<=900?document.querySelector(`[data-agent-id="status.model.picker"]`).textContent:document.querySelector(`[data-agent-id="status.model.select"]`).value).includes(`mock-model-with-a-long-name`)'
@@ -60,7 +79,7 @@ for width in ${HEADER_WIDTHS:-360 390 499 501 768 1280}; do
   "${B[@]}" press Shift+Tab >/dev/null
   check 'document.querySelector(`[data-agent-id="session.controls.overlay"]`).contains(document.activeElement)'
   "${B[@]}" press Escape >/dev/null
-  wait_js 'document.activeElement?.dataset.agentId==="status.ctx"'
+  wait_js 'document.activeElement?.dataset.agentId==="status.model-chip"'
   "${B[@]}" click '[data-agent-id="status.details"]' >/dev/null
   wait_js '!!document.querySelector(`[data-agent-id="status.details.overlay"]`) && document.querySelector(`[data-agent-id="status.details.overlay"]`).contains(document.activeElement)'
   check 'window.__fits(`[data-agent-id="status.details.overlay"]`)'
@@ -70,14 +89,18 @@ for width in ${HEADER_WIDTHS:-360 390 499 501 768 1280}; do
   "${B[@]}" press Escape >/dev/null
   wait_js 'document.activeElement?.dataset.agentId==="status.details"'
   # Title/workspace and Model must route to different surfaces at every size.
-  "${B[@]}" click '[data-agent-id="status.workspace"] .session-name' >/dev/null
+  "${B[@]}" click '[data-agent-id="status.workspace"]' >/dev/null
   wait_js '!!document.querySelector(`[data-agent-id="folders.overlay"]`) && !document.querySelector(`[data-agent-id="session.controls.overlay"]`)'
   check 'document.querySelector(`[data-agent-id="folders.intent"]`).dataset.state==="move" && window.__fits(`[data-agent-id="folders.overlay"]`)'
   if [ "$width" -le 900 ]; then
-    check '(()=>{const p=document.querySelector(`[data-agent-id="folders.overlay"]`).getBoundingClientRect(),w=document.querySelector(`[data-agent-id="status.workspace"]`).getBoundingClientRect(),c=document.querySelector(`[data-agent-id="status.ctx"]`);return p.width<innerWidth&&p.height<=520&&p.bottom<=visualViewport.height&&w.width<=112&&c.querySelector(`svg`).getBoundingClientRect().width===38&&getComputedStyle(c.querySelector(`span`)).fontSize==="10px"})()'
+    check '(()=>{const p=document.querySelector(`[data-agent-id="folders.overlay"]`).getBoundingClientRect(),w=document.querySelector(`[data-agent-id="status.workspace"]`).getBoundingClientRect(),c=document.querySelector(`[data-agent-id="status.ctx"]`);return p.width<innerWidth&&p.height<=520&&p.bottom<=visualViewport.height&&w.width<=112&&c.querySelector(`svg`).getBoundingClientRect().width===38&&getComputedStyle(c.querySelector(`.context-percent`)).fontSize==="10px"})()'
   fi
   capture "$width-workspace-popup"
-  "${B[@]}" click '[data-agent-id="folders.close"]' >/dev/null
+  "${B[@]}" eval '(()=>{const e=document.querySelector(`[data-agent-id="folders.filter"]`);(e??document.querySelector(`[data-agent-id="folders.overlay"]`)).dispatchEvent(new KeyboardEvent("keydown",{key:"Enter",isComposing:true,bubbles:true}));return true})()' >/dev/null
+  check '!!document.querySelector(`[data-agent-id="folders.overlay"]`)'
+  "${B[@]}" focus '[data-agent-id="folders.close"]' >/dev/null
+  "${B[@]}" press Enter >/dev/null
+  wait_js '!document.querySelector(`[data-agent-id="folders.overlay"]`)'
   wait_js 'document.activeElement?.dataset.agentId==="status.workspace"'
   "${B[@]}" eval 'window.__headerReview.set("working",false)' >/dev/null
   "${B[@]}" click '[data-agent-id="status.workspace"]' >/dev/null
@@ -91,6 +114,83 @@ for width in ${HEADER_WIDTHS:-360 390 499 501 768 1280}; do
     "${B[@]}" click '[data-agent-id="folders.close"]' >/dev/null
   fi
  done
+# Stream updates must not reset overlays, confirmation, drafts, or todo refresh.
+"${B[@]}" set viewport 390 844 >/dev/null
+"${B[@]}" eval 'window.__headerReview.set("done",false)' >/dev/null
+"${B[@]}" wait 300 >/dev/null
+"${B[@]}" eval '(()=>{window.__todoFetches=0;window.__auditFetch=window.fetch;window.fetch=(...args)=>{if(String(args[0]).includes("/todos"))window.__todoFetches++;return window.__auditFetch(...args)};return true})()' >/dev/null
+"${B[@]}" click '[data-agent-id="status.ctx"]' >/dev/null
+"${B[@]}" eval 'window.__headerReview.context(70)' >/dev/null
+wait_js 'document.querySelector(`[data-agent-id="status.context.overlay"]`)?.textContent.includes("Context: 70% used")'
+"${B[@]}" eval 'window.__headerReview.event("info","Unrelated context-stream update")' >/dev/null
+"${B[@]}" wait 250 >/dev/null
+check '!!document.querySelector(`[data-agent-id="status.context.overlay"]`) && document.querySelector(`[data-agent-id="status.context.overlay"]`).contains(document.activeElement)'
+"${B[@]}" press Escape >/dev/null
+"${B[@]}" click '[data-agent-id="status.details"]' >/dev/null
+"${B[@]}" eval 'window.__headerReview.event("info","Unrelated details-stream update")' >/dev/null
+"${B[@]}" wait 250 >/dev/null
+check '!!document.querySelector(`[data-agent-id="status.details.overlay"]`)'
+"${B[@]}" press Escape >/dev/null
+"${B[@]}" click '[data-agent-id="status.model-chip"]' >/dev/null
+"${B[@]}" click '[data-agent-id="status.model.picker"]' >/dev/null
+"${B[@]}" fill '[data-agent-id="session.model.search"]' alternate >/dev/null
+"${B[@]}" eval 'window.__headerReview.event("info","Unrelated model-stream update")' >/dev/null
+"${B[@]}" wait 250 >/dev/null
+check 'document.querySelector(`[data-agent-id="session.model.search"]`)?.value==="alternate" && document.querySelectorAll(`[data-agent-id="session.model.option"]`).length===1'
+"${B[@]}" press Escape >/dev/null
+"${B[@]}" click '[data-agent-id="status.effort.picker"]' >/dev/null
+"${B[@]}" eval 'window.__headerReview.event("info","Unrelated effort-stream update")' >/dev/null
+"${B[@]}" wait 250 >/dev/null
+check '!!document.querySelector(`[data-agent-id="session.effort.option.high"]`) && !document.querySelector(`[data-agent-id="session.effort.option.medium"][aria-pressed="true"]`)'
+"${B[@]}" press Escape >/dev/null
+"${B[@]}" click '[data-agent-id="status.approval.picker"]' >/dev/null
+"${B[@]}" click '[data-agent-id="session.approval.option.always"]' >/dev/null
+"${B[@]}" eval 'window.__headerReview.event("info","Unrelated confirmation-stream update")' >/dev/null
+"${B[@]}" wait 250 >/dev/null
+check '!!document.querySelector(`[data-agent-id="session.permission.confirm"]`) && window.__todoFetches===0'
+"${B[@]}" press Escape >/dev/null
+"${B[@]}" press Escape >/dev/null
+"${B[@]}" click '[data-agent-id="status.details"]' >/dev/null
+"${B[@]}" click '[data-agent-id="status.todos"]' >/dev/null
+wait_js '!!document.querySelector(`[data-agent-id="todos.overlay"]`)'
+"${B[@]}" eval 'window.__headerReview.event("info","Unrelated todo-stream update")' >/dev/null
+"${B[@]}" wait 250 >/dev/null
+check '!!document.querySelector(`[data-agent-id="todos.overlay"]`) && window.__todoFetches===0'
+"${B[@]}" eval 'window.__headerReview.event("todos.changed",{})' >/dev/null
+wait_js 'window.__todoFetches===1'
+"${B[@]}" press Escape >/dev/null
+# Runtime forms supersede header sheets rather than sharing competing focus traps.
+"${B[@]}" click '[data-agent-id="status.ctx"]' >/dev/null
+"${B[@]}" eval 'window.__headerReview.requestForm()' >/dev/null
+wait_js '!!document.querySelector(`[data-agent-id="pack-ui.form"]`) && !document.querySelector(`[data-agent-id="status.context.overlay"]`)'
+check 'document.querySelector(`[data-agent-id="pack-ui.form"]`).contains(document.activeElement) && document.querySelector(`.statusline`).inert && document.querySelector(`main`).inert'
+"${B[@]}" eval 'window.__headerReview.event("ui.resolved",{id:"streaming-form",status:"ok"})' >/dev/null
+wait_js '!document.querySelector(`[data-agent-id="pack-ui.form"]`) && !document.querySelector(`main`).inert'
+"${B[@]}" eval 'window.__headerReview.set("working",false)' >/dev/null
+wait_js 'document.querySelector(`[data-agent-id="composer.steer"]`)?.getAttribute("aria-label")==="Queue follow-up"'
+"${B[@]}" eval 'window.__headerReview.liveSteering(true)' >/dev/null
+wait_js 'document.querySelector(`[data-agent-id="composer.steer"]`)?.getAttribute("aria-label")==="Send live follow-up"'
+"${B[@]}" click '[data-agent-id="status.model-chip"]' >/dev/null
+"${B[@]}" click '[data-agent-id="status.effort.picker"]' >/dev/null
+"${B[@]}" eval 'window.__headerReview.event("text_delta","Streaming text remains visible.")' >/dev/null
+"${B[@]}" wait 180 >/dev/null
+check '!!document.querySelector(`[data-agent-id="session.effort.option.high"]`) && window.__todoFetches===1'
+"${B[@]}" eval 'window.__headerReview.event("turn_start",{})' >/dev/null
+wait_js 'document.querySelector(`[data-agent-id="transcript.working"]`).textContent.includes(" · ")'
+"${B[@]}" eval '(()=>{window.__clockBefore=document.querySelector(`[data-agent-id="transcript.working"]`).textContent;return new Promise(resolve=>{const t=setInterval(()=>window.__headerReview.event("text_delta"," tick"),100);setTimeout(()=>{clearInterval(t);window.__clockAfter=document.querySelector(`[data-agent-id="transcript.working"]`).textContent;resolve(true)},1800)})})()' >/dev/null
+check 'window.__clockBefore!==window.__clockAfter && !!document.querySelector(`[data-agent-id="session.effort.option.high"]`) && window.__todoFetches===1'
+"${B[@]}" press Escape >/dev/null
+"${B[@]}" press Escape >/dev/null
+"${B[@]}" eval 'window.__headerReview.event("turn_end",{status:"ok"})' >/dev/null
+wait_js 'window.__todoFetches===2'
+"${B[@]}" eval '(()=>{window.fetch=window.__auditFetch;window.__headerReview.liveSteering(false);window.__headerReview.set("done",false);return true})()' >/dev/null
+# Tiny desktop height still exposes every control via a bounded scroll surface.
+"${B[@]}" set viewport 1280 180 >/dev/null
+"${B[@]}" wait 200 >/dev/null
+"${B[@]}" click '[data-agent-id="status.model-chip"]' >/dev/null
+wait_js '!!document.querySelector(`[data-agent-id="session.controls.overlay"]`)'
+check '(()=>{const p=document.querySelector(`[data-agent-id="session.controls.overlay"]`),r=p.getBoundingClientRect();return r.top>=0&&r.bottom<=180&&p.scrollHeight>p.clientHeight&&getComputedStyle(p).overflowY==="auto"})()'
+"${B[@]}" press Escape >/dev/null
 "${B[@]}" set viewport 390 844 >/dev/null
 "${B[@]}" wait 160 >/dev/null
 for theme in ${HEADER_THEMES:-light dim dark}; do
@@ -109,7 +209,7 @@ for theme in ${HEADER_THEMES:-light dim dark}; do
   "${B[@]}" click '[data-agent-id="session.model.option"]' >/dev/null
   wait_js 'document.querySelector(`[data-agent-id="status.model.picker"]`)?.textContent.includes("alternate-fixture-model") && document.activeElement?.dataset.agentId==="status.model.picker"'
   "${B[@]}" click '[data-agent-id="status.effort.picker"]' >/dev/null
-  check 'window.__fits(`[data-agent-id="session.controls.overlay"]`)'
+  check 'window.__fits(`[data-agent-id="session.controls.overlay"]`) && !document.querySelector(`[data-agent-id="session.effort.option.high"][aria-pressed="true"]`) && !document.querySelector(`[data-agent-id="session.effort.option.medium"][aria-pressed="true"]`)'
   capture "390-$theme-effort-choices"
   "${B[@]}" click '[data-agent-id="session.effort.option.high"]' >/dev/null
   wait_js 'document.querySelector(`[data-agent-id="status.effort.picker"]`)?.textContent.includes("high") && document.activeElement?.dataset.agentId==="status.effort.picker"'
@@ -207,7 +307,7 @@ check 'window.__sameWorkLine() && document.querySelector(`[data-agent-id="phone.
 capture '390-work-outcomes-collapsed'
 "${B[@]}" eval '(()=>{const b=document.querySelector(`section[data-agent-id^="phone.work."] > button`);if(b.getAttribute("aria-expanded")==="false")b.click();return true})()' >/dev/null
 wait_js '!!document.querySelector(`[data-agent-id="phone.work.earlier"]`)'
-check 'document.querySelectorAll(`section[data-agent-id^="phone.work."] .step`).length===13 && document.querySelectorAll(`[data-agent-id="phone.work.tip"]`).length===2 && document.querySelector(`[data-agent-id="phone.work.tip"]`).textContent.includes("×2") && !document.querySelector(`[data-agent-id="block.marker.batch"]`) && [...document.querySelectorAll(`section[data-agent-id^="phone.work."] [data-agent-id="block.marker"]`)].some(e=>e.textContent.includes("1 call failed")) && [...document.querySelectorAll(`.sb-axis > .b-marker.st-yellow`)].some(e=>e.textContent.includes("Workspace policy warning remains visible")) && ![...document.querySelectorAll(`.sb-axis > .b-marker`)].some(e=>e.textContent.includes("bash advisory:")) && !!document.querySelector(`[data-agent-id="phone.work.tip"].warning`)'
+check 'document.querySelectorAll(`section[data-agent-id^="phone.work."] .step`).length===12 && document.querySelectorAll(`[data-agent-id="phone.work.tip"]`).length===2 && document.querySelector(`[data-agent-id="phone.work.tip"]`).textContent.includes("×2") && !document.querySelector(`[data-agent-id="block.marker.batch"]`) && [...document.querySelectorAll(`section[data-agent-id^="phone.work."] [data-agent-id="block.marker"]`)].some(e=>e.textContent.includes("1 call failed")) && [...document.querySelectorAll(`.sb-axis > .b-marker.st-yellow`)].some(e=>e.textContent.includes("Workspace policy warning remains visible")) && ![...document.querySelectorAll(`.sb-axis > .b-marker`)].some(e=>e.textContent.includes("bash advisory:")) && !!document.querySelector(`[data-agent-id="phone.work.tip"].warning`)'
 "${B[@]}" click '[data-agent-id="phone.work.earlier"]' >/dev/null
 wait_js 'document.querySelectorAll(`section[data-agent-id^="phone.work."] .step`).length===31 && !document.querySelector(`[data-agent-id="phone.work.earlier"]`)'
 "${B[@]}" eval '(()=>{for(const e of document.querySelectorAll(`section[data-agent-id^="phone.work."] details`))e.open=true;return true})()' >/dev/null
@@ -232,6 +332,7 @@ done
 wait_js '!!document.querySelector(`[data-agent-id="tool.fixture-tool"]`)'
 "${B[@]}" eval '(()=>{const w=document.querySelector(`section[data-agent-id^="phone.work."]`);if(w.querySelector(`button`).getAttribute("aria-expanded")==="false")w.querySelector(`button`).click();w.scrollIntoView({block:"center"});return true})()' >/dev/null
 check 'document.querySelectorAll(`[data-agent-id="phone.work.tip"]`).length===2 && !document.querySelector(`[data-agent-id="block.marker.advisory"]`) && ![...document.querySelectorAll(`.sb-axis > .b-marker`)].some(e=>e.textContent.includes("bash advisory:")||e.textContent.includes("call failed")) && !!document.querySelector(`section[data-agent-id^="phone.work."] [data-agent-id="block.marker"]`) && getComputedStyle(document.querySelector(`section[data-agent-id^="phone.work."] [data-agent-id="block.marker"]`).closest(`.notice`)).paddingTop==="6px" && [...document.querySelectorAll(`.sb-axis > .b-marker.st-yellow`)].some(e=>e.textContent.includes("Workspace policy warning remains visible"))'
+check '[...document.querySelectorAll(`section[data-agent-id^="phone.work."] .b-marker`)].some(e=>e.textContent.includes("runtime guidance: objective checkpoints")) && ![...document.querySelectorAll(`.sb-axis > .b-marker`)].some(e=>e.textContent.includes("runtime guidance:"))'
 capture '390-show-all-contained-tips'
 "${B[@]}" click '[data-agent-id="status.details"]' >/dev/null
 "${B[@]}" click '[data-agent-id="settings.open"]' >/dev/null
@@ -289,6 +390,84 @@ wait_js '!!document.querySelector(`[data-agent-id="artifact.overlay"]`)'
 check '!document.querySelector(`[data-agent-id="artifact.state.status"]`)'
 "${B[@]}" click '[data-agent-id="artifact.back"]' >/dev/null
 "${B[@]}" eval '(()=>{navigator.share=window.__savedShare;navigator.canShare=window.__savedCanShare;window.__headerReview.set("done",false);return true})()' >/dev/null
+# Model/effort alternatives must remain one line at readable, uniform type.
+for width in 320 375 430; do
+  "${B[@]}" set viewport "$width" 812 >/dev/null
+  for model in claude-opus-4-6 gpt-6.1-sol LongUnbrokenModelIdentifierThatExceedsTheAliasLimit; do
+    for effort in off minimal low medium high xhigh max; do
+      "${B[@]}" eval "(()=>{window.__headerReview.set(\"working\",true);window.__headerReview.model(\"$model\",\"$effort\");return true})()" >/dev/null
+      wait_js "document.querySelector(\`[data-agent-id=\"status.model-chip\"]\`).title.includes(\"$model\") && document.querySelector(\`[data-agent-id=\"status.model-chip\"]\`).title.includes(\"$effort\")"
+      check '(()=>{const h=document.querySelector(`[data-agent-id="status.hud"]`),chip=h.querySelector(`.model-chip`),m=h.querySelector(`.model-name`),e=h.querySelector(`.model-effort`),p=h.querySelector(`.pill-label`),mr=m.getBoundingClientRect(),er=e.getBoundingClientRect(),visible=[...chip.querySelectorAll(`.model-label,.narrow-model-label,.effort-label,.narrow-effort-label`)].filter(x=>x.getClientRects().length);return h.scrollWidth<=h.clientWidth&&window.__fits(`[data-agent-id="status.hud"]`)&&Math.abs(mr.top-er.top)<1&&er.left>=mr.right&&e.scrollWidth<=e.clientWidth+1&&visible.length===2&&visible.every(x=>getComputedStyle(x).fontSize===getComputedStyle(p).fontSize)&&!!m.querySelector(`.model-icon`)&&!m.querySelector(`i`)&&!!e.querySelector(`i`)&&chip.getBoundingClientRect().width>=44})()'
+    done
+  done
+  "${B[@]}" eval '(()=>{window.__headerReview.set("done",false);window.__headerReview.model("claude-opus-4-6","high");return true})()' >/dev/null
+  capture "$width-inline-model-idle"
+  "${B[@]}" eval 'window.__headerReview.set("working",false)' >/dev/null
+  "${B[@]}" eval 'window.__headerReview.model("claude-opus-4-6","high")' >/dev/null
+  capture "$width-inline-model-active"
+done
+# Edge-to-edge page surfaces and actual model/effort/context labels.
+for width in 320 375; do
+  "${B[@]}" set viewport "$width" 812 >/dev/null
+  "${B[@]}" wait 180 >/dev/null
+  for theme in light dim dark; do
+    "${B[@]}" eval "(()=>{window.__headerReview.set(\"done\",false);window.__headerReview.theme(\"$theme\");window.__headerReview.model(\"claude-opus-4-6\",\"high\");return true})()" >/dev/null
+    wait_js 'document.querySelector(`.model-label`).textContent==="Opus 4.6" && document.querySelector(`.effort-label`).textContent==="High"'
+    check '(()=>{const h=document.querySelector(`[data-agent-id="status.hud"]`),r=document.querySelector(`[data-agent-id="app.root"]`).getBoundingClientRect(),bg=getComputedStyle(h).backgroundColor,c=document.querySelector(`.composer`),pill=document.querySelector(`[data-agent-id="status.session-state"]`),ring=document.querySelector(`[data-agent-id="status.ctx"]`);return r.left===0&&r.right===innerWidth&&r.top===0&&r.bottom===visualViewport.height&&h.scrollWidth<=h.clientWidth&&[document.documentElement,document.body,document.querySelector(`#app`),c].every(e=>getComputedStyle(e).backgroundColor===bg)&&getComputedStyle(document.querySelector(`.shell`)).maxWidth==="none"&&getComputedStyle(document.querySelector(`.shell`)).borderRadius==="0px"&&getComputedStyle(h).backdropFilter==="none"&&parseFloat(getComputedStyle(c).paddingBottom)>=12&&pill.querySelector(`.state-label`).textContent==="Idle"&&getComputedStyle(pill.querySelector(`i`)).backgroundColor===getComputedStyle(pill.querySelector(`.pill-label`)).color&&ring.getBoundingClientRect().left-pill.getBoundingClientRect().right>=5&&[...h.querySelectorAll(`.model-effort,.compact-workspace,.pill-label,.context-percent`)].filter(e=>e.getClientRects().length).every(e=>e.scrollWidth<=e.clientWidth+1)&&[...document.querySelectorAll(`meta[name="theme-color"]`)].every(e=>e.content===getComputedStyle(document.documentElement).getPropertyValue("--bg1").trim())})()'
+    for state in working done; do
+      "${B[@]}" eval "(()=>{window.__headerReview.set(\"$state\",false);window.__headerReview.model(\"claude-opus-4-6\",\"high\");return true})()" >/dev/null
+      wait_js "document.querySelector(\`[data-agent-id=\"status.session-state\"] .state-label\`).textContent===\"$([ "$state" = working ] && echo Active || echo Idle)\""
+      for pct in 40 70 92; do
+        "${B[@]}" eval "window.__headerReview.context($pct)" >/dev/null
+        wait_js "document.querySelector(\`[role=\"meter\"]\`).getAttribute(\"aria-valuenow\")==='$pct'"
+        check '(()=>{const r=document.querySelector(`[data-agent-id="status.ctx"]`),m=document.querySelector(`[role="meter"]`),pct=Number(m.getAttribute("aria-valuenow"));return !m.closest(`button`)&&m.getAttribute("aria-valuemin")==="0"&&m.getAttribute("aria-valuemax")==="100"&&m.getAttribute("aria-label")===`Context used: ${pct}%`&&r.style.getPropertyValue("--context-color")===(pct>=90?"var(--red)":pct>=70?"var(--yellow)":"var(--dim)")&&r.getBoundingClientRect().width>=44&&r.getBoundingClientRect().height>=44})()'
+        "${B[@]}" click '[data-agent-id="status.ctx"]' >/dev/null
+        wait_js '!!document.querySelector(`[data-agent-id="status.context.overlay"]`) && document.querySelector(`[data-agent-id="status.context.overlay"]`).contains(document.activeElement)'
+        check '(()=>{const p=document.querySelector(`[data-agent-id="status.context.overlay"]`),pct=Number(document.querySelector(`[role="meter"]`).getAttribute("aria-valuenow")),r=p.getBoundingClientRect();return p.textContent.includes(`Context: ${pct}% used`)&&p.textContent.includes("200k tokens")&&!!p.querySelector(`.context-advice`)===(pct>=70)&&r.left>=0&&r.right<=innerWidth&&r.bottom<=visualViewport.height&&document.querySelector(`main`).inert&&!document.querySelector(`[data-agent-id="session.controls.overlay"]`)})()'
+        capture "$width-$theme-$state-context-$pct"
+        "${B[@]}" press Escape >/dev/null
+        wait_js '!document.querySelector(`[data-agent-id="status.context.overlay"]`) && document.activeElement?.dataset.agentId==="status.ctx"'
+      done
+    done
+    # A single opaque background fills safe-area bands in portrait and landscape.
+    "${B[@]}" eval '(()=>{document.documentElement.style.setProperty("--safe-top","47px");document.documentElement.style.setProperty("--safe-bottom","34px");return true})()' >/dev/null
+    check '(()=>{const h=document.querySelector(`[data-agent-id="status.hud"]`).getBoundingClientRect(),root=document.querySelector(`[data-agent-id="app.root"]`).getBoundingClientRect(),c=document.querySelector(`.composer`);return h.top===47&&root.top===0&&root.bottom===visualViewport.height&&getComputedStyle(c).paddingBottom==="34px"&&getComputedStyle(document.documentElement).backgroundColor===getComputedStyle(document.querySelector(`.statusline`)).backgroundColor})()'
+    capture "$width-$theme-portrait-safe-area"
+    # Opening Sessions must not darken the iPhone clock/battery band.
+    for cycle in 1 2; do
+      "${B[@]}" click '[data-agent-id="index.toggle"]' >/dev/null
+      wait_js 'document.querySelector(`[data-agent-id="session.rail.wrap"]`).dataset.state==="open"'
+      "${B[@]}" wait 180 >/dev/null
+      check '(()=>{const e=document.querySelector(`[data-agent-id="index.safe-top"]`),r=e.getBoundingClientRect(),s=getComputedStyle(e),drawer=document.querySelector(`[data-agent-id="session.rail.wrap"]`),scrim=document.querySelector(`.index-scrim`),bg=getComputedStyle(document.querySelector(`.statusline`)).backgroundColor;return r.top===0&&r.height===47&&r.left===0&&r.right===innerWidth&&s.backgroundColor===bg&&s.transform==="none"&&s.pointerEvents==="none"&&Number(s.zIndex)>Number(getComputedStyle(drawer).zIndex)&&Number(s.zIndex)>Number(getComputedStyle(scrim).zIndex)&&getComputedStyle(drawer).paddingTop==="47px"&&getComputedStyle(drawer).paddingBottom==="34px"&&document.querySelector(`main`).inert&&[...document.querySelectorAll(`meta[name="theme-color"]`)].every(m=>m.content===getComputedStyle(document.documentElement).getPropertyValue("--bg1").trim())})()'
+      capture "$width-$theme-drawer-safe-area-$cycle"
+      "${B[@]}" click '[data-agent-id="sidebar.close"]' >/dev/null
+      wait_js '!document.querySelector(`[data-agent-id="index.safe-top"]`) && document.querySelector(`[data-agent-id="session.rail.wrap"]`).dataset.state==="closed"'
+      "${B[@]}" click '[data-agent-id="status.details"]' >/dev/null
+      "${B[@]}" press Escape >/dev/null
+      check 'getComputedStyle(document.documentElement).backgroundColor===getComputedStyle(document.querySelector(`.statusline`)).backgroundColor && document.querySelector(`[data-agent-id="status.hud"]`).getBoundingClientRect().top===47'
+    done
+    "${B[@]}" eval '(()=>{for(const n of ["--safe-top","--safe-bottom"])document.documentElement.style.removeProperty(n);return true})()' >/dev/null
+  done
+done
+"${B[@]}" set viewport 812 375 >/dev/null
+"${B[@]}" eval '(()=>{document.documentElement.style.setProperty("--safe-left","44px");document.documentElement.style.setProperty("--safe-right","44px");document.documentElement.style.setProperty("--safe-bottom","21px");window.__headerReview.set("done",false);window.__headerReview.theme("light");return true})()' >/dev/null
+"${B[@]}" wait 180 >/dev/null
+check '(()=>{const h=document.querySelector(`[data-agent-id="status.hud"]`).getBoundingClientRect(),sb=document.querySelector(`[data-agent-id="transcript.root"]`).getBoundingClientRect(),c=document.querySelector(`[data-agent-id="composer.root"]`).getBoundingClientRect(),r=document.querySelector(`[data-agent-id="app.root"]`).getBoundingClientRect();return r.left===0&&r.right===812&&h.left>=44&&h.right<=768&&sb.left>=44&&sb.right<=768&&c.left>=44&&c.right<=768&&getComputedStyle(document.querySelector(`.composer`)).paddingBottom==="21px"&&document.documentElement.scrollWidth===812})()'
+capture '812-landscape-safe-area'
+"${B[@]}" click '[data-agent-id="status.details"]' >/dev/null
+"${B[@]}" click '[data-agent-id="status.todos"]' >/dev/null
+wait_js '!!document.querySelector(`[data-agent-id="todos.overlay"]`)'
+check '(()=>{const p=document.querySelector(`[data-agent-id="todos.overlay"]`).getBoundingClientRect();return p.left>=52&&p.right<=760&&p.bottom<=346})()'
+capture '812-landscape-popup-safe-area'
+"${B[@]}" press Escape >/dev/null
+"${B[@]}" eval '(()=>{for(const n of ["--safe-left","--safe-right","--safe-bottom"])document.documentElement.style.removeProperty(n);return true})()' >/dev/null
+"${B[@]}" set media light reduced-motion >/dev/null
+"${B[@]}" set viewport 375 812 >/dev/null
+"${B[@]}" eval 'window.__headerReview.set("working",false)' >/dev/null
+"${B[@]}" wait 100 >/dev/null
+check 'document.querySelector(`[data-agent-id="status.session-state"]`).querySelector(`[aria-live="polite"]`)!==null && getComputedStyle(document.querySelector(`.pill-label i.active`)).animationName==="none"'
+"${B[@]}" eval 'window.__headerReview.set("done",false)' >/dev/null
+"${B[@]}" set viewport 390 844 >/dev/null
 "${B[@]}" focus '[data-agent-id="composer.input"]' >/dev/null
 "${B[@]}" eval '(()=>{Object.defineProperty(visualViewport,"height",{value:320,configurable:true});visualViewport.dispatchEvent(new Event(`resize`));return true})()' >/dev/null
 wait_js 'document.querySelector(`[data-agent-id="app.root"]`).getBoundingClientRect().height===320'
@@ -297,6 +476,11 @@ check 'document.querySelector(`[data-agent-id="status.hud"]`).getBoundingClientR
 check '(()=>{const m=document.querySelector(`[data-agent-id="status.details.overlay"]`),r=m.getBoundingClientRect();return r.top>=0&&r.bottom<=320&&window.__fits(`[data-agent-id="status.details.overlay"]`)})()'
 "${B[@]}" press Escape >/dev/null
 "${B[@]}" click '[data-agent-id="status.ctx"]' >/dev/null
+wait_js '!!document.querySelector(`[data-agent-id="status.context.overlay"]`)'
+check '(()=>{const p=document.querySelector(`[data-agent-id="status.context.overlay"]`).getBoundingClientRect();return p.top>=0&&p.bottom<=320})()'
+capture '390-keyboard-context'
+"${B[@]}" press Escape >/dev/null
+"${B[@]}" click '[data-agent-id="status.model-chip"]' >/dev/null
 "${B[@]}" wait 180 >/dev/null
 check '(()=>{const m=document.querySelector(`[data-agent-id="session.controls.overlay"]`),r=m.getBoundingClientRect();return r.top>=0&&r.bottom<=320&&window.__fits(`[data-agent-id="session.controls.overlay"]`)})()'
 capture '390-keyboard-controls'

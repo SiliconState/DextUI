@@ -47,6 +47,7 @@ const ADVISORY = /^(?:\[runtime-note\]\s*)?bash advisory:\s*/i;
 // Only batch-start label lists are redundant; failure messages are not.
 const BATCH = /^Batch: [a-z_][\w-]*: /i;
 const BATCH_FAILURE = /^Batch: (\d+) tool call\(s\) failed\.?$/;
+const RUNTIME_GUIDANCE = /^(?:\[runtime-note\]\s*)?(?:runtime guidance:|final objective warning:|queued update unresolved:)\s*\S/i;
 const RUN_META = /^\[(?:objective:|phase:)/i;
 
 /** Core emits shell guidance as Warn as well as Info/Note. Only this exact
@@ -59,6 +60,11 @@ export function isAdvisoryMarker(block: ViewBlock): boolean {
  *  Keep its full text in work details; never fold errors or authentication. */
 export function isBatchFailureMarker(block: ViewBlock): boolean {
   return block.kind === "marker" && !block.auth && block.level !== "error" && BATCH_FAILURE.test(block.text.trim());
+}
+
+/** Only recognized backend runtime markers, never user/assistant prose. */
+export function isRuntimeGuidanceMarker(block: ViewBlock): boolean {
+  return block.kind === "marker" && !block.auth && block.level !== "error" && RUNTIME_GUIDANCE.test(block.text.trim());
 }
 
 /** Counts describe tool-call outcomes, not inferred task success or retries. */
@@ -142,7 +148,7 @@ export function phoneTranscriptItems(blocks: ViewBlock[], compact = true): Phone
   let start = 0;
   for (let end = 0; end <= blocks.length; end++) {
     if (end < blocks.length && blocks[end]?.kind !== "user") continue;
-    const work = blocks.slice(start, end).filter((block) => isAdvisoryMarker(block) || isBatchFailureMarker(block) || (compact && (block.kind === "tool" || block.kind === "thinking" || (block.kind === "marker" && !block.auth && (block.level === "info" || block.level === "note") && (BATCH.test(block.text) || RUN_META.test(block.text))))));
+    const work = blocks.slice(start, end).filter((block) => isAdvisoryMarker(block) || isBatchFailureMarker(block) || isRuntimeGuidanceMarker(block) || (compact && (block.kind === "tool" || block.kind === "thinking" || (block.kind === "marker" && !block.auth && (block.level === "info" || block.level === "note") && (BATCH.test(block.text) || RUN_META.test(block.text))))));
     if (work.length) {
       groups.set(work[0]!.id, { blocks: work, current: end === blocks.length });
       for (const block of work.slice(1)) skip.add(block.id);
