@@ -252,8 +252,6 @@
     .context-ring svg { inset: 3px; width: 38px; height: 38px; }
     .context-ring .context-percent { font-size: 10px; font-weight: 500; }
     .state-pill { padding-inline: 2px; }
-    .state-pill > span { border: 1px solid color-mix(in srgb, var(--state-color) 24%, var(--line)); border-radius: 999px; padding: 3px 7px; background: color-mix(in srgb, var(--state-color) 5%, var(--bg1)); }
-    .state-pill.tone-neutral > span { background: transparent; border-color: var(--line); }
     .attention { top: 5px; right: 4px; }
     .operation-dot { top: 10px; right: 10px; }
     .shortcut { display: none; }

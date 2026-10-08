@@ -24,7 +24,7 @@ Verification now includes 144 header width/theme/state/permission combinations, 
 
 ## Compact theme integration
 
-The later refinement keeps desktop transcript/sidebar/diff behavior intact and reduces only its status bar to 32px for fine-pointer input. Title, workspace and Full auto now share one line; model/effort typography blends with the existing mono chrome. Touch layouts use a 44px bar of 44px targets, a single-line system-type title, a soft state capsule and an accessible amber Full auto shield.
+The later refinement keeps desktop transcript/sidebar/diff behavior intact and reduces only its status bar to 32px for fine-pointer input. Title, workspace and Full auto now share one line; model/effort typography blends with the existing mono chrome. Touch layouts use a 44px bar of 44px targets, a single-line system-type title, a desktop-style rectangular status box and an accessible amber Full auto shield.
 
 Mobile session controls use the same compact themed popover style as Settings, capped at 304px wide. Secondary context/fork controls are folded by default. Details and todos use the same surface, border, palette and typography. Mobile todos are a popout, not a persistent strip; desktop todos remain unchanged. Closing a todo popout returns focus to the header rather than a removed overflow item. Mobile menus open downward from the top header; the earlier bottom anchoring dated from the removed footer.
 
@@ -60,7 +60,7 @@ Part 1 implementation files/selectors:
 | apps/web/index.html | viewport and theme-color metadata; early theme script | viewport-fit=cover retained; light/dark chrome metadata and saved/system theme before app mount |
 | apps/web/src/lib/state.svelte.ts | applyTheme, ensureStarted | Chrome metadata derives from CSS tokens and updates on theme/mobile breakpoint changes |
 
-The pill now describes activity, not completion: Active, Idle, Needs input, Error or Offline. Mobile model controls show actual model/effort aliases side by side, using uniform 12px header type, a neutral model icon and an effort-level color dot; exact values remain available in controls and accessible text. The activity capsule has a quiet outline and tint rather than a heavy fill; Idle stays neutral. At the narrowest widths the workspace uses a short Work label rather than an arbitrary long title. The context ring design remains unchanged; it now has its own usage popup, neutral/amber/red thresholds and independent accessible meter semantics. Popup-to-controls transitions preserve focus.
+The status box now describes activity, not completion: Active, Idle, Needs input, Error or Offline. Mobile model controls show actual model/effort aliases side by side, using uniform 12px header type, a neutral model icon and an effort-level color dot; exact values remain available in controls and accessible text. The activity box shares desktop's rectangular border and tint; Idle stays neutral. At the narrowest widths the workspace uses a short Work label rather than an arbitrary long title. The context ring design remains unchanged; it now has its own usage popup, neutral/amber/red thresholds and independent accessible meter semantics. Popup-to-controls transitions preserve focus.
 
 Recognized runtime-guidance markers, including objective checkpoint reminders, stay in mobile work details with their full text. This does not classify user checklists or assistant narration as guidance.
 
@@ -68,7 +68,7 @@ Browser verification covers 320/375px in light/dim/dark, Active/Idle and 40/70/9
 
 ## One-line polish and fresh-eyes fixes
 
-Model and effort no longer stack. Header identity, model/effort and state inherit the same mobile system typography; a neutral chip icon identifies the model, and only effort uses level coloring. Narrow phones shorten display aliases without changing selections or losing the full accessible name. Active and Idle use a restrained outlined capsule, with reduced-motion-safe activity signaling and unchanged state navigation. Pending input retains its full screen-reader/live-region label even when the visible copy shortens.
+Model and effort no longer stack. Header identity, model/effort and state inherit the same mobile system typography; a neutral chip icon identifies the model, and only effort uses level coloring. Narrow phones shorten display aliases without changing selections or losing the full accessible name. Active and Idle use the desktop-style rectangular status box, with reduced-motion-safe activity signaling and unchanged state navigation. Pending input retains its full screen-reader/live-region label even when the visible copy shortens.
 
 The code review fixed unbounded unbroken model aliases, Settings return focus after leaving overflow, saved-theme browser-chrome mismatch before mount, and an invented medium selection when effort was unreported. Regression coverage now includes the 192-case width/theme/state/permission matrix and 63 model/effort/width variants, plus pre-mount theme tests. New captures are local under patches/inline-header-review/final/. Physical-device checks remain outstanding.
 
@@ -78,9 +78,11 @@ A second review traced real session events rather than only static snapshots. Re
 
 Shared popovers reserve landscape and bottom safe areas and constrain tall desktop menus to the available height. Workspace buttons retain native Enter activation, and IME Enter does not select a workspace. Incoming runtime forms dismiss competing header sheets. Full auto remains in the workspace button's accessible name. Composer follow-up labels distinguish live steering from next-turn queueing without changing delivery semantics.
 
-The Sessions drawer scrim no longer tints the clock/battery safe-area band: a full-width, untransformed header-colored layer stays above the sliding drawer and its scrim. Drawer padding uses the same inset tokens as the shell. Repeated hamburger open/close and details-open/close sequences verify that this band stays consistent across themes.
+The first drawer fix put a header-colored layer above the scrim and passed simulated-inset browser checks, but on-device feedback reported that Safari still changed its clock/battery band until another popup opened. That workaround is superseded: the drawer and scrim now begin below the entire safe-area/header row, including when the reported top inset is zero. The closed drawer is display:none rather than a translated compositing layer, and the mobile shell is fixed to the visual viewport instead of remaining in document flow. The normal top header surface is left in place; no repair popup is needed by the layout. The user confirmed on their iPhone that the hamburger safe-area behavior now works.
 
-Acceptance includes streaming persistence, exact todo fetch counts, form focus ownership, workspace keyboard activation, short-desktop bounds, drawer safe-area cycles and landscape popup insets, in addition to the existing header, history and work matrices. Final captures: local patches/final-audit/final/. Physical iPhone checks remain manual.
+The mobile status indicator uses the same rectangular border/tint as desktop, and Latest has its original square-cornered rectangle rather than a pill.
+
+Acceptance includes streaming persistence, exact todo fetch counts, form focus ownership, workspace keyboard activation, short-desktop bounds, drawer safe-area cycles and landscape popup insets, in addition to the existing header, history and work matrices. Final captures: local patches/drawer-recheck/final/. The drawer safe-area fix has user-reported iPhone acceptance; physical keyboard, native share and other device checks remain manual.
 
 ## Deliberate tradeoffs
 

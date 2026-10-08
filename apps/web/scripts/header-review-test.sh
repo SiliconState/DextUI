@@ -45,7 +45,7 @@ for width in ${HEADER_WIDTHS:-320 360 375 390 499 501 768 1280}; do
         "${B[@]}" click '[data-agent-id="status.session-state"]' >/dev/null
         if [ "$state" = review ]; then wait_js 'document.querySelector(`[data-agent-id="approval.dock"]`).contains(document.activeElement)'; fi
         if [ "$state" = failed ]; then wait_js 'document.activeElement?.textContent.includes("Build failed")'; fi
-        if [ "$width" -le 900 ]; then check '(()=>{const h=document.querySelector(`[data-agent-id="status.hud"]`),n=h.querySelector(`.model-name`),e=h.querySelector(`.model-effort`),p=h.querySelector(`.pill-label`),type=h.querySelector(`.compact-workspace`).getClientRects().length?h.querySelector(`.compact-workspace`):h.querySelector(`.session-name`),style=x=>getComputedStyle(x),nr=n.getBoundingClientRect(),er=e.getBoundingClientRect();return style(n).fontSize===style(e).fontSize&&style(e).fontSize===style(p).fontSize&&style(p).fontSize===style(type).fontSize&&style(n).fontFamily===style(p).fontFamily&&Math.abs((nr.top+nr.bottom)/2-(er.top+er.bottom)/2)<1&&er.left>=nr.right&&e.scrollWidth<=e.clientWidth+1&&p.scrollWidth<=p.clientWidth+1&&!n.querySelector(`i`)&&!!n.querySelector(`svg.model-icon`)&&style(p).borderRadius===`999px`&&style(p).borderTopWidth===`1px`&&[...h.querySelectorAll(`:scope > button`)].every(b=>b.getBoundingClientRect().width>=44)})()'; fi
+        if [ "$width" -le 900 ]; then check '(()=>{const h=document.querySelector(`[data-agent-id="status.hud"]`),n=h.querySelector(`.model-name`),e=h.querySelector(`.model-effort`),p=h.querySelector(`.pill-label`),type=h.querySelector(`.compact-workspace`).getClientRects().length?h.querySelector(`.compact-workspace`):h.querySelector(`.session-name`),style=x=>getComputedStyle(x),nr=n.getBoundingClientRect(),er=e.getBoundingClientRect();return style(n).fontSize===style(e).fontSize&&style(e).fontSize===style(p).fontSize&&style(p).fontSize===style(type).fontSize&&style(n).fontFamily===style(p).fontFamily&&Math.abs((nr.top+nr.bottom)/2-(er.top+er.bottom)/2)<1&&er.left>=nr.right&&e.scrollWidth<=e.clientWidth+1&&p.scrollWidth<=p.clientWidth+1&&!n.querySelector(`i`)&&!!n.querySelector(`svg.model-icon`)&&style(p).borderRadius===`4px`&&style(p).borderTopWidth===`1px`&&[...h.querySelectorAll(`:scope > button`)].every(b=>b.getBoundingClientRect().width>=44)})()'; fi
         capture "$width-$theme-$state-auto-$auto"
         COUNT=$((COUNT+1))
       done
@@ -357,6 +357,8 @@ check '!document.querySelector(`[data-agent-id="transcript.jump"]`)?.textContent
 "${B[@]}" eval '(()=>{window.__headerReview.event("info","A new history notice");return true})()' >/dev/null
 wait_js 'document.querySelector(`[data-agent-id="transcript.jump"]`)?.textContent.includes("1 new")'
 check '[...document.querySelectorAll(`[data-agent-id="block.text"]`)].filter(e=>e.querySelector(`[data-agent-id="block.text.copy"]`)).every(e=>e.textContent.includes("History answer"))'
+check '(()=>{const b=document.querySelector(`[data-agent-id="transcript.jump"]`),s=getComputedStyle(b);return s.borderRadius==="0px"&&s.borderTopWidth==="1px"&&b.getBoundingClientRect().height>=44})()'
+capture '390-rectangular-latest'
 # Inline diff modality: the viewer is outside inert history; background stays inert.
 "${B[@]}" eval 'document.querySelector(`[data-agent-id="status.details"]`).click()' >/dev/null
 "${B[@]}" click '[data-agent-id="settings.open"]' >/dev/null
@@ -433,22 +435,43 @@ for width in 320 375; do
     "${B[@]}" eval '(()=>{document.documentElement.style.setProperty("--safe-top","47px");document.documentElement.style.setProperty("--safe-bottom","34px");return true})()' >/dev/null
     check '(()=>{const h=document.querySelector(`[data-agent-id="status.hud"]`).getBoundingClientRect(),root=document.querySelector(`[data-agent-id="app.root"]`).getBoundingClientRect(),c=document.querySelector(`.composer`);return h.top===47&&root.top===0&&root.bottom===visualViewport.height&&getComputedStyle(c).paddingBottom==="34px"&&getComputedStyle(document.documentElement).backgroundColor===getComputedStyle(document.querySelector(`.statusline`)).backgroundColor})()'
     capture "$width-$theme-portrait-safe-area"
-    # Opening Sessions must not darken the iPhone clock/battery band.
-    for cycle in 1 2; do
-      "${B[@]}" click '[data-agent-id="index.toggle"]' >/dev/null
-      wait_js 'document.querySelector(`[data-agent-id="session.rail.wrap"]`).dataset.state==="open"'
-      "${B[@]}" wait 180 >/dev/null
-      check '(()=>{const e=document.querySelector(`[data-agent-id="index.safe-top"]`),r=e.getBoundingClientRect(),s=getComputedStyle(e),drawer=document.querySelector(`[data-agent-id="session.rail.wrap"]`),scrim=document.querySelector(`.index-scrim`),bg=getComputedStyle(document.querySelector(`.statusline`)).backgroundColor;return r.top===0&&r.height===47&&r.left===0&&r.right===innerWidth&&s.backgroundColor===bg&&s.transform==="none"&&s.pointerEvents==="none"&&Number(s.zIndex)>Number(getComputedStyle(drawer).zIndex)&&Number(s.zIndex)>Number(getComputedStyle(scrim).zIndex)&&getComputedStyle(drawer).paddingTop==="47px"&&getComputedStyle(drawer).paddingBottom==="34px"&&document.querySelector(`main`).inert&&[...document.querySelectorAll(`meta[name="theme-color"]`)].every(m=>m.content===getComputedStyle(document.documentElement).getPropertyValue("--bg1").trim())})()'
-      capture "$width-$theme-drawer-safe-area-$cycle"
-      "${B[@]}" click '[data-agent-id="sidebar.close"]' >/dev/null
-      wait_js '!document.querySelector(`[data-agent-id="index.safe-top"]`) && document.querySelector(`[data-agent-id="session.rail.wrap"]`).dataset.state==="closed"'
-      "${B[@]}" click '[data-agent-id="status.details"]' >/dev/null
-      "${B[@]}" press Escape >/dev/null
-      check 'getComputedStyle(document.documentElement).backgroundColor===getComputedStyle(document.querySelector(`.statusline`)).backgroundColor && document.querySelector(`[data-agent-id="status.hud"]`).getBoundingClientRect().top===47'
+    # Both regular Safari (zero inset) and standalone (notch inset) leave the
+    # actual header untouched. Check closing BEFORE any repair popup is opened.
+    for inset in 0 47; do
+      "${B[@]}" eval "(()=>{document.documentElement.style.setProperty(\"--safe-top\",\"${inset}px\");window.__headerBefore=document.querySelector(\`.statusline\`).getBoundingClientRect().toJSON();return true})()" >/dev/null
+      for cycle in 1 2; do
+        "${B[@]}" click '[data-agent-id="index.toggle"]' >/dev/null
+        wait_js 'document.querySelector(`[data-agent-id="session.rail.wrap"]`).dataset.state==="open"'
+        check '(()=>{const rail=document.querySelector(`[data-agent-id="session.rail.wrap"]`),r=rail.getBoundingClientRect(),scrim=document.querySelector(`.index-scrim`).getBoundingClientRect(),header=document.querySelector(`.statusline`),h=header.getBoundingClientRect(),surface=getComputedStyle(header).backgroundColor;return h.top===window.__headerBefore.top&&h.bottom===window.__headerBefore.bottom&&r.top===h.bottom&&scrim.top===h.bottom&&r.bottom===visualViewport.height&&scrim.bottom===visualViewport.height&&getComputedStyle(rail).transform==="none"&&getComputedStyle(rail).paddingTop==="0px"&&getComputedStyle(rail).paddingBottom==="34px"&&document.querySelector(`main`).inert&&getComputedStyle(document.querySelector(`.shell`)).position==="fixed"&&[document.documentElement,document.body,document.querySelector(`#app`)].every(e=>getComputedStyle(e).backgroundColor===surface)&&!document.querySelector(`[data-agent-id="index.safe-top"]`)&&[...document.querySelectorAll(`meta[name="theme-color"]`)].every(m=>m.content===getComputedStyle(document.documentElement).getPropertyValue("--bg1").trim())})()'
+        capture "$width-$theme-drawer-inset-$inset-cycle-$cycle"
+        "${B[@]}" focus '[data-agent-id="session.search"]' >/dev/null
+        "${B[@]}" click '[data-agent-id="sidebar.close"]' >/dev/null
+        wait_js 'document.querySelector(`[data-agent-id="session.rail.wrap"]`).dataset.state==="closed" && !document.querySelector(`.index-scrim`)'
+        check '(()=>{const rail=document.querySelector(`[data-agent-id="session.rail.wrap"]`),h=document.querySelector(`.statusline`).getBoundingClientRect();return getComputedStyle(rail).display==="none"&&rail.getClientRects().length===0&&getComputedStyle(rail).transform==="none"&&h.top===window.__headerBefore.top&&h.bottom===window.__headerBefore.bottom&&window.scrollY===0&&!document.querySelector(`main`).inert})()'
+        capture "$width-$theme-drawer-closed-inset-$inset-cycle-$cycle"
+        # Settings/model sheet must not be necessary to restore the top surface.
+        "${B[@]}" click '[data-agent-id="status.model-chip"]' >/dev/null
+        "${B[@]}" press Escape >/dev/null
+        "${B[@]}" click '[data-agent-id="status.details"]' >/dev/null
+        "${B[@]}" click '[data-agent-id="settings.open"]' >/dev/null
+        "${B[@]}" press Escape >/dev/null
+        check '(()=>{const h=document.querySelector(`.statusline`).getBoundingClientRect();return h.top===window.__headerBefore.top&&h.bottom===window.__headerBefore.bottom&&getComputedStyle(document.documentElement).backgroundColor===getComputedStyle(document.querySelector(`.statusline`)).backgroundColor})()'
+      done
     done
     "${B[@]}" eval '(()=>{for(const n of ["--safe-top","--safe-bottom"])document.documentElement.style.removeProperty(n);return true})()' >/dev/null
   done
 done
+"${B[@]}" set viewport 375 812 >/dev/null
+"${B[@]}" eval '(()=>{window.__viewportHeightDesc=Object.getOwnPropertyDescriptor(visualViewport,"height");window.__viewportTopDesc=Object.getOwnPropertyDescriptor(visualViewport,"offsetTop");document.documentElement.style.setProperty("--safe-top","47px");Object.defineProperties(visualViewport,{height:{value:500,configurable:true},offsetTop:{value:24,configurable:true}});visualViewport.dispatchEvent(new Event("resize"));visualViewport.dispatchEvent(new Event("scroll"));return true})()' >/dev/null
+wait_js 'document.querySelector(`[data-agent-id="app.root"]`).getBoundingClientRect().top===24 && document.querySelector(`[data-agent-id="app.root"]`).getBoundingClientRect().height===500'
+"${B[@]}" click '[data-agent-id="index.toggle"]' >/dev/null
+wait_js 'document.querySelector(`[data-agent-id="session.rail.wrap"]`).dataset.state==="open"'
+check '(()=>{const h=document.querySelector(`.statusline`).getBoundingClientRect(),r=document.querySelector(`[data-agent-id="session.rail.wrap"]`).getBoundingClientRect(),s=document.querySelector(`.index-scrim`).getBoundingClientRect();return h.top===24&&r.top===h.bottom&&s.top===h.bottom&&r.bottom===524&&s.bottom===524&&![...document.elementsFromPoint(innerWidth-2,h.bottom-2)].some(e=>e.classList.contains("index")||e.classList.contains("index-scrim"))})()'
+capture '375-panned-drawer'
+"${B[@]}" click '[data-agent-id="sidebar.close"]' >/dev/null
+wait_js 'getComputedStyle(document.querySelector(`[data-agent-id="session.rail.wrap"]`)).display==="none" && !document.querySelector(`.index-scrim`)'
+check 'document.querySelector(`.statusline`).getBoundingClientRect().top===24 && window.scrollY===0'
+"${B[@]}" eval '(()=>{for(const [key,desc] of [["height",window.__viewportHeightDesc],["offsetTop",window.__viewportTopDesc]]){if(desc)Object.defineProperty(visualViewport,key,desc);else delete visualViewport[key]}document.documentElement.style.removeProperty("--safe-top");visualViewport.dispatchEvent(new Event("resize"));visualViewport.dispatchEvent(new Event("scroll"));return true})()' >/dev/null
 "${B[@]}" set viewport 812 375 >/dev/null
 "${B[@]}" eval '(()=>{document.documentElement.style.setProperty("--safe-left","44px");document.documentElement.style.setProperty("--safe-right","44px");document.documentElement.style.setProperty("--safe-bottom","21px");window.__headerReview.set("done",false);window.__headerReview.theme("light");return true})()' >/dev/null
 "${B[@]}" wait 180 >/dev/null

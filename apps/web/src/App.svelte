@@ -393,7 +393,6 @@
     </aside>
     {#if indexOpen}
       <div class="index-scrim" onclick={() => (indexOpen = false)} onkeydown={() => {}} role="presentation"></div>
-      <div class="index-safe-top" aria-hidden="true" data-agent-id="index.safe-top"></div>
     {/if}
 
     <main class="main" inert={blockingOverlay || (mobileLayout && indexOpen)}>

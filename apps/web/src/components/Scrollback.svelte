@@ -341,8 +341,8 @@
     position: absolute;
     bottom: 8px;
     right: 16px;
-    border-radius: 20px;
-    padding: 5px 12px;
+    border-radius: 0;
+    padding: 2px 10px;
     border: 1px solid var(--line);
     background: var(--bg1);
     color: var(--dim);
