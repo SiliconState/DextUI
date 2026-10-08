@@ -52,6 +52,12 @@
   import { artifact, closeArtifact } from "./lib/artifact.svelte";
 
   import type { HeaderTarget } from "./lib/session-header";
+  import { clearCachedDiagrams } from "./lib/mermaid-loader";
+  $effect(() => {
+    const scope = app.hostEpoch;
+    void app.needsToken;
+    clearCachedDiagrams(scope);
+  });
   let tokenInput = $state("");
   let inspect: ViewBlock | null = $state(null);
   let headerNavigation = $state<{ target: HeaderTarget; revision: number }>({ target: "result", revision: 0 });

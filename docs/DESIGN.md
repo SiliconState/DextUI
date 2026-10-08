@@ -61,7 +61,7 @@ The unit of attention is the **decision**, not the message.
 | Server restart mid-turn | In-flight turns abort fail-closed (children die with the host); sessions resume from dext's durable state; clients resync via snapshot. Documented, not hidden. |
 | Two clients, one approval | First response wins; `permission.resolved` broadcast; loser gets `permission.already_resolved`. |
 | Scope creep ("fits other agents") | Capability negotiation + `x-` namespacing. v1 ships the dext adapter only; ACP shapes treated as prior art, not a dependency. |
-| Dep bloat (user constraint) | Root-pinned toolchain (typescript, vite, svelte, svelte-check); runtime JS deps: **zero** (protocol, client, mock, agentlinkd are dependency-free; the web app ships the Svelte runtime only). Tests use `node:test`. Markdown is rendered as auto-escaped Svelte components, no `{@html}`, no XSS surface. |
+| Dep bloat (user constraint) | Protocol, client, mock and agentlinkd remain dependency-free. The web app uses Svelte plus pinned Mermaid/DOMPurify in a demand-loaded renderer; plain chat does not download the engine. Mermaid families load on demand, with Dagre avoiding the heavy ELK default for ordinary flows. Markdown remains auto-escaped components; sanitized diagram SVGs display as inert images, not injected chat DOM. Tests use node:test. |
 
 ## Agent-ergonomic / agent-accretive layer
 

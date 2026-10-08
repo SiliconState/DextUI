@@ -27,6 +27,7 @@ export type MdBlock =
   | { kind: "heading"; level: number; inline: Inline[] }
   | { kind: "para"; inline: Inline[] }
   | { kind: "code"; text: string; lang: string }
+  | { kind: "mermaid"; text: string; closed: boolean }
   | { kind: "html"; text: string; lang: string }
   | { kind: "chart"; spec: ChartSpec }
   | { kind: "list"; ordered: boolean; items: ListItem[] }
@@ -100,21 +101,38 @@ export function parseMarkdown(src: string): MdBlock[] {
   const out: MdBlock[] = [];
   const lines = src.split("\n");
   let i = 0;
+  let listIndent: number | null = null;
+  let quoteContinues = false;
   while (i < lines.length) {
     const line = lines[i] ?? "";
+    const listLine = LIST_ITEM.exec(line);
+    if (listLine) listIndent = listLine[1]!.length + listLine[2]!.length + 1;
+    else if (listIndent !== null && line.trim() && (line.match(/^ */)?.[0].length ?? 0) < listIndent) listIndent = null;
+    const inList = listIndent !== null && (line.match(/^ */)?.[0].length ?? 0) >= listIndent;
+    const inQuote = quoteContinues && !!line.trim() && /^ +/.test(line) && !/^\s*>/.test(line);
+    quoteContinues = /^\s*>/.test(line);
 
-    // fenced code — ```chart fences carrying a valid JSON spec become real
-    // charts; anything else (including an invalid chart spec) stays a code block.
-    const fence = /^```\s*(\S*)\s*$/.exec(line);
-    if (fence) {
+    // Mermaid is source-backed; a closing fence is required before rendering.
+    // Ordinary fences still stay escaped code unless an extension handles them.
+    const fence = /^ *(`{3,}|~{3,})[ \t]*([^ \t`\r]*)(?:[ \t]+[^\r]*)?\r?$/.exec(line);
+    if (fence && ((line.match(/^ */)?.[0].length ?? 0) <= 3 || inList)) {
       const buf: string[] = [];
       i++;
-      while (i < lines.length && !/^```\s*$/.test(lines[i] ?? "")) {
-        buf.push(lines[i] ?? "");
+      const close = new RegExp(`^ ${inList ? `{${listIndent},}` : "{0,3}"}${fence[1]![0]}{${fence[1]!.length},}[ \\t]*\\r?$`);
+      while (i < lines.length && !close.test(lines[i] ?? "")) {
+        const next = lines[i] ?? "";
+        // A nested fence ends when its container ends, even without a closer.
+        if (inList && next.trim() && (next.match(/^ */)?.[0].length ?? 0) < listIndent!) break;
+        buf.push(next);
         i++;
       }
-      i++; // closing fence (or EOF)
-      const lang = (fence[1] ?? "").toLowerCase();
+      const closed = i < lines.length && close.test(lines[i] ?? "");
+      if (closed) i++;
+      const lang = (fence[2] ?? "").toLowerCase();
+      if (lang === "mermaid" && !inList && !inQuote) {
+        out.push({ kind: "mermaid", text: buf.join("\n"), closed });
+        continue;
+      }
       if (lang === "chart") {
         const spec = parseChartSpec(buf.join("\n"));
         if (spec) {
@@ -128,7 +146,7 @@ export function parseMarkdown(src: string): MdBlock[] {
         out.push({ kind: "html", text: buf.join("\n"), lang });
         continue;
       }
-      out.push({ kind: "code", text: buf.join("\n"), lang: fence[1] ?? "" });
+      out.push({ kind: "code", text: buf.join("\n"), lang: fence[2] ?? "" });
       continue;
     }
 
@@ -189,6 +207,7 @@ export function parseMarkdown(src: string): MdBlock[] {
         i++;
       }
       out.push({ kind: "quote", inline: parseInline(buf.join(" ")) });
+      quoteContinues = true;
       continue;
     }
 
@@ -201,13 +220,29 @@ export function parseMarkdown(src: string): MdBlock[] {
         const m = LIST_ITEM.exec(lines[i] ?? "");
         if (!m) break;
         const indent = (m[1] ?? "").length;
+        listIndent = indent + m[2]!.length + 1;
         const inline = parseInline(m[3] ?? "");
         const parent = items[items.length - 1];
         if (indent >= 2 && parent) parent.sub.push({ inline });
         else items.push({ inline, sub: [] });
         i++;
+        // An inline list fence owns its closing fence too. Otherwise its
+        // closing line is mistaken for a new opener and consumes later prose.
+        const example = /^(`{3,}|~{3,})[ \t]*([^ \t`\r]*)(?:[ \t]+[^\r]*)?\r?$/.exec(m[3] ?? "");
+        if (example) {
+          const close = new RegExp(`^ {${listIndent},}${example[1]![0]}{${example[1]!.length},}[ \\t]*\\r?$`);
+          const body: string[] = [];
+          while (i < lines.length) {
+            const next = lines[i] ?? "";
+            if (close.test(next)) { i++; break; }
+            if (next.trim() && (next.match(/^ */)?.[0].length ?? 0) < listIndent) break;
+            body.push(next); i++;
+          }
+          out.push({ kind: "list", ordered, items: [...items] }, { kind: "code", text: body.join("\n"), lang: example[2] ?? "" });
+          items.length = 0;
+        }
       }
-      out.push({ kind: "list", ordered, items });
+      if (items.length) out.push({ kind: "list", ordered, items });
       continue;
     }
 
@@ -219,7 +254,7 @@ export function parseMarkdown(src: string): MdBlock[] {
       if (
         !l.trim() ||
         /^(#{1,6})\s/.test(l) ||
-        /^```/.test(l) ||
+        /^ {0,3}(?:`{3,}|~{3,})/.test(l) ||
         /^\s*>\s?/.test(l) ||
         /^ {0,3}(-{3,}|\*{3,}|_{3,})\s*$/.test(l) ||
         LIST_ITEM.test(l) ||

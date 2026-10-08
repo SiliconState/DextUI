@@ -9,10 +9,11 @@
   import FileView from "./FileView.svelte";
   import { fenceFor } from "../ext";
   import HtmlArtifact from "./HtmlArtifact.svelte";
+  import MermaidDiagram from "./MermaidDiagram.svelte";
   import { ChartLink } from "../lib/chartlink.svelte";
   import { app } from "../lib/state.svelte";
 
-  let { src, sessionId = "" }: { src: string; sessionId?: string } = $props();
+  let { src, sessionId = "", complete = true }: { src: string; sessionId?: string; complete?: boolean } = $props();
 
   const blocks = $derived(parseMarkdown(src));
   // Consecutive tables - each optionally titled by its own ###/#### heading -
@@ -234,6 +235,8 @@
           <pre>{b.text}</pre>
         </div>
       {/if}
+    {:else if b.kind === "mermaid"}
+      <MermaidDiagram source={b.text} closed={b.closed} {complete} />
     {:else if b.kind === "html"}
       <!-- inline markup from a ```html/```svg fence: sandboxed in the artifact inspector -->
       <div class="md-chartbox" data-agent-id="markdown.html">

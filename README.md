@@ -41,8 +41,8 @@ Useful flags: `--port` · `--token` · `--dext` (auto-detects the binary) ·
   keyboard decisions, desktop notifications
 - **Steering, interrupt, `/compact`**: queue input mid-turn, stop cleanly,
   compact context against a core-verified meter
-- **Real rendering**: markdown, interactive charts, inline images, a sandboxed
-  HTML artifact sheet, attachments with a consent-labeled `read_image` handoff
+- **Real rendering**: markdown, demand-loaded Mermaid diagrams, interactive charts,
+  inline images, a sandboxed HTML artifact sheet, attachments with a consent-labeled `read_image` handoff
 - **Pack gallery home**: persona onboarding and starter prompts; packs run as
   first-class turns ([packs/README.md](packs/README.md))
 - **Flows**: a drag-and-drop canvas that compiles to crew runs, with

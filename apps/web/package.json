@@ -11,6 +11,8 @@
   },
   "dependencies": {
     "@dextui/client": "*",
-    "@dextui/protocol": "*"
+    "@dextui/protocol": "*",
+    "dompurify": "3.4.16",
+    "mermaid": "12.1.0"
   }
 }

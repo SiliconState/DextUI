@@ -123,7 +123,7 @@
   </div>
 {:else if block.kind === "text"}
   <div class="b-text" data-agent-id="block.text">
-    <Markdown src={block.text} {sessionId} />
+    <Markdown src={block.text} complete={block.complete} {sessionId} />
     {#if !block.complete}<span class="blink cursor">▊</span>{/if}
     {#if showCopy}<button class="act hover-act" data-agent-id="block.text.copy" onclick={() => copyText(block.text, "Copied")}>Copy</button>{/if}
   </div>

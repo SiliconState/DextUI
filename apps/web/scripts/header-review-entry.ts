@@ -57,6 +57,16 @@ function set(state = stateName, fullAuto = auto, stress = false) {
   queue.counts = state === "review" ? [{ id: m.id, title: m.title, count: 1 }] : [];
   app.runtimeRevision++;
 }
+function diagram(source: string, complete = true, offscreen = false) {
+  set("done", false);
+  const fence = `\`\`\`mermaid\n${source}${complete ? "\n\`\`\`" : ""}`;
+  const blocks: Block[] = [{ kind: "user", text: "Show the sample diagram" }];
+  if (offscreen) blocks.push({ kind: "text", text: fence, complete });
+  blocks.push({ kind: "text", text: "Plain chat remains lightweight.\n\n" + "Paragraph filler.\n\n".repeat(offscreen ? 90 : 0), complete: true });
+  if (!offscreen) blocks.push({ kind: "text", text: fence, complete });
+  store.apply({ v: 1, session: store.state.id, event: "session.snapshot", ts: Date.now(), data: { meta: meta(), blocks, pending_permissions: [], working: !complete, failed: false, last_seq: ++revision } });
+  app.runtimeRevision++;
+}
 function history() {
   set("done", false);
   const blocks: Block[] = [];
@@ -116,4 +126,4 @@ window.fetch = async (input, init) => {
 };
 set();
 mount(App, { target: document.getElementById("app")! });
-Object.assign(window, { __headerReview: { liveSteering: (value: boolean) => { app.caps = value ? [...app.caps, "steering.live"] : app.caps.filter((cap) => cap !== "steering.live"); }, requestForm: () => { event("ui.request", { id: "streaming-form", pack: "fixture", request_id: "form", method: "form", received_at: Date.now(), params: { title: "Streaming decision", submit_label: "Continue", fields: [{ id: "answer", label: "Your answer", type: "text" }] } }); }, set, history, mixedWork, event, context: (pct: number) => { store.state.diagnostics = { ...store.state.diagnostics, context_window: 200000 }; event("history_context_updated", { chars: pct * 2000 * 4, tokens: pct * 2000 }); }, model: (model: string, effort: ThinkingEffort) => { event("session.configured", { provider: model.startsWith("claude") ? "anthropic" : "openai", model, thinking_effort: effort }); }, phase: (phase: typeof app.phase) => { app.phase = phase; }, resetHost: () => { app.hostEpoch++; }, shareReport: () => openArtifact({ name: "fixture.html", html: report, sessionId: store.state.id }), needsToken: (value: boolean) => { app.needsToken = value; }, stress: () => set("done", false, true), theme: setTheme, long, setNoContext: () => { store.state.contextTokens = undefined; store.state.contextChars = undefined; store.apply({ v: 1, session: store.state.id, event: "info", ts: Date.now(), data: "Context unavailable" }); }, other: () => { app.activeId = "other-fixture"; }, back: () => { app.activeId = "header-fixture"; } } });
+Object.assign(window, { __headerReview: { diagram, liveSteering: (value: boolean) => { app.caps = value ? [...app.caps, "steering.live"] : app.caps.filter((cap) => cap !== "steering.live"); }, requestForm: () => { event("ui.request", { id: "streaming-form", pack: "fixture", request_id: "form", method: "form", received_at: Date.now(), params: { title: "Streaming decision", submit_label: "Continue", fields: [{ id: "answer", label: "Your answer", type: "text" }] } }); }, set, history, mixedWork, event, context: (pct: number) => { store.state.diagnostics = { ...store.state.diagnostics, context_window: 200000 }; event("history_context_updated", { chars: pct * 2000 * 4, tokens: pct * 2000 }); }, model: (model: string, effort: ThinkingEffort) => { event("session.configured", { provider: model.startsWith("claude") ? "anthropic" : "openai", model, thinking_effort: effort }); }, phase: (phase: typeof app.phase) => { app.phase = phase; }, resetHost: () => { app.hostEpoch++; }, shareReport: () => openArtifact({ name: "fixture.html", html: report, sessionId: store.state.id }), needsToken: (value: boolean) => { app.needsToken = value; }, stress: () => set("done", false, true), theme: setTheme, long, setNoContext: () => { store.state.contextTokens = undefined; store.state.contextChars = undefined; store.apply({ v: 1, session: store.state.id, event: "info", ts: Date.now(), data: "Context unavailable" }); }, other: () => { app.activeId = "other-fixture"; }, back: () => { app.activeId = "header-fixture"; } } });
