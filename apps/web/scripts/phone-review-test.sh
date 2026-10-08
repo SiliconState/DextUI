@@ -170,7 +170,7 @@ if [ "${REVIEW_PHASE:-1}" -ge 2 ]; then
   "${B[@]}" fill '[data-agent-id="composer.input"]' 'tool folding demo' >/dev/null
   "${B[@]}" click '[data-agent-id="composer.send"]' >/dev/null
   wait_js 'document.body.textContent.includes("Tool folding demo complete") && !document.querySelector(`[data-agent-id="composer.stop"]`)'
-  check 'document.querySelectorAll(`[data-agent-id^="phone.work."]`).length>=1 && [...document.querySelectorAll(`[data-agent-id^="phone.work."]`)].at(-1).querySelector(`button`).getAttribute("aria-expanded")==="false" && [...document.querySelectorAll(`[data-agent-id^="phone.work."]`)].at(-1).textContent.includes("1 unsuccessful") && !document.querySelector(`[data-agent-id="tool.fold-bash"]`)'
+  check 'document.querySelectorAll(`[data-agent-id^="phone.work."]`).length>=1 && [...document.querySelectorAll(`[data-agent-id^="phone.work."]`)].at(-1).querySelector(`button`).getAttribute("aria-expanded")==="false" && [...document.querySelectorAll(`[data-agent-id^="phone.work."]`)].at(-1).querySelector(`[data-agent-id="phone.summary.failed"]`).textContent.includes("1 failed") && [...document.querySelectorAll(`[data-agent-id^="phone.work."]`)].at(-1).querySelector(`[data-agent-id="phone.summary.passed"]`).textContent.includes("10 passed") && !document.querySelector(`[data-agent-id="tool.fold-bash"]`)'
   if [ "$width" -le 900 ]; then wait_js 'document.querySelector(`[data-agent-id="status.hud"]`).getBoundingClientRect().height===44'; fi
   for theme in ${REVIEW_THEMES:-light dim dark}; do
     open_settings

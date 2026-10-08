@@ -41,8 +41,9 @@
   // Presentation grouping runs only over the already-bounded visible window.
   // The canonical store stays flat/lossless; Bash remains standalone, while
   // compactable tool classes become lazy disclosures.
-  const items = $derived(app.compactTools
-    ? phone ? phoneTranscriptItems(visible) : transcriptItems(visible)
+  const items = $derived(phone
+    ? phoneTranscriptItems(visible, app.compactTools)
+    : app.compactTools ? transcriptItems(visible)
     : visible.map((block): TranscriptItem => ({ kind: "block", id: block.id, block })));
 
   const copyIds = $derived(phoneCopyIds(visible));

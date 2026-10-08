@@ -32,7 +32,7 @@ function set(state = stateName, fullAuto = auto, stress = false) {
   app.activeId = "header-fixture";
   const m = meta();
   app.sessions = [m, meta("other-fixture")];
-  const tool: Block = { kind: "tool", call_id: "fixture-tool", name: "bash", summary: `Rebuilding report · ${long}`, status: state === "working" ? "running" : state === "failed" ? "failed" : "ok", content: `exit: ${state === "failed" ? 1 : 0}\n--- stdout ---\n${long}\n--- stderr ---\n` };
+  const tool: Block = { kind: "tool", call_id: "fixture-tool", name: "bash", summary: `Rebuilding report · ${long}`, status: state === "working" || state === "review" ? "running" : state === "failed" ? "failed" : "ok", content: `exit: ${state === "failed" ? 1 : 0}\n--- stdout ---\n${long}\n--- stderr ---\n` };
   const blocks: Block[] = [{ kind: "user", text: `Review ${long}` }, tool];
   if (stress) {
     const tip = `[runtime-note] bash advisory: prefer native tools for ${long}; full guidance remains available.`;
@@ -43,8 +43,9 @@ function set(state = stateName, fullAuto = auto, stress = false) {
       ...Array.from({ length: 30 }, (_, index): Block => ({ kind: "tool", call_id: `stress-${index}`, name: "bash", summary: `Verify ${index} ${long}`, status: index === 0 ? "failed" : "ok", content: `${long}\nEvidence stays inspectable.` })),
       { kind: "marker", level: "note", text: tip },
       { kind: "marker", level: "note", text: tip },
-      { kind: "marker", level: "warn", text: "bash advisory: Keep this warning visible" },
-      { kind: "marker", level: "info", text: "Batch: 2 tool call(s) failed." },
+      { kind: "marker", level: "warn", text: "bash advisory: Keep this guidance inside work" },
+      { kind: "marker", level: "warn", text: "Workspace policy warning remains visible" },
+      { kind: "marker", level: "warn", text: "Batch: 1 tool call(s) failed." },
     );
   }
   if (state === "failed") blocks.push({ kind: "marker", level: "error", text: `Build failed. ${long}` });
@@ -71,6 +72,12 @@ function history() {
   blocks.push({ kind: "tool", name: "git_diff", call_id: "history-diff", status: "ok", summary: "git_diff: reports", content: "diff --git a/report.txt b/report.txt\n--- a/report.txt\n+++ b/report.txt\n@@ -1 +1 @@\n-old\n+new" });
   store.apply({ v: 1, session: store.state.id, event: "session.snapshot", ts: Date.now(), data: { meta: meta(), blocks, pending_permissions: [], working: false, failed: false, last_seq: ++revision } });
   app.runtimeRevision++;
+}
+function mixedWork() {
+  set("working", false, true);
+  event("tool_call_start", { call_id: "mixed-running", name: "bash", summary: "npm test" });
+  event("tool_call_preview", { call_id: "mixed-pending", name: "read_file", summary: "reports/weekly-plan.md" });
+  event("thinking_delta", "Checking the remaining evidence and current test results without changing the saved report.");
 }
 function event(event: string, data: unknown) {
   store.apply({ v: 1, session: store.state.id, event, ts: Date.now(), data });
@@ -107,4 +114,4 @@ window.fetch = async (input, init) => {
 };
 set();
 mount(App, { target: document.getElementById("app")! });
-Object.assign(window, { __headerReview: { set, history, event, resetHost: () => { app.hostEpoch++; }, shareReport: () => openArtifact({ name: "fixture.html", html: report, sessionId: store.state.id }), needsToken: (value: boolean) => { app.needsToken = value; }, stress: () => set("done", false, true), theme: setTheme, long, setNoContext: () => { store.state.contextTokens = undefined; store.state.contextChars = undefined; store.apply({ v: 1, session: store.state.id, event: "info", ts: Date.now(), data: "Context unavailable" }); }, other: () => { app.activeId = "other-fixture"; }, back: () => { app.activeId = "header-fixture"; } } });
+Object.assign(window, { __headerReview: { set, history, mixedWork, event, resetHost: () => { app.hostEpoch++; }, shareReport: () => openArtifact({ name: "fixture.html", html: report, sessionId: store.state.id }), needsToken: (value: boolean) => { app.needsToken = value; }, stress: () => set("done", false, true), theme: setTheme, long, setNoContext: () => { store.state.contextTokens = undefined; store.state.contextChars = undefined; store.apply({ v: 1, session: store.state.id, event: "info", ts: Date.now(), data: "Context unavailable" }); }, other: () => { app.activeId = "other-fixture"; }, back: () => { app.activeId = "header-fixture"; } } });

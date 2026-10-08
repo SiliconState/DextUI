@@ -615,7 +615,17 @@
     .b-user-text { font-family: var(--sans); font-size: 14px; line-height: 1.5; }
     .think-p { font-family: var(--sans); font-size: 13px; }
     .b-think summary, .b-compact summary { font: 12px/1.4 var(--sans); }
+    .b-think.live { padding: 0; }
+    .b-think summary { display: flex; align-items: center; gap: 4px; min-height: 44px; }
+    /* Keep the touch target, but distribute its spare space above the label
+       rather than between the label and prose. */
+    .b-think.done[open] summary, .b-think.live[open] summary { align-items: flex-end; padding-bottom: 6px; margin-bottom: 0; }
+    .think-body { padding: 0 0 6px 14px; background: transparent; gap: 6px; }
+    .b-think.live .think-p.stream { padding-left: 14px; margin-bottom: 6px; }
     .b-meta { font-family: var(--sans); }
+    .b-meta summary { align-items: center; min-height: 44px; }
+    .b-meta[open] summary { align-items: flex-end; padding-bottom: 4px; }
+    .meta-body { padding: 0 0 2px; }
     .b-marker { font: 13px/1.45 var(--sans); }
     .bash-advisory { font: 12px/1.45 var(--sans); }
     .bash-advisory summary { min-height: 44px; display: flex; align-items: center; gap: 8px; list-style: none; }

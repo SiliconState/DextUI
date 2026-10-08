@@ -5,12 +5,14 @@
   import type { ViewBlock } from "@dextui/client";
   import Block from "./Block.svelte";
   import { humanizeTool } from "../lib/display";
-  import { phoneWorkRows } from "../lib/phone-presentation";
+  import { phoneWorkRows, phoneWorkCounts } from "../lib/phone-presentation";
   let { blocks, working = false, failed = false, open, onToggle, onInspect, sessionId }: { blocks: ViewBlock[]; working?: boolean; failed?: boolean; open: boolean; onToggle: (open: boolean) => void; onInspect?: (block: ViewBlock) => void; sessionId: string } = $props();
-  const tools = $derived(blocks.filter((block) => block.kind === "tool"));
-  const unsuccessful = $derived(tools.filter((tool) => tool.status === "failed").length);
-  const active = $derived(tools.filter((tool) => tool.status === "running" || tool.status === "preview").at(-1));
+  const counts = $derived(phoneWorkCounts(blocks));
+  const manyOutcomes = $derived(1 + Number(counts.failed > 0) + Number(counts.running > 0) + Number(counts.pending > 0) > 2);
   const rows = $derived(phoneWorkRows(blocks));
+  const guidanceOnly = $derived(rows.length > 0 && rows.every((row) => row.kind === "tip"));
+  const summaryTitle = $derived(working ? "Working" : failed ? "Work failed" : guidanceOnly ? "Work guidance" : "Work details");
+  const summaryLabel = $derived(`${summaryTitle}${counts.total ? ` · ${counts.total} ${counts.total === 1 ? "step" : "steps"} · ${counts.passed} passed${counts.failed ? ` · ${counts.failed} failed` : ""}${counts.running ? ` · ${counts.running} running` : ""}${counts.pending ? ` · ${counts.pending} pending` : ""}` : " · Runtime notes"}`);
   // Very long turns show the newest rows first; earlier ones stay one tap away.
   const LIMIT = 24;
   const KEEP = 16;
@@ -21,10 +23,22 @@
 </script>
 
 <section class="work" data-agent-id={`phone.work.${blocks[0]?.id}`} data-state={working ? "working" : failed ? "failed" : "complete"}>
-  <button class="summary" aria-expanded={open} onclick={() => onToggle(!open)}>
+  <button class="summary" class:many-outcomes={manyOutcomes} aria-label={summaryLabel} aria-expanded={open} onclick={() => onToggle(!open)}>
     <span class="caret" class:open aria-hidden="true">›</span>
-    <span class="headline" class:failure={failed}>{working ? "Working" : failed ? "Work failed" : "Work details"}<span class="count"> · {tools.length} {tools.length === 1 ? "step" : "steps"}{unsuccessful ? ` · ${unsuccessful} unsuccessful` : ""}</span></span>
-    {#if active}<span class="active">{humanizeTool(active.name, active.summary) || active.name}</span>{/if}
+    <span class="summary-top">
+      <span class="identity">
+        <span class="headline" class:failure={failed}>{summaryTitle}</span>
+        {#if counts.total}<span class="count" data-agent-id="phone.summary.steps"><span aria-hidden="true">·</span>{counts.total} {counts.total === 1 ? "step" : "steps"}</span>{/if}
+      </span>
+      {#if counts.total}
+        <span class="outcomes" data-agent-id="phone.summary.outcomes">
+          <span class="outcome passed" data-agent-id="phone.summary.passed"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3 8 3 3 7-7" /></svg><span>{counts.passed}<span class="outcome-label">{" passed"}</span></span></span>
+          {#if counts.failed}<span class="outcome failed" data-agent-id="phone.summary.failed"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4 4 8 8M12 4l-8 8" /></svg><span>{counts.failed}<span class="outcome-label">{" failed"}</span></span></span>{/if}
+          {#if counts.running}<span class="outcome running" data-agent-id="phone.summary.running"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="5" /><path d="M8 5v3l2 1" /></svg><span>{counts.running}<span class="outcome-label">{" running"}</span></span></span>{/if}
+          {#if counts.pending}<span class="outcome pending" data-agent-id="phone.summary.pending"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="5" /></svg><span>{counts.pending}<span class="outcome-label">{" pending"}</span></span></span>{/if}
+        </span>
+      {/if}
+    </span>
   </button>
   {#if open}
     <div class="details">
@@ -36,17 +50,17 @@
             <span class="mark" aria-hidden="true">{block.status === "ok" ? "✓" : block.status === "failed" ? "!" : "●"}</span>
             <span class="step-text">
               <span class="step-label" class:cmd={isShell(block.name)}>{humanizeTool(block.name, block.summary) || block.name}</span>
-              <span class="step-name">{block.name}{block.status === "failed" ? " · unsuccessful" : block.status === "running" ? " · running" : ""}</span>
+              <span class="step-name">{block.name}{block.status === "failed" ? " · failed" : block.status === "running" ? " · running" : block.status === "preview" ? " · pending" : ""}</span>
             </span>
             <span class="chev" aria-hidden="true">›</span>
           </button>
         {:else if row.kind === "tip"}
-          <details class="tip" data-agent-id="phone.work.tip">
-            <summary><span class="tip-k">Tip</span><span class="tip-text">{row.summary}</span>{#if row.count > 1}<span class="tip-n">×{row.count}</span>{/if}</summary>
+          <details class="tip" class:warning={row.warning} data-agent-id="phone.work.tip">
+            <summary><span class="tip-k">Bash tip</span><span class="tip-text">{row.summary}</span>{#if row.count > 1}<span class="tip-n">×{row.count}</span>{/if}</summary>
             <p>{row.text}</p>
           </details>
         {:else}
-          <div class="row"><Block block={row.block} {onInspect} {sessionId} /></div>
+          <div class="row" class:notice={row.block.kind === "marker" && row.block.level !== "info" && row.block.level !== "note"}><Block block={row.block} {onInspect} {sessionId} /></div>
         {/if}
       {/each}
     </div>
@@ -54,13 +68,35 @@
 </section>
 
 <style>
-  .work { border: 1px solid var(--line); background: var(--bg1); border-radius: 6px; min-width: 0; max-width: 100%; overflow: hidden; }
-  .summary { min-width: 0; display: flex; align-items: center; width: 100%; gap: 8px; padding: 0 12px; min-height: 44px; font: 13px/1.4 var(--sans); color: var(--dim); }
-  .caret { flex: none; width: 10px; color: var(--faint); transition: rotate 0.12s ease-out; }
+  .work { container: phone-work / inline-size; border: 1px solid var(--line); background: var(--bg1); border-radius: 6px; min-width: 0; max-width: 100%; overflow: hidden; }
+  .summary { min-width: 0; display: grid; grid-template-columns: 10px minmax(0, 1fr); align-items: center; width: 100%; gap: 8px; padding: 0 12px; min-height: 44px; font: 13px/1.4 var(--sans); color: var(--dim); }
+  .caret { width: 10px; color: var(--faint); transition: rotate 0.12s ease-out; }
   .caret.open { rotate: 90deg; }
-  .headline { min-width: 0; color: var(--fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .count { color: var(--dim); }
-  .active { flex: 0 1 40%; min-width: 0; margin-left: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 11px var(--mono); color: var(--cyan); }
+  .summary-top { min-width: 0; display: flex; align-items: center; gap: 8px; }
+  .identity { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; }
+  .headline { flex: 0 1 auto; min-width: 0; color: var(--fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .count { flex: none; display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; color: var(--dim); font-size: 11px; font-variant-numeric: tabular-nums; }
+  .outcomes { flex: none; display: flex; flex-wrap: nowrap; align-items: center; gap: 10px; font: 12px/1.4 var(--sans); font-variant-numeric: tabular-nums; }
+  .outcome { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+  .outcome svg { flex: none; width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+  .passed { color: var(--green); }
+  .failed { color: var(--red); }
+  .running { color: var(--cyan); }
+  .pending { color: var(--dim); }
+  @container phone-work (max-width: 500px) {
+    /* Keep the title and step total visible before compacting outcome wording.
+       Full outcome labels also remain in the button's accessible name. */
+    .many-outcomes .outcome-label { display: none; }
+  }
+  @container phone-work (max-width: 350px) {
+    .outcome-label { display: none; }
+    .outcomes { gap: 4px; font-size: 11px; }
+    .outcome { gap: 3px; }
+    .outcome svg { width: 10px; height: 10px; }
+    .headline { font-size: 12px; }
+    .identity { gap: 4px; }
+    .summary-top { gap: 6px; }
+  }
   .failure { color: var(--red); }
   .details { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr); border-top: 1px solid var(--line); padding: 2px 0 6px; }
   .details > * { min-width: 0; max-width: 100%; }
@@ -75,11 +111,13 @@
   .step-label.cmd { font: 12px/1.4 var(--mono); }
   .step-name { min-width: 0; font: 11px/1.3 var(--mono); color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .chev { color: var(--faint); }
-  .row { padding: 4px 12px; overflow-wrap: anywhere; }
+  .row { padding: 0 12px; overflow-wrap: anywhere; }
+  .row.notice { padding-block: 6px; }
   .tip { padding: 0 12px; color: var(--dim); font: 12px/1.45 var(--sans); }
   .tip summary { display: flex; align-items: center; gap: 8px; min-height: 44px; cursor: pointer; list-style: none; min-width: 0; }
   .tip summary::-webkit-details-marker { display: none; }
   .tip-k { flex: none; padding: 0 6px; border-radius: 999px; background: color-mix(in srgb, var(--cyan) 12%, transparent); color: var(--cyan); font-size: 10px; letter-spacing: 0.04em; text-transform: uppercase; line-height: 16px; }
+  .tip.warning .tip-k { color: var(--yellow); background: color-mix(in srgb, var(--yellow) 12%, transparent); }
   .tip-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .tip[open] .tip-text { white-space: normal; overflow-wrap: anywhere; }
   .tip-n { flex: none; color: var(--faint); font-size: 11px; }

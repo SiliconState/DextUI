@@ -13,7 +13,7 @@ trap cleanup EXIT
 [ -z "${SCREENSHOTS:-}" ] || mkdir -p "$SCREENSHOTS"
 capture() { [ -z "${SCREENSHOTS:-}" ] || "${B[@]}" screenshot "$SCREENSHOTS/$1.png" >/dev/null; }
 wait_js() { if ! "${B[@]}" wait --fn "$1" >/dev/null; then echo "FAIL waiting: $1"; "${B[@]}" snapshot; "${B[@]}" eval '({focus:document.activeElement?.dataset.agentId,tag:document.activeElement?.tagName,mainInert:document.querySelector(`main`)?.inert,diff:!!document.querySelector(`[data-agent-id="diff.overlay"]`),launch:[...document.querySelectorAll(`[data-agent-id="diff.open"]`)].map(e=>({connected:e.isConnected,inert:!!e.closest(`[inert]`),rects:e.getClientRects().length,visibility:getComputedStyle(e).visibility,display:getComputedStyle(e).display,top:e.getBoundingClientRect().top})),history:document.querySelector(`.sb`)?.scrollTop})'; capture failure; exit 1; fi; }
-check() { local out; out=$("${B[@]}" eval "$1"); if [ "$out" != true ]; then echo "FAIL: $1"; echo "$out"; "${B[@]}" eval 'JSON.stringify({failures:window.__fitFailures,width:innerWidth,work:{steps:document.querySelectorAll(`section[data-agent-id^="phone.work."] .step`).length,tips:[...document.querySelectorAll(`[data-agent-id="phone.work.tip"]`)].map(e=>e.textContent),markers:[...document.querySelectorAll(`.b-marker`)].map(e=>e.textContent)},popup:(()=>{const p=document.querySelector(`[data-agent-id="session.controls.overlay"]`);return p?{height:p.getBoundingClientRect().height,width:p.getBoundingClientRect().width,text:p.textContent,sections:[...p.querySelectorAll(`.sec`)].map(e=>[e.textContent,e.getBoundingClientRect().height])}:null})(),header:(()=>{const h=document.querySelector(`[data-agent-id="status.hud"]`),t=h.querySelector(`.session-name`);return {height:h.getBoundingClientRect().height,scroll:h.scrollWidth,client:h.clientWidth,titleWidth:t.clientWidth,titleScroll:t.scrollWidth,buttons:[...h.querySelectorAll(`:scope > button`)].map(x=>[x.dataset.agentId,x.getBoundingClientRect().height,x.getBoundingClientRect().width])}})()})' || true; capture failure; exit 1; fi; }
+check() { local out; out=$("${B[@]}" eval "$1"); if [ "$out" != true ]; then echo "FAIL: $1"; echo "$out"; "${B[@]}" eval 'JSON.stringify({failures:window.__fitFailures,width:innerWidth,work:{summaries:[...document.querySelectorAll(`section[data-agent-id^="phone.work."] > button`)].map(e=>({label:e.getAttribute("aria-label"),text:e.textContent,state:e.parentElement.dataset.state})),steps:document.querySelectorAll(`section[data-agent-id^="phone.work."] .step`).length,tips:[...document.querySelectorAll(`[data-agent-id="phone.work.tip"]`)].map(e=>e.textContent),markers:[...document.querySelectorAll(`.b-marker`)].map(e=>e.textContent)},popup:(()=>{const p=document.querySelector(`[data-agent-id="session.controls.overlay"]`);return p?{height:p.getBoundingClientRect().height,width:p.getBoundingClientRect().width,text:p.textContent,sections:[...p.querySelectorAll(`.sec`)].map(e=>[e.textContent,e.getBoundingClientRect().height])}:null})(),header:(()=>{const h=document.querySelector(`[data-agent-id="status.hud"]`),t=h.querySelector(`.session-name`);return {height:h.getBoundingClientRect().height,scroll:h.scrollWidth,client:h.clientWidth,titleWidth:t.clientWidth,titleScroll:t.scrollWidth,buttons:[...h.querySelectorAll(`:scope > button`)].map(x=>[x.dataset.agentId,x.getBoundingClientRect().height,x.getBoundingClientRect().width])}})()})' || true; capture failure; exit 1; fi; }
 (cd apps/web && npm exec -- vite build --config scripts/header-review.vite.ts >"$TMP/build.log" 2>&1) || { cat "$TMP/build.log"; exit 1; }
 node packages/mock-server/src/server.mjs --port="$PORT" --static="$OUT" >"$TMP/server.log" 2>&1 &
 SRV=$!
@@ -34,6 +34,11 @@ for width in ${HEADER_WIDTHS:-360 390 499 501 768 1280}; do
         if [ "$auto" = true ]; then check '(()=>{const flag=document.querySelector(`[data-agent-id="status.full-auto"]`),copy=document.querySelector(`.subtitle-copy`),f=flag.getBoundingClientRect(),c=copy.getBoundingClientRect();return f.width>0&&f.height>0&&(innerWidth<=900?getComputedStyle(document.querySelector(`.auto-label`)).display==="none":f.left>=c.right&&Math.abs(f.top-c.top)<4)})()'; fi
         check "!!document.querySelector(\`[data-agent-id=\"status.progress\"]\`) === (\"$state\"===\"working\"||\"$state\"===\"review\")"
         if [ "$state" = working ]; then check 'document.querySelector(`.subtitle-copy`).textContent==="5 of 8 · Rebuilding report" && document.querySelector(`[data-agent-id="status.progress"]`).value===5 && document.querySelector(`[data-agent-id="status.progress"]`).max===8'; fi
+        if [ "$width" -le 600 ]; then
+          check 'window.__fits(`section[data-agent-id^="phone.work."]`) && (()=>{const w=document.querySelector(`section[data-agent-id^="phone.work."]`);return w.querySelector(`[data-agent-id="phone.summary.passed"]`)?.textContent.includes(w.dataset.state==="working"||w.dataset.state==="failed"?"0 passed":"1 passed")})()'
+          if [ "$state" = working ] || [ "$state" = review ]; then check 'document.querySelector(`[data-agent-id="phone.summary.running"]`)?.textContent.includes("1 running")'; fi
+          if [ "$state" = failed ]; then check 'document.querySelector(`[data-agent-id="phone.summary.failed"]`)?.textContent.includes("1 failed")'; fi
+        fi
         if [ "$state" = done ] && [ "$width" -le 600 ]; then check 'window.__fits(`[data-agent-id="block.text"]`) && window.__fits(`.md-tablewrap`) && document.querySelector(`[data-agent-id="transcript.root"]`).scrollWidth<=document.querySelector(`[data-agent-id="transcript.root"]`).clientWidth'; fi
         if [ "$state" = review ]; then check 'window.__fits(`[data-agent-id="approval.dock"]`)'; fi
         "${B[@]}" click '[data-agent-id="status.session-state"]' >/dev/null
@@ -178,13 +183,31 @@ check 'window.__fits(`[data-agent-id="artifact.overlay"]`)'
 check 'window.__fits(`[data-agent-id="artifact.overlay"]`)'
 capture '390-report-overflow'
 "${B[@]}" click '[data-agent-id="artifact.back"]' >/dev/null
+# Summary stays one row even when passed/failed/running/pending coexist.
+"${B[@]}" eval '(()=>{window.__sameWorkLine=()=>{const w=document.querySelector(`section[data-agent-id^="phone.work."]`),b=w.querySelector(`.summary`),h=b.querySelector(`.headline`),s=b.querySelector(`[data-agent-id="phone.summary.steps"]`),r=b.getBoundingClientRect(),t=h.getBoundingClientRect();return Math.abs(r.height-44)<1&&b.scrollWidth<=b.clientWidth&&h.clientWidth>40&&h.scrollWidth<=h.clientWidth&&!!s&&getComputedStyle(s).display!=="none"&&s.getBoundingClientRect().width>0&&s.scrollWidth<=s.clientWidth&&s.getBoundingClientRect().left>=t.right&&Math.abs((s.getBoundingClientRect().top+s.getBoundingClientRect().height/2)-(t.top+t.height/2))<1&&[...b.querySelectorAll(`.outcome`)].every(e=>{const c=e.getBoundingClientRect();return Math.abs((c.top+c.height/2)-(t.top+t.height/2))<1&&c.right<=r.right&&c.left>=r.left})};return true})()' >/dev/null
+"${B[@]}" eval 'window.__headerReview.mixedWork()' >/dev/null
+wait_js 'document.querySelector(`[data-agent-id="phone.summary.pending"]`)?.textContent.includes("1 pending")'
+for width in 320 360 390 600; do
+  "${B[@]}" set viewport "$width" 844 >/dev/null
+  "${B[@]}" wait 160 >/dev/null
+  check 'window.__sameWorkLine() && document.querySelector(`section[data-agent-id^="phone.work."]`).dataset.state==="working" && document.querySelector(`[data-agent-id="phone.summary.passed"]`).textContent.includes("29 passed") && document.querySelector(`[data-agent-id="phone.summary.failed"]`).textContent.includes("1 failed") && document.querySelector(`[data-agent-id="phone.summary.running"]`).textContent.includes("2 running") && ![...document.querySelectorAll(`.sb-axis > .b-marker`)].some(e=>e.textContent.includes("call failed"))'
+  "${B[@]}" eval '(()=>{const w=document.querySelector(`section[data-agent-id^="phone.work."]`),b=w.querySelector(`button`);if(b.getAttribute("aria-expanded")==="false")b.click();w.querySelector(`[data-agent-id="phone.work.earlier"]`)?.click();return true})()' >/dev/null
+  wait_js '!!document.querySelector(`[data-agent-id="block.thinking"][data-state="thinking"]`)'
+  check '(()=>{const t=document.querySelector(`[data-agent-id="block.thinking"][data-state="thinking"]`),s=t.querySelector(`summary`),p=t.querySelector(`.think-p`),label=s.querySelector(`.faint`),gap=p.getBoundingClientRect().top-label.getBoundingClientRect().bottom;return s.getBoundingClientRect().height>=44&&gap>=0&&gap<=6&&getComputedStyle(t).paddingTop==="0px"})()'
+  capture "$width-work-outcomes-active"
+done
+"${B[@]}" set viewport 390 844 >/dev/null
 # Stress the expanded card, not only its collapsed summary: long commands,
 # reasoning, metadata and duplicate guidance must stay inside one scroll surface.
 "${B[@]}" eval 'window.__headerReview.stress()' >/dev/null
 wait_js 'document.querySelector(`section[data-agent-id^="phone.work."] > button`)?.textContent.includes("31 steps")'
+check 'document.querySelector(`[data-agent-id="phone.summary.passed"]`).textContent.includes("30 passed") && document.querySelector(`[data-agent-id="phone.summary.failed"]`).textContent.includes("1 failed")'
+"${B[@]}" eval '(()=>{const w=document.querySelector(`section[data-agent-id^="phone.work."]`),b=w.querySelector(`button`);if(b.getAttribute("aria-expanded")==="true")b.click();w.scrollIntoView({block:"start"});return true})()' >/dev/null
+check 'window.__sameWorkLine() && document.querySelector(`[data-agent-id="phone.summary.steps"]`).textContent.includes("31 steps")'
+capture '390-work-outcomes-collapsed'
 "${B[@]}" eval '(()=>{const b=document.querySelector(`section[data-agent-id^="phone.work."] > button`);if(b.getAttribute("aria-expanded")==="false")b.click();return true})()' >/dev/null
 wait_js '!!document.querySelector(`[data-agent-id="phone.work.earlier"]`)'
-check 'document.querySelectorAll(`section[data-agent-id^="phone.work."] .step`).length===15 && document.querySelectorAll(`[data-agent-id="phone.work.tip"]`).length===1 && document.querySelector(`[data-agent-id="phone.work.tip"]`).textContent.includes("×2") && !document.querySelector(`[data-agent-id="block.marker.batch"]`) && [...document.querySelectorAll(`[data-agent-id="block.marker"]`)].some(e=>e.textContent.includes("2 calls failed")) && [...document.querySelectorAll(`.b-marker.st-yellow`)].some(e=>e.textContent.includes("Keep this warning visible"))'
+check 'document.querySelectorAll(`section[data-agent-id^="phone.work."] .step`).length===13 && document.querySelectorAll(`[data-agent-id="phone.work.tip"]`).length===2 && document.querySelector(`[data-agent-id="phone.work.tip"]`).textContent.includes("×2") && !document.querySelector(`[data-agent-id="block.marker.batch"]`) && [...document.querySelectorAll(`section[data-agent-id^="phone.work."] [data-agent-id="block.marker"]`)].some(e=>e.textContent.includes("1 call failed")) && [...document.querySelectorAll(`.sb-axis > .b-marker.st-yellow`)].some(e=>e.textContent.includes("Workspace policy warning remains visible")) && ![...document.querySelectorAll(`.sb-axis > .b-marker`)].some(e=>e.textContent.includes("bash advisory:")) && !!document.querySelector(`[data-agent-id="phone.work.tip"].warning`)'
 "${B[@]}" click '[data-agent-id="phone.work.earlier"]' >/dev/null
 wait_js 'document.querySelectorAll(`section[data-agent-id^="phone.work."] .step`).length===31 && !document.querySelector(`[data-agent-id="phone.work.earlier"]`)'
 "${B[@]}" eval '(()=>{for(const e of document.querySelectorAll(`section[data-agent-id^="phone.work."] details`))e.open=true;return true})()' >/dev/null
@@ -194,10 +217,26 @@ for width in 360 390; do
   for theme in ${HEADER_THEMES:-light dim dark}; do
     "${B[@]}" eval "window.__headerReview.theme(\"$theme\")" >/dev/null
     check '(()=>{const root=document.querySelector(`section[data-agent-id^="phone.work."]`),r=root.getBoundingClientRect();window.__fitFailures=[];for(const e of root.querySelectorAll(`*`)){const b=e.getBoundingClientRect();if(!b.width||!b.height)continue;const s=getComputedStyle(e);if(b.left<r.left-1||b.right>r.right+1||(e.scrollWidth>e.clientWidth+1&&/(auto|scroll)/.test(s.overflowX))||(e.scrollHeight>e.clientHeight+1&&/(auto|scroll)/.test(s.overflowY)))window.__fitFailures.push({tag:e.tagName,cls:e.className,left:b.left,right:b.right,scroll:e.scrollWidth,client:e.clientWidth});}return window.__fitFailures.length===0&&[...root.querySelectorAll(`button,summary`)].every(e=>e.getBoundingClientRect().height>=44)&&document.querySelector(`.sb`).scrollWidth<=document.querySelector(`.sb`).clientWidth})()'
+    check 'window.__sameWorkLine() && (()=>{const t=document.querySelector(`[data-agent-id="block.thinking"]`),s=t.querySelector(`summary`),p=t.querySelector(`.think-p`),label=s.querySelector(`.faint`),gap=p.getBoundingClientRect().top-label.getBoundingClientRect().bottom;return s.getBoundingClientRect().height>=44&&gap>=0&&gap<=6&&parseFloat(getComputedStyle(p).fontSize)===13&&getComputedStyle(t.closest(`.row`)).paddingTop==="0px"})()'
     "${B[@]}" eval '(()=>{document.querySelector(`section[data-agent-id^="phone.work."]`).scrollIntoView({block:"start"});return true})()' >/dev/null
     capture "$width-$theme-work-expanded"
+    "${B[@]}" eval '(()=>{document.querySelector(`[data-agent-id="block.thinking"]`).scrollIntoView({block:"center"});return true})()' >/dev/null
+    capture "$width-$theme-thinking-spacing"
   done
 done
+# Show all keeps rich tools, while recognized warning-level Bash tips stay contained.
+"${B[@]}" click '[data-agent-id="status.details"]' >/dev/null
+"${B[@]}" click '[data-agent-id="settings.open"]' >/dev/null
+"${B[@]}" click '[data-agent-id="tools.view.all"]' >/dev/null
+"${B[@]}" press Escape >/dev/null
+wait_js '!!document.querySelector(`[data-agent-id="tool.fixture-tool"]`)'
+"${B[@]}" eval '(()=>{const w=document.querySelector(`section[data-agent-id^="phone.work."]`);if(w.querySelector(`button`).getAttribute("aria-expanded")==="false")w.querySelector(`button`).click();w.scrollIntoView({block:"center"});return true})()' >/dev/null
+check 'document.querySelectorAll(`[data-agent-id="phone.work.tip"]`).length===2 && !document.querySelector(`[data-agent-id="block.marker.advisory"]`) && ![...document.querySelectorAll(`.sb-axis > .b-marker`)].some(e=>e.textContent.includes("bash advisory:")||e.textContent.includes("call failed")) && !!document.querySelector(`section[data-agent-id^="phone.work."] [data-agent-id="block.marker"]`) && getComputedStyle(document.querySelector(`section[data-agent-id^="phone.work."] [data-agent-id="block.marker"]`).closest(`.notice`)).paddingTop==="6px" && [...document.querySelectorAll(`.sb-axis > .b-marker.st-yellow`)].some(e=>e.textContent.includes("Workspace policy warning remains visible"))'
+capture '390-show-all-contained-tips'
+"${B[@]}" click '[data-agent-id="status.details"]' >/dev/null
+"${B[@]}" click '[data-agent-id="settings.open"]' >/dev/null
+"${B[@]}" click '[data-agent-id="tools.view.compact"]' >/dev/null
+"${B[@]}" press Escape >/dev/null
 # Mobile history acceptance: realistic multi-turn prose, notices, code and tables.
 "${B[@]}" set viewport 390 844 >/dev/null
 "${B[@]}" eval 'window.__headerReview.history()' >/dev/null
@@ -209,7 +248,7 @@ wait_js '!document.querySelector(`[data-agent-id="transcript.older"]`)'
 check 'window.__historyAnchor.isConnected&&Math.abs(window.__historyAnchor.getBoundingClientRect().top-window.__historyTop)<2&&document.querySelector(`.sb`).scrollTop>100&&document.querySelectorAll(`[data-agent-id="block.text.copy"]`).length===70'
 for theme in ${HEADER_THEMES:-light dim dark}; do
   "${B[@]}" eval "(()=>{window.__headerReview.theme(\"$theme\");const sb=document.querySelector(\`.sb\`);const u=[...document.querySelectorAll(\`[data-agent-id=\"block.user\"]\`)].find(e=>e.textContent.includes(\"History request 68:\"));u.scrollIntoView({block:\"start\"});return true})()" >/dev/null
-  check '(()=>{const sb=document.querySelector(`.sb`),md=document.querySelector(`.md`),u=document.querySelector(`.b-user-text`),c=document.querySelector(`.md-code`);return sb.scrollWidth<=sb.clientWidth&&getComputedStyle(md).fontFamily.includes("system-ui")&&getComputedStyle(md).fontSize==="14px"&&getComputedStyle(u).fontSize==="14px"&&getComputedStyle(c).fontFamily.includes("Mono")&&parseFloat(getComputedStyle(md).lineHeight)>=21})()'
+  check '(()=>{const sb=document.querySelector(`.sb`),md=document.querySelector(`.md`),u=document.querySelector(`.b-user-text`),c=document.querySelector(`.md-code`);const root=document.querySelector(`.sb-axis`),prompt=[...root.children].find(e=>e.dataset.agentId==="block.user"&&e.textContent.includes("History request 68:")),previous=prompt.previousElementSibling,gap=prompt.getBoundingClientRect().top-previous.getBoundingClientRect().bottom;return sb.scrollWidth<=sb.clientWidth&&gap>=16&&gap<=24&&getComputedStyle(md).fontFamily.includes("system-ui")&&getComputedStyle(md).fontSize==="14px"&&getComputedStyle(u).fontSize==="14px"&&getComputedStyle(c).fontFamily.includes("Mono")&&parseFloat(getComputedStyle(md).lineHeight)>=21})()'
   capture "390-$theme-history"
 done
 # A notification after the latest answer must not remove its Copy action.
