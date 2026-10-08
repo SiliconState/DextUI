@@ -16,6 +16,38 @@
 
   let query = $state("");
   let menu = $state("");
+  let mobile = $state(matchMedia("(max-width: 900px)").matches);
+  $effect(() => {
+    const media = matchMedia("(max-width: 900px)");
+    const update = () => { mobile = media.matches; };
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  });
+  const sessionRows = $derived.by(() => {
+    void app.runtimeRevision;
+    const rows = filtered.map((meta) => {
+      const state = app.conn?.subscribed.has(meta.id) ? app.conn.session(meta.id).state : undefined;
+      const attention = meta.pending_permissions + (meta.pending_ui_requests ?? 0) > 0 || !!state?.pending.size || !!state?.pendingUi;
+      const working = state?.working || state?.compacting || meta.status === "starting";
+      const group = attention ? "Needs you" : working ? "Working" : "Idle";
+      const detail = attention ? "Waiting for your decision" : working ? "Agent is working" : state?.failed ? "Last turn failed" : meta.status === "cold" || meta.status === "exited" ? "Session closed" : state ? "Ready for your next message" : "Open to check activity";
+      return { ...meta, group, detail };
+    });
+    if (mobile) rows.sort((a, b) => ["Needs you", "Working", "Idle"].indexOf(a.group) - ["Needs you", "Working", "Idle"].indexOf(b.group) || b.updated_at - a.updated_at);
+    return rows;
+  });
+  const activityTime = (ms: number) => new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  let swipeStart: { x: number; y: number } | null = null;
+  let suppressPick = false;
+  function swipeEnd(e: TouchEvent, id: string) {
+    if (!swipeStart) return;
+    const touch = e.changedTouches[0];
+    if (mobile && canManage && touch && touch.clientX - swipeStart.x < -65 && Math.abs(touch.clientY - swipeStart.y) < 30) {
+      menu = id;
+      suppressPick = true;
+    }
+    swipeStart = null;
+  }
   let packsOpen = $state(localStorage.getItem("dextui.railPacksOpen") === "1");
   const canManage = $derived(app.caps.includes("session_manage"));
   const hasPacks = $derived(app.caps.includes("packs") && app.packs.length > 0);
@@ -47,7 +79,10 @@
     return "●";
   }
 
-  function pick(id: string) {
+  function pick(id: string, event: MouseEvent) {
+    const skip = suppressPick && event.detail > 0;
+    suppressPick = false;
+    if (skip) return;
     activate(id);
     onPick?.();
   }
@@ -77,6 +112,7 @@
   <ActionQueue {onPick} />
   <CrewRail {onPick} />
   <input
+    aria-label="Filter sessions"
     bind:value={query}
     type="search"
     placeholder="Filter…"
@@ -84,15 +120,16 @@
     data-agent-id="session.search"
   />
   <div class="idx-list">
-    {#each filtered as s (s.id)}
-      <div class="idx-entry">
+    {#each sessionRows as s, i (s.id)}
+      {#if mobile && (i === 0 || sessionRows[i - 1]?.group !== s.group)}<h2 class="attention-group" data-agent-id={`sessions.group.${s.group.toLowerCase().replaceAll(" ", "-")}`}>{s.group}</h2>{/if}
+      <div class="idx-entry" role="group" aria-label={s.title} ontouchstart={(e) => { suppressPick = false; const t = e.touches[0]; swipeStart = t ? { x: t.clientX, y: t.clientY } : null; }} ontouchend={(e) => swipeEnd(e, s.id)}>
       <div class="idx-main">
       <button
         class="idx-row"
         class:active={s.id === app.activeId}
         data-agent-id={`session.${s.id}.open`}
         data-state={s.id === app.activeId ? "active" : "idle"}
-        onclick={() => pick(s.id)}
+        onclick={(event) => pick(s.id, event)}
       >
         <span class="idx-title">
           <span class="idx-cur">{s.id === app.activeId ? "❯" : " "}</span>
@@ -103,7 +140,7 @@
           {/if}
         </span>
         <span class="idx-sub">
-          {s.model ?? s.agent.name} · {titleCase(s.status)}
+          {#if mobile}<span>{s.detail}</span><time datetime={new Date(s.updated_at).toISOString()} title={new Date(s.updated_at).toLocaleString()}>{activityTime(s.updated_at)}</time>{:else}{s.model ?? s.agent.name} · {titleCase(s.status)}{/if}
         </span>
       </button>
       {#if canManage}
@@ -160,6 +197,14 @@
 </div>
 
 <style>
+  .attention-group { font: 600 12px var(--sans); color: var(--dim); padding: 14px 12px 6px; }
+  @media (max-width: 900px) {
+    .idx-sub { display: flex; justify-content: space-between; gap: 8px; font-family: var(--sans); }
+    .idx-sub time { flex: none; color: var(--faint); }
+    .idx-head [data-agent-id="session.new"] { padding: 8px 14px; background: var(--bg2); border: 1px solid var(--line); border-radius: 5px; }
+    .idx-foot { display: none; }
+    .idx-packs-g { display: none; }
+  }
   .idx {
     display: flex;
     flex-direction: column;
@@ -246,7 +291,11 @@
   }
   @media (max-width: 900px) {
     .idx-head { gap: 4px; align-items: center; }
-    .idx-head .act { min-width: 40px; text-align: center; }
+    .idx-head .act { min-width: 44px; text-align: center; }
+    .idx-sub { display: flex; gap: 8px; font-size: 12px; }
+    .idx-sub > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .idx-more { min-width: 44px; }
+    .idx-sub time { flex: none; }
     .idx-row { padding-block: 10px; }
     .idx-search { min-height: 44px; font-size: 16px; }
   }

@@ -7,6 +7,8 @@
   import { app } from "../lib/state.svelte";
   import { prettyPath } from "../lib/markdown";
   import { useSession } from "../lib/useSession.svelte";
+  import { useDialog } from "../lib/dialog.svelte";
+  import { popoverPos } from "../lib/popover";
 
   let { store }: { store: SessionStore } = $props();
 
@@ -15,6 +17,28 @@
   const sessCwd = $derived(app.sessions.find((s) => s.id === view.id)?.cwd ?? "");
 
   let open = $state(localStorage.getItem("dextui.todosOpen") === "1");
+  let mobile = $state(matchMedia("(max-width: 900px)").matches);
+  const shownOpen = $derived(mobile ? app.todosOpen : open);
+  const dlg = useDialog(() => mobile && app.todosOpen, () => document.querySelector<HTMLElement>('[data-agent-id="status.details"]'));
+  let layoutRevision = $state(0);
+  $effect(() => {
+    if (!app.todosOpen) return;
+    const resize = () => { layoutRevision += 1; };
+    window.addEventListener("resize", resize);
+    return () => window.removeEventListener("resize", resize);
+  });
+  const posStyle = $derived.by(() => { void layoutRevision; return popoverPos(null, 304); });
+  function onKey(event: KeyboardEvent) {
+    dlg.onKey(event);
+    if (event.key === "Escape") { app.todosOpen = false; event.preventDefault(); }
+    event.stopPropagation();
+  }
+  $effect(() => {
+    const media = matchMedia("(max-width: 900px)");
+    const update = () => { mobile = media.matches; app.todosOpen = false; };
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  });
   let data = $state(null as TodosResponse | null);
   let loading = $state(false);
   let failed = $state(false);
@@ -22,6 +46,8 @@
   let loadSeq = 0;
 
   const supported = $derived(app.caps.includes("todos_read"));
+  $effect(() => { void app.hostEpoch; app.todosOpen = false; });
+  $effect(() => { if (!supported) app.todosOpen = false; });
   const done = $derived(data ? data.items.filter((i) => i.status === "completed").length : 0);
 
   const panelState = $derived(
@@ -31,7 +57,7 @@
         ? "loading"
         : data && data.items.length === 0
           ? "empty"
-          : open
+          : shownOpen
             ? "open"
             : "closed",
   );
@@ -41,16 +67,24 @@
     const reveal = app.todosReveal;
     if (reveal !== seenReveal) {
       seenReveal = reveal;
-      open = true;
-      localStorage.setItem("dextui.todosOpen", "1");
+      if (mobile) {
+        app.statusDetailsOpen = false;
+        app.sessionCtlOpen = false;
+        app.settingsOpen = false;
+        app.todosOpen = true;
+      }
+      else { open = true; localStorage.setItem("dextui.todosOpen", "1"); }
     }
   });
 
   const glyph: Record<string, string> = { pending: "○", in_progress: "◐", completed: "●" };
 
   function toggle() {
-    open = !open;
-    localStorage.setItem("dextui.todosOpen", open ? "1" : "0");
+    if (mobile) app.todosOpen = !app.todosOpen;
+    else {
+      open = !open;
+      localStorage.setItem("dextui.todosOpen", open ? "1" : "0");
+    }
   }
 
   async function load(sid: string): Promise<void> {
@@ -89,15 +123,17 @@
   let shownSid = "";
   $effect(() => {
     const sid = view.id;
-    void supported;
-    if (sid !== shownSid) {
-      shownSid = sid;
+    const scope = `${app.hostEpoch}:${sid}`;
+    if (scope !== shownSid) {
+      shownSid = scope;
+      app.todosOpen = false;
       ++loadSeq; // invalidate the previous session's in-flight request immediately
       loading = false;
       data = null;
       failed = false;
     }
     if (sid && supported) schedule(sid, 0);
+    else if (timer) { clearTimeout(timer); timer = undefined; }
   });
 
   // turn_end refresh: working true → false, debounced 250 ms.
@@ -134,14 +170,25 @@
   });
 </script>
 
+{#snippet todoList()}
+  <ul class="todos-list">
+    {#if failed && !data}<li class="st-red" data-agent-id="todos.empty">Todos unavailable</li>
+    {:else if data && data.items.length > 0}
+      {#each data.items as it, i (i)}
+        <li class="todo" data-agent-id={`todos.item.${i}`} data-state={it.status}><span class={`tg tg-${it.status}`} aria-hidden="true">{glyph[it.status] ?? "○"}</span><span class="tt">{it.text}</span></li>
+      {/each}
+    {:else}<li class="faint" data-agent-id="todos.empty">{loading ? "Loading…" : "None"}</li>{/if}
+  </ul>
+{/snippet}
+
 {#if supported}
-  <div class="todos content-axis" class:mobile-quiet={!open && (!data || data.items.length === 0)} data-agent-id="todos.root" data-state={panelState}>
-    <button class="todos-head" data-agent-id="todos.toggle" aria-expanded={open} onclick={toggle}>
-      <span class="faint">{open ? "▾" : "▸"}</span>
+  <div class="todos content-axis" class:mobile-hidden={mobile} data-agent-id="todos.root" data-state={panelState}>
+    <button class="todos-head" data-agent-id="todos.toggle" aria-expanded={shownOpen} onclick={toggle}>
+      <span class="faint">{shownOpen ? "▾" : "▸"}</span>
       <span class="st-cyan">Todos</span>
       {#if data}
         <span class="st-cyan">({done}/{data.items.length})</span>
-        <span class="faint">· {data.source}</span>
+        <span class="faint todo-source">· {data.source}</span>
         {#if data.path}
           {@const shown = prettyPath(data.path, sessCwd)}
           <span class="faint t-path" title={shown}>{shown}</span>
@@ -151,23 +198,16 @@
       {/if}
       {#if failed && !data}<span class="st-red">✗</span>{/if}
     </button>
-    {#if open}
-      <ul class="todos-list">
-        {#if failed && !data}
-          <li class="st-red" data-agent-id="todos.empty">✗ Todos unavailable</li>
-        {:else if data && data.items.length > 0}
-          {#each data.items as it, i (i)}
-            <li class="todo" data-agent-id={`todos.item.${i}`} data-state={it.status}>
-              <span class={`tg tg-${it.status}`} aria-hidden="true">{glyph[it.status] ?? "○"}</span>
-              <span class="tt">{it.text}</span>
-            </li>
-          {/each}
-        {:else}
-          <li class="faint" data-agent-id="todos.empty">— None</li>
-        {/if}
-      </ul>
-    {/if}
+    {#if !mobile && shownOpen}{@render todoList()}{/if}
   </div>
+  {#if mobile && app.todosOpen}
+    <div class="todos-scrim" role="presentation" onclick={() => (app.todosOpen = false)}></div>
+    <div class="todos-popout compact-popover" style={posStyle} role="dialog" aria-modal="true" aria-label="Session todos" tabindex="-1" use:dlg.ref onkeydown={onKey} data-agent-id="todos.overlay" onfocusin={(event) => { if (event.target instanceof HTMLElement) event.target.scrollIntoView({ block: "nearest" }); }}>
+      <header><span>Todos{data ? ` · ${done}/${data.items.length}` : ""}</span><button class="act" data-dialog-initial data-agent-id="todos.close" onclick={() => (app.todosOpen = false)}>Close</button></header>
+      {#if data && data.items.length > 0}<progress class="todo-progress" aria-label="Todo progress" value={done} max={data.items.length}></progress>{/if}
+      {@render todoList()}
+    </div>
+  {/if}
 {/if}
 
 <style>
@@ -209,6 +249,7 @@
   .tt {
     white-space: pre-wrap;
     min-width: 0;
+    overflow-wrap: anywhere;
   }
   .tg-pending {
     color: var(--faint);
@@ -228,11 +269,16 @@
   .todo[data-state="completed"] .tt {
     color: var(--dim);
   }
-  @media (max-width: 600px) {
-    .todos.mobile-quiet { display: none; }
-    .todos-head { align-items: center; }
-    .todos-head > .faint { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  }
+  .mobile-hidden { display: none; }
+  .todos-scrim { position: fixed; inset: 0; z-index: 36; background: color-mix(in srgb, var(--bg) 55%, transparent); }
+  .todos-popout { position: fixed; z-index: 37; width: min(19rem, calc(100vw - 16px)); border: 1px solid var(--line); background: var(--bg3); padding: 0 12px 8px; border-radius: 3px; box-shadow: 0 8px 32px #0005; }
+  .todos-popout header { position: sticky; top: 0; z-index: 1; background: var(--bg3); display: flex; align-items: center; justify-content: space-between; gap: 8px; border-bottom: 1px solid var(--line); font-weight: 600; font-size: 14px; }
+  .todos-popout header button { min-height: 44px; min-width: 44px; margin-right: -10px; text-align: center; color: var(--cyan); font-weight: 400; }
+  .todos-popout .todos-list { max-height: none; overflow: visible; padding: 8px 0 0; font: inherit; gap: 8px; }
+  .todo-progress { display: block; width: 100%; height: 2px; appearance: none; border: 0; background: var(--line); accent-color: var(--cyan); margin-top: 6px; }
+  .todo-progress::-webkit-progress-bar { background: var(--line); }
+  .todo-progress::-webkit-progress-value { background: var(--cyan); }
+  .todo-progress::-moz-progress-bar { background: var(--cyan); }
   .faint {
     color: var(--faint);
   }

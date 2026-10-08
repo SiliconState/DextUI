@@ -28,6 +28,7 @@
   --chart-5: #e06c75;
   --chart-grid: #2a2f38;
   color-scheme: dark;
+  --sans: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   --rail-size: clamp(13rem, 17vw, 19rem);
   --page-gutter: clamp(0.75rem, 1.2vw, 1.25rem);
@@ -195,12 +196,12 @@ a {
 .shell {
   display: grid;
   grid-template-columns: var(--rail-size) minmax(0, 1fr);
-  grid-template-rows: minmax(0, 1fr) auto auto auto;
+  grid-template-rows: auto minmax(0, 1fr) auto auto;
   grid-template-areas:
+    "status status"
     "index main"
     "composer composer"
-    "todos todos"
-    "status status";
+    "todos todos";
   width: 100%;
   height: 100%;
   height: 100dvh;
@@ -236,7 +237,7 @@ a {
 .shell > .statusline {
   grid-area: status;
   min-width: 0;
-  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
   background: var(--bg1);
 }
 
@@ -276,11 +277,12 @@ a {
     padding-top: env(safe-area-inset-top, 0px);
     padding-inline: env(safe-area-inset-left, 0px) env(safe-area-inset-right, 0px);
     grid-template-columns: 1fr;
+    grid-template-rows: auto auto minmax(0, 1fr) auto;
     grid-template-areas:
-      "main"
-      "composer"
+      "status"
       "todos"
-      "status";
+      "main"
+      "composer";
   }
   .shell.rail-collapsed {
     grid-template-columns: 1fr;
@@ -305,9 +307,10 @@ a {
   .shell > .index[data-state="open"] {
     transform: none;
   }
-  .shell > .statusline {
-    padding-bottom: env(safe-area-inset-bottom, 0px);
-  }
+  .shell > .statusline { border-top: 0; border-bottom: 1px solid var(--line); }
+  .shell > .todos-row { overflow: visible; }
+  .shell > .composer { padding-bottom: env(safe-area-inset-bottom, 0px); }
+  body { overflow: hidden; }
   .index-scrim {
     display: block;
     position: fixed;
@@ -319,7 +322,6 @@ a {
 
 @media (max-width: 600px) {
   body { overflow: hidden; }
-  .shell > .todos-row { max-height: calc(var(--mobile-viewport-height, 100dvh) * 0.18); overflow-y: auto; }
 }
 
 /* ---------- text action (the only "button" style) ---------- */
@@ -394,6 +396,12 @@ a {
   }
 }
 
+/* Mobile menus (Settings, session controls, details, todos) share one surface:
+   theme tokens, system type for readable labels, 3px corners. */
+@media (max-width: 900px) {
+  .compact-popover { background: var(--bg3); color: var(--fg); border: 1px solid var(--line); border-radius: 3px; box-shadow: 0 8px 32px #0005; font: 13px/1.4 var(--sans); }
+}
+
 /* ---------- overlays & shared text utilities ----------
    Global on purpose. Overlay chrome and accent utilities are rendered by
    several components (App drawers, PackGallery, FolderPicker, FlowCanvas);
@@ -413,7 +421,19 @@ a {
   background: var(--bg1);
   box-shadow: -8px 0 40px rgba(0, 0, 0, 0.4);
 }
+@media (max-width: 900px) {
+  .insp { width: 100%; min-width: 0; top: var(--mobile-viewport-top, 0px); bottom: auto; height: var(--mobile-viewport-height, 100dvh); padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); }
+  .insp-head { min-width: 0; flex-wrap: wrap; align-items: center; }
+  .insp-head > :first-child { min-width: 0; overflow-wrap: anywhere; }
+  .insp-head .act { min-height: 44px; }
+}
+@media (pointer: coarse), (hover: none) {
+  .insp-head .act { min-width: 44px; }
+}
+
 .insp-head {
+  flex: none;
+  min-width: 0;
   display: flex;
   gap: 10px;
   align-items: baseline;

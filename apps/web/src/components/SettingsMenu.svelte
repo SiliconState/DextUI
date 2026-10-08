@@ -53,7 +53,7 @@
 {#if app.settingsOpen}
   <div class="menu-catch" data-agent-id="settings.scrim" onclick={closeSettings} onkeydown={() => {}} role="presentation"></div>
   <div
-    class="menu"
+    class="menu compact-popover"
     style={posStyle}
     role="dialog"
     aria-modal="true"

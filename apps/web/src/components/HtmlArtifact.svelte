@@ -37,6 +37,7 @@
 <style>
   .art {
     display: flex;
+    min-width: 0;
     align-items: center;
     gap: 9px;
     width: min(100%, 38rem);
@@ -69,6 +70,13 @@
     white-space: nowrap;
     color: var(--faint);
     font-size: 10.5px;
+  }
+  @media (max-width: 600px) {
+    .art { width: 100%; padding: 8px 10px; gap: 8px; border-radius: 3px; border-left-width: 2px; font-family: var(--sans); }
+    .kind { font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
+    .name { font-size: 12px; }
+    .open { max-width: 45%; white-space: normal; overflow-wrap: anywhere; min-height: 44px; padding: 8px 10px; border: 1px solid var(--cyan); border-radius: 5px; font-size: 13px; text-align: center; }
+    .mark { font-size: 22px; }
   }
   .open {
     flex: none;

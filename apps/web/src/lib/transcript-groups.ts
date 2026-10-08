@@ -28,14 +28,14 @@ function foldableLabel(label: string): boolean {
 }
 
 function batchLabels(block: ViewBlock | undefined): string[] | null {
-  if (block?.kind !== "marker" || !block.text.startsWith("Batch: ")) return null;
+  if (block?.kind !== "marker" || block.auth || (block.level !== "info" && block.level !== "note") || !block.text.startsWith("Batch: ")) return null;
   const rest = block.text.slice(7);
   if (!/^[a-z_][\w-]*: /i.test(rest)) return null; // not the failure marker
   return rest.split(" · ").filter(Boolean);
 }
 
 function metaBlock(block: ViewBlock): block is Extract<ViewBlock, { kind: "marker" }> {
-  return block.kind === "marker" && !!parseRunMeta(block.text);
+  return block.kind === "marker" && !block.auth && (block.level === "info" || block.level === "note") && !!parseRunMeta(block.text);
 }
 
 function fallbackCaption(tools: Extract<ViewBlock, { kind: "tool" }>[], kind: ActivityKind, labels: string[]): string {

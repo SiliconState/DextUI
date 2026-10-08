@@ -4,6 +4,8 @@ dist.lkg/
 dist.staging/
 dist.staging.*/
 dist.smoke/
+dist.phone-review/
+dist.header-review/
 dist.broken-*/
 *.local
 .DS_Store

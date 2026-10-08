@@ -788,7 +788,7 @@
     .c-row { display: flex; gap: 0; align-items: flex-end; border: 1px solid var(--line); border-radius: 4px; background: var(--bg1); }
     .c-row:focus-within { border-color: var(--cyan); }
     .pg, .desktop-label, .desktop-attach, .c-side > .faint { display: none; }
-    textarea { order: 1; min-height: 44px; font-size: 16px; padding: 9px 4px; border: 0; border-radius: 0; background: transparent; }
+    textarea { font-family: var(--sans); order: 1; min-height: 44px; font-size: 16px; padding: 9px 4px; border: 0; border-radius: 0; background: transparent; }
     textarea:focus-visible { outline-offset: -2px; }
     .c-side { display: contents; }
     .mobile-attach { display: block; position: relative; order: 0; flex: 0 0 44px; }

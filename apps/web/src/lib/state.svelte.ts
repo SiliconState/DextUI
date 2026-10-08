@@ -40,11 +40,14 @@ export const app = $state({
   commands: [] as HostCommand[],
   /** Bumps whenever the host process identity changes (stores were reset). */
   hostEpoch: 0,
+  /** Presentation invalidation only; runtime truth stays in SessionStore. */
+  runtimeRevision: 0,
   paletteOpen: false,
   /** Compact routine structural tool activity; Bash and rich tools stay full. */
   compactTools: true,
   /** Raw envelope tail drawer for the active session. */
   eventsOpen: false,
+  inlineDiffOpen: false,
   /** Settings popover (theme · work details · notifications · providers · sign out). */
   settingsOpen: false,
   /** Viewport rect of the trigger, so the popover anchors to it and opens
@@ -54,6 +57,8 @@ export const app = $state({
    *  runtime controls behind one status-bar chip. Mutually exclusive with the
    *  settings popover — one status-bar menu at a time. */
   sessionCtlOpen: false,
+  /** Mobile status overflow is a sheet, never an expanded toolbar. */
+  statusDetailsOpen: false,
   sessionCtlAnchor: null as { top: number; bottom: number; right: number } | null,
   sidebarCollapsed: false,
   theme: "dark" as Theme,
@@ -68,6 +73,8 @@ export const app = $state({
   pendingDraft: "",
   /** Finder can reveal an otherwise quiet empty mobile Todos panel. */
   todosReveal: 0,
+  /** Mobile-only todo popout; desktop disclosure remains independent. */
+  todosOpen: false,
   shortcutsOpen: false,
   sessionAction: null as SessionAction | null,
   sessionPending: false,
@@ -398,6 +405,8 @@ export function setCompactTools(compact: boolean): void {
 /** Open the settings popover, anchored to the trigger's viewport rect so it
  *  opens away from the nearest edge; pass nothing to fall back to the corner. */
 export function openSettings(anchor?: { top: number; bottom: number; right: number }): void {
+  app.todosOpen = false;
+  app.statusDetailsOpen = false;
   app.sessionCtlOpen = false;
   app.sessionCtlAnchor = null;
   app.settingsAnchor = anchor ?? null;
@@ -413,6 +422,8 @@ export function closeSettings(): void {
  *  the chip's viewport rect so it opens away from the nearest edge; pass
  *  nothing to fall back to the corner (Finder entry). */
 export function openSessionCtl(anchor?: { top: number; bottom: number; right: number }): void {
+  app.todosOpen = false;
+  app.statusDetailsOpen = false;
   app.settingsOpen = false;
   app.settingsAnchor = null;
   app.sessionCtlAnchor = anchor ?? null;
@@ -750,6 +761,7 @@ export function start(token: string): void {
       if (app.conn !== c) return; // stale connection
       hydrating.delete(store.state.id); // the tail is real from here on
       onFolderEvent(env);
+      if (["session.snapshot", "session.state", "turn_start", "turn_end", "interrupted", "compact_start", "compact_end", "compact_failed", "permission.request", "permission.resolved", "permission.timeout", "ui.request", "ui.resolved", "ui.response_failed"].includes(env.event)) app.runtimeRevision += 1;
       switch (env.event) {
         case "permission.request":
         case "permission.resolved":

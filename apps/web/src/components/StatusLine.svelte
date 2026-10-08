@@ -1,382 +1,212 @@
 <script lang="ts">
-  // Status line, verbatim dext TUI idiom:
-  //   ● ~/cwd | session │ model │ approval:ask │ Ctx ▮▮▮▮▯▯ 42% │ ↑12k ↓3k $0.04
-// The context meter is a themed segmented component (Meter.svelte), not font glyphs.
-import Meter from "./Meter.svelte";
+  // One responsive header. Identity/state/context stay put; secondary actions
+  // move to overflow rather than adding rows or keeping a second status bar.
   import type { SessionStore } from "@dextui/client";
-  import { app, openSettings, openSessionCtl, toggleSidebar, queueTotal, jumpToOldestPending } from "../lib/state.svelte";
+  import { app, openSettings, openSessionCtl, queueTotal, jumpToOldestPending } from "../lib/state.svelte";
   import { connectorFor, connectors, pushConnector, syncConnector } from "../lib/connectors.svelte";
-  import { crew, crewLive, crewDur, crewAge, openRun, shortRun } from "../lib/crew.svelte";
+  import { crewLive, openRun } from "../lib/crew.svelte";
   import { selfEdit, cancelRestart } from "../lib/selfedit.svelte";
-  import { foldersEnabled, movableSession, openFolderPicker, shortFolder } from "../lib/folders.svelte";
-  import { fmtTokens, fmtElapsed, prettyPath } from "../lib/markdown";
+  import { folders, foldersEnabled, movableSession, openFolderPicker, shortFolder } from "../lib/folders.svelte";
+  import { fmtTokens, prettyPath } from "../lib/markdown";
   import { useSession } from "../lib/useSession.svelte";
+  import { popoverPos } from "../lib/popover";
+  import { useDialog } from "../lib/dialog.svelte";
+  import { headerContext, headerStatus, type HeaderTarget } from "../lib/session-header";
 
-  let mobileDetails = $state(false);
-  let { store, onToggleIndex, indexOpen = false }: { store: SessionStore; onToggleIndex?: () => void; indexOpen?: boolean } = $props();
-
+  let { store = null, onToggleIndex, onNavigate, indexOpen = false }: { store?: SessionStore | null; onToggleIndex: () => void; onNavigate?: (target: HeaderTarget) => void; indexOpen?: boolean } = $props();
   const sess = useSession(() => store);
-  const view = $derived(sess.view ?? store.state);
+  const view = $derived(sess.view ?? store?.state ?? null);
+  const status = $derived(headerStatus(view, app.phase));
+  const context = $derived(headerContext(view));
+  const title = $derived(app.sessions.find((session) => session.id === view?.id)?.title || view?.title || "Dext");
+  const fullAuto = $derived(view?.approvalProfile === "always");
+  const chipLabel = $derived([view?.model, view?.thinkingEffort].filter(Boolean).join(" · ") || "Session controls");
   const pendingTotal = $derived(queueTotal());
-
-  let now = $state(Date.now());
-  // Tier 0 — crew ticker: ids + counts + wall clock, never prose; only while ≥1 run is live.
   const liveRuns = $derived(crewLive());
-  const ticker = $derived.by(() => {
-    if (liveRuns.length === 0) return null;
-    // Host order is attention order, so the first live run is the one to open.
-    const top = liveRuns[0]!;
-    const c = liveRuns.reduce((n, r) => ({ run: n.run + r.counts.run, done: n.done + r.counts.done, fail: n.fail + r.counts.fail, paused: n.paused + (r.escalation ? 1 : 0) }), { run: 0, done: 0, fail: 0, paused: 0 });
-    return { top, c, more: liveRuns.length - 1 };
+  const folderName = $derived(view?.cwd ? app.conn?.home && (view.cwd === app.conn.home || view.cwd.startsWith(app.conn.home + "/")) ? shortFolder(view.cwd) : prettyPath(view.cwd) : "Choose a session");
+  const workspace = $derived(view?.cwd?.replace(/\/$/, "").split("/").pop() || folderName);
+  const connector = $derived(connectorFor(view?.cwd ?? ""));
+  const canMove = $derived.by(() => { void app.runtimeRevision; return !!view && !!movableSession(view.id); });
+  const canSync = $derived(!!connector && connector.status !== "syncing" && !view?.working && !view?.compacting && !connectors.pending);
+  const operational = $derived(selfEdit.build ? `UI build · ${selfEdit.build.step}` : selfEdit.restartPending ? "Restart when idle" : selfEdit.restarting ? "Host restarting" : view?.backgroundCompaction ? view.backgroundCompaction.blocking ? "Waiting for compaction" : "Summarizing context" : liveRuns.some((run) => run.status === "paused") ? "Crew needs review" : "");
+  const contextTitle = $derived(context.used === undefined ? "Context not reported. Open session controls" : `${view?.contextSource === "history" ? "Context after compaction: " : "Context: "}${fmtTokens(context.used)} / ${fmtTokens(context.window)} tokens${context.assumed ? " (window assumed)" : ""}. Open session controls`);
+
+  let wide = $state(matchMedia("(min-width: 1100px)").matches);
+  const dlg = useDialog(() => app.statusDetailsOpen);
+  let layoutRevision = $state(0);
+  $effect(() => {
+    if (!app.statusDetailsOpen) return;
+    const resize = () => { layoutRevision += 1; };
+    window.addEventListener("resize", resize);
+    return () => window.removeEventListener("resize", resize);
+  });
+  let detailsAnchor = $state<{ top: number; bottom: number; right: number } | null>(null);
+  const detailsPos = $derived.by(() => {
+    void layoutRevision;
+    return popoverPos(detailsAnchor, 304);
   });
   $effect(() => {
-    if (view.working || view.compacting || liveRuns.length > 0) {
-      const t = setInterval(() => {
-        now = Date.now();
-      }, 1000);
-      return () => {
-        clearInterval(t);
-      };
-    }
+    const media = matchMedia("(min-width: 1100px)");
+    const change = () => { wide = media.matches; app.statusDetailsOpen = false; };
+    media.addEventListener("change", change);
+    return () => media.removeEventListener("change", change);
   });
-
-  // Ctx: what the model saw on its last request (input + cache tokens from
-  // usage_update — every provider reports it) over the model's window
-  // (turn_diagnostics.context_window, else 200k). Same inputs as the TUI's
-  // meter; the old chars-only source lit up for local models alone.
-  const ctxWindow = $derived(view.diagnostics?.context_window || 200_000);
-  const ctxUsed = $derived(view.contextTokens ?? (view.contextChars ? Math.ceil(view.contextChars / 4) : 0));
-  const ctxPct = $derived(ctxUsed ? Math.min(100, Math.round((ctxUsed / ctxWindow) * 100)) : 0);
-  const ctxClass = $derived(ctxPct >= 90 ? "st-red" : ctxPct >= 70 ? "st-yellow" : "st-cyan");
-  const ctxSource = $derived(view.contextSource ?? "request");
-  const ctxTitle = $derived(
-    ctxSource === "history"
-      ? `Context after compaction: ${fmtTokens(ctxUsed)} of ${fmtTokens(ctxWindow)} tokens${view.diagnostics?.context_window ? "" : " (window assumed)"}`
-      : `Context: ${fmtTokens(ctxUsed)} of ${fmtTokens(ctxWindow)} tokens on the last request${view.diagnostics?.context_window ? "" : " (window assumed)"}`,
-  );
-
-  // Folder chip: click to move this session elsewhere (picker in "move"
-  // intent, opening inside the current folder). Disabled mid-turn — the host
-  // refuses then, and the agent's tool calls are resolving paths against it.
-  const isReal = $derived(app.sessions.some((s) => s.id === view.id));
-  const canMove = $derived(isReal && !!movableSession(view.id));
-  // "Workspace · <folder>": the folder name is picker-relative when inside the
-  // host root ("Clients/Acme Ltd", "Home"), else the user-anonymised path.
-  // Sessions in different folders must not all read the same.
-  const folderName = $derived.by(() => {
-    if (!view.cwd) return "DextUI";
-    const home = app.conn?.home ?? "";
-    if (home && (view.cwd === home || view.cwd.startsWith(home + "/"))) return shortFolder(view.cwd);
-    const p = prettyPath(view.cwd);
-    return p === "workspace" ? "Workspace" : p;
-  });
-  const folderTitle = $derived(!foldersEnabled() ? view.cwd : view.working || view.compacting ? `${view.cwd}\nChange folder — available when current work finishes` : `${view.cwd}\nChange folder (o)`);
-  const dotClass = $derived(
-    app.phase === "live"
-      ? view.working || view.compacting
-        ? "st-yellow pulse"
-        : "st-green"
-      : app.phase === "failed"
-        ? "st-red"
-        : app.phase === "reconnecting" || app.phase === "connecting" || app.phase === "authing"
-          ? "st-yellow pulse"
-          : "st-faint",
-  );
-
-  // One chip for the session's runtime controls — model · effort · approval —
-  // which live in a popover (SessionControls), so the bar reads as status,
-  // not a toolbar. The chip stays glanceable: current model, ⌁ when locked;
-  // plain text only when nothing is configurable at all.
-  const hasSessionCtl = $derived(
-    (app.caps.includes("model_select") && app.modelCatalog.length > 0) ||
-      (app.caps.includes("effort_select") && app.effortOptions.length > 0) ||
-      app.caps.includes("background_compaction_setting") ||
-      !!view.approvalProfile,
-  );
-  const chipLabel = $derived(
-    [view.model || "Session", view.thinkingEffort].filter(Boolean).join(" · "),
-  );
-  const chipTitle = $derived(
-    `Session — model: ${view.model ?? "—"} · effort: ${view.thinkingEffort ?? "medium"} · approval: ${view.approvalProfile ?? "—"}`,
-  );
-
-  function openSessionCtlAt(e: MouseEvent) {
-    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
-    openSessionCtl({ top: r.top, bottom: r.bottom, right: window.innerWidth - r.right });
+  $effect(() => { void view?.id; void app.hostEpoch; app.statusDetailsOpen = false; });
+  function chooseWorkspace() {
+    if (!foldersEnabled()) { onToggleIndex(); return; }
+    app.statusDetailsOpen = false;
+    app.sessionCtlOpen = false;
+    app.settingsOpen = false;
+    app.todosOpen = false;
+    openFolderPicker(view ? { intent: "move", session: view.id, browseWhileWorking: true } : {});
   }
-
-  function openSettingsAt(e: MouseEvent) {
-    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
-    openSettings({ top: r.top, bottom: r.bottom, right: window.innerWidth - r.right });
+  function openControls(event: MouseEvent) {
+    if (!view) return;
+    const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+    openSessionCtl({ top: rect.top, bottom: rect.bottom, right: innerWidth - rect.right });
   }
-
-  // Sessions inside a connected folder get a sync affordance: pull is
-  // fast-forward/copy (never destroys local work); push commits everything
-  // (git) or copies up (rclone). Disabled while a turn runs so the agent's
-  // files never move underneath it.
-  const connector = $derived(connectorFor(view.cwd));
-  const canSync = $derived(!!connector && connector.status !== "syncing" && !view.working && !view.compacting && !connectors.pending);
-  function connAge(ms: number | undefined): string {
-    if (!ms) return "never";
-    const m = Math.floor((Date.now() - ms) / 60_000);
-    if (m < 1) return "just now";
-    if (m < 60) return `${m}m ago`;
-    const h = Math.floor(m / 60);
-    if (h < 24) return `${h}h ago`;
-    return `${Math.floor(h / 24)}d ago`;
+  function settings(event: MouseEvent) {
+    const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+    openSettings({ top: rect.top, bottom: rect.bottom, right: innerWidth - rect.right });
+  }
+  function openDetails(event: MouseEvent) {
+    const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+    detailsAnchor = { top: rect.top, bottom: rect.bottom, right: innerWidth - rect.right };
+    app.todosOpen = false;
+    app.settingsOpen = false;
+    app.sessionCtlOpen = false;
+    app.statusDetailsOpen = true;
+  }
+  function finder() { app.statusDetailsOpen = false; app.paletteOpen = true; }
+  function detailsKey(event: KeyboardEvent) {
+    dlg.onKey(event);
+    if (event.key === "Escape") { app.statusDetailsOpen = false; event.preventDefault(); }
+    event.stopPropagation();
   }
 </script>
 
-<div class="sl" class:mobile-details={mobileDetails} data-agent-id="status.hud" data-state={view.compacting ? "compacting" : view.working ? "working" : "idle"}>
-  {#if onToggleIndex}
-    <button class="act idx-toggle" data-agent-id="index.toggle" aria-label="Open sessions" aria-expanded={indexOpen} onclick={onToggleIndex}>☰</button>
-  {/if}
-  {#if app.sidebarCollapsed}
-    <button class="act rail-restore" data-agent-id="sidebar.restore" onclick={toggleSidebar} title="Show sessions (Ctrl/Cmd+B)">[› sessions]</button>
-  {/if}
-  <span class={`dot ${dotClass}`} data-agent-id="status.phase" data-state={app.phase}>●</span>
-  {#if foldersEnabled() && isReal}
-    <button class="act folder st-green truncate" data-agent-id="status.folder" data-state={canMove ? "ready" : "locked"} disabled={!canMove} title={folderTitle} aria-label="Change this session's folder" onclick={() => openFolderPicker({ intent: "move", session: view.id })}><span class="faint">Workspace</span> {folderName}</button>
-  {:else}
-    <span class="st-green truncate" title={view.cwd}><span class="faint">Workspace</span> {folderName}</span>
-  {/if}
-  {#if connector}
-    <span class="conn" data-agent-id="status.connector" data-state={connector.status} title={`${connector.remote}\nLast sync: ${connAge(connector.last_sync)}${connector.error ? `\n${connector.error}` : ""}`}>
-      <span class="faint">{connector.status === "syncing" ? "syncing…" : connector.status === "error" ? "sync failed" : `synced ${connAge(connector.last_sync)}`}</span>
-      <button class="act" disabled={!canSync} data-agent-id="status.connector.pull" onclick={() => syncConnector(connector.id)} title="Pull the latest from the source">Pull</button>
-      <button class="act" disabled={!canSync} data-agent-id="status.connector.push" onclick={() => pushConnector(connector.id)} title={connector.kind === "github" || connector.kind === "git" ? "Commit everything and push" : "Copy this folder up to the source"}>Push</button>
+{#snippet deviceActions()}
+  <button class="action" data-agent-id="finder.open" onclick={finder}>Find<span class="shortcut"> ⌘K</span></button>
+  <button class="action" data-agent-id="settings.open" onclick={settings} aria-haspopup="dialog" aria-expanded={app.settingsOpen}>Settings</button>
+{/snippet}
+
+<header class="session-header" data-agent-id="status.hud" data-state={status.label.toLowerCase()} inert={app.statusDetailsOpen}>
+  <button class="navigation" data-agent-id="index.toggle" aria-label={`Toggle sessions${pendingTotal ? `, ${pendingTotal} decisions waiting` : ""}`} aria-expanded={indexOpen} onclick={onToggleIndex}><svg class="glyph" aria-hidden="true" viewBox="0 0 16 16"><path d="M2.5 4h11M2.5 8h11M2.5 12h11" /></svg>{#if pendingTotal}<span class="attention" data-agent-id="queue.badge">{pendingTotal}</span>{/if}</button>
+  <button class="identity" data-agent-id="status.workspace" aria-label={foldersEnabled() ? `Choose workspace for ${title}. Current folder: ${folderName}` : "Choose a session"} aria-haspopup={foldersEnabled() ? "dialog" : undefined} aria-expanded={foldersEnabled() ? folders.open : indexOpen} onclick={chooseWorkspace}>
+    <span class="session-name" title={title}>{title}</span>
+    <span class="subtitle" title={status.busy ? status.step : folderName}>
+      <span class="subtitle-copy">{status.busy ? status.step : workspace}</span>
+      {#if fullAuto}<span class="full-auto" data-agent-id="status.full-auto" aria-label="Full auto: actions without asking" title="Full auto: actions without asking"><svg aria-hidden="true" width="12" height="14" viewBox="0 0 16 18"><path d="M8 1 14 3v5c0 4-3 6-6 8-3-2-6-4-6-8V3Z" fill="none" stroke="currentColor" stroke-width="1.7" /></svg><span class="auto-label">Full auto</span></span>{/if}
     </span>
-  {/if}
-  {#if view.title && view.title !== view.id}
-    <span class="sep">|</span>
-    <span class="dim truncate">{view.title}</span>
-  {/if}
-  {#if hasSessionCtl}
-    <span class="sep">│</span>
-    <button
-      class="act ctl-chip"
-      data-agent-id="status.controls"
-      data-state={app.sessionCtlOpen ? "open" : "closed"}
-      aria-haspopup="dialog"
-      aria-expanded={app.sessionCtlOpen}
-      onclick={openSessionCtlAt}
-      title={chipTitle}
-    >{chipLabel}{#if view.modelLocked}<span class="faint lock" title="Model fixed for this session">⌁</span>{/if} <span class="faint" aria-hidden="true">▾</span></button>
-  {:else if view.model}
-    <span class="sep">│</span>
-    <span class="st-cyan" data-agent-id="status.model">{view.model}</span>
-  {/if}
-  {#if ticker}
-    <span class="sep">│</span>
-    <button
-      class={`act crew-tick ${ticker.top.status === "paused" ? "st-yellow mobile-alert" : "st-cyan"}`}
-      data-agent-id="status.crew"
-      data-state={ticker.top.state}
-      title={`${ticker.top.task}${ticker.more ? ` (+${ticker.more} more live)` : ""}`}
-      onclick={() => openRun(crew.openId || ticker.top.id)}
-    >
-      <span class="tick-full">Crew {shortRun(ticker.top.id)}{ticker.more ? `+${ticker.more}` : ""}
-        {#if ticker.c.paused}⚠{ticker.c.paused}{/if}{#if ticker.c.run} ●{ticker.c.run}{/if}{#if ticker.c.done} ✓{ticker.c.done}{/if}{#if ticker.c.fail} ✗{ticker.c.fail}{/if}
-        · {crewDur(crewAge(ticker.top, now))}</span>
-      <span class="tick-min">Crew {ticker.c.paused ? `⚠${ticker.c.paused}` : `●${ticker.c.run}`}</span>
-    </button>
-  {/if}
-  {#if selfEdit.build}
-    <span class="sep">│</span>
-    <span class="st-cyan" data-agent-id="status.ui.build" data-state="building" title={`UI build ${selfEdit.build.id}`}>⟳ UI:{selfEdit.build.step}</span>
-  {:else if selfEdit.restartPending}
-    <span class="sep">│</span>
-    <button class="act st-yellow" data-agent-id="status.host.restart" data-state="pending" title={`Restart queued${selfEdit.restartPending.reason ? `: ${selfEdit.restartPending.reason}` : ""} — click to cancel`} onclick={cancelRestart}>↻ Restart when idle</button>
-  {:else if selfEdit.restarting}
-    <span class="sep">│</span>
-    <span class="st-yellow" data-agent-id="status.host.restart" data-state="restarting">↻ Host restarting</span>
-  {/if}
-  {#if ctxUsed > 0}
-    <span class="sep">│</span>
-    <span data-agent-id="status.ctx" data-source={ctxSource} title={ctxTitle}>
-      <span class="faint">Ctx{ctxSource === "history" ? " · compacted" : ""}</span>
-      <span class={ctxClass} data-agent-id="status.ctxbar"><Meter pct={ctxPct} /></span>
-      <span class={ctxClass}>{ctxPct}%</span>
-    </span>
-  {/if}
-  {#if view.sessionUsage}
-    <span class="sep">│</span>
-    <span class="dim" data-agent-id="status.usage">
-      ↑{fmtTokens(view.sessionUsage.input)} ↓{fmtTokens(view.sessionUsage.output)}{#if view.sessionUsage.cost_usd > 0}
-        {" "}${view.sessionUsage.cost_usd.toFixed(4)}{/if}
-    </span>
-  {/if}
-  {#if view.compacting}
-    <span class="sep">│</span>
-    <span class="st-magenta pulse mobile-alert" data-agent-id="status.compacting">Compacting context…</span>
-  {:else if view.backgroundCompaction}
-    <span class="sep">│</span>
-    <span class="st-cyan mobile-alert" data-agent-id="status.background-compaction" data-phase={view.backgroundCompaction.phase} title={view.backgroundCompaction.reason}>
-      {view.backgroundCompaction.blocking ? "Waiting for compaction…" : "Summarizing context…"}
-    </span>
-  {/if}
-  {#if view.retry}
-    <span class="sep">│</span>
-    <span class="st-yellow pulse mobile-alert" data-agent-id="status.retry" title={view.retry.reason}>Retry #{view.retry.attempt} in {view.retry.wait_secs}s</span>
-  {/if}
-  {#if view.failed}
-    <span class="sep">│</span>
-    <span class="st-red mobile-alert" data-agent-id="status.failed">✗ turn failed</span>
-  {/if}
-  {#if view.working && view.turnStartedAt}
-    <span class="sep">│</span>
-    <span class="st-yellow" data-agent-id="status.clock">{fmtElapsed(now - view.turnStartedAt)}</span>
-  {/if}
-  <span class="sl-right">
-    {#if pendingTotal > 0}
-      <button
-        class="act warn queue-badge"
-        data-agent-id="queue.badge"
-        data-state="active"
-        aria-label={`jump to oldest pending approval (${pendingTotal} total)`}
-        onclick={jumpToOldestPending}
-      >⚠ {pendingTotal}</button
-      >
-    {/if}
-    <button class="act mobile-more" data-agent-id="status.details" aria-label="Session details" aria-expanded={mobileDetails} onclick={() => (mobileDetails = !mobileDetails)}>⋯</button>
-    <button class="act" data-agent-id="finder.open" aria-label="Find sessions and commands" onclick={() => (app.paletteOpen = true)} title="Finder (⌘K)">⌘k</button>
-    <button
-      class="act settings-open"
-      data-agent-id="settings.open"
-      aria-label="Settings"
-      data-state={app.settingsOpen ? "open" : "closed"}
-      aria-haspopup="dialog"
-      aria-expanded={app.settingsOpen}
-      onclick={openSettingsAt}
-      title="Settings — theme, work details, notifications, sign out"
-    >⚙</button>
-  </span>
-</div>
+  </button>
+  {#if view}<button class="model-chip" data-agent-id="status.model-chip" aria-label={`Model, effort and permissions. ${chipLabel}`} aria-haspopup="dialog" aria-expanded={app.sessionCtlOpen} title={chipLabel} onclick={openControls}>{wide ? chipLabel : "Model"} ▾</button>{/if}
+  {#if wide}{@render deviceActions()}{/if}
+  <span class="header-space" aria-hidden="true"></span>
+  <button class={`state-pill tone-${status.tone}`} data-agent-id="status.session-state" aria-label={`${status.label}. ${status.target === "approval" ? "Go to approval" : status.target === "error" ? "Go to error" : status.target === "progress" ? "Show progress" : "Show latest result"}`} onclick={() => onNavigate?.(status.target)}><span aria-live="polite">{status.label}</span></button>
+  <button class="context-ring" data-agent-id="status.ctx" data-source={view?.contextSource ?? "request"} disabled={!view} aria-label={contextTitle} title={contextTitle} onclick={openControls} style={`--context-color:${context.pct !== undefined && context.pct >= 90 ? "var(--red)" : context.pct !== undefined && context.pct >= 70 ? "var(--yellow)" : "var(--cyan)"}`}>
+    <svg viewBox="0 0 40 40" aria-hidden="true"><circle cx="20" cy="20" r="16" class="ring-track" /><circle cx="20" cy="20" r="16" class="ring-value" pathLength="100" stroke-dasharray={`${context.pct ?? 0} 100`} /></svg><span>{context.pct === undefined ? "—" : `${context.pct}%`}</span>
+  </button>
+  <button class="overflow" data-agent-id="status.details" aria-label={operational ? `More session actions. ${operational}` : "More session actions"} aria-haspopup="dialog" aria-expanded={app.statusDetailsOpen} onclick={openDetails}><svg class="glyph" aria-hidden="true" viewBox="0 0 16 16"><circle cx="3.5" cy="8" r="1.2" /><circle cx="8" cy="8" r="1.2" /><circle cx="12.5" cy="8" r="1.2" /></svg>{#if operational}<span class="operation-dot" data-agent-id="status.operation" data-background-phase={view?.backgroundCompaction?.phase} title={operational}></span>{/if}</button>
+  {#if status.busy}<progress class="header-progress" data-agent-id="status.progress" aria-label="Agent progress" value={status.progress?.current} max={status.progress?.total ?? 1}></progress>{/if}
+</header>
+
+{#if app.statusDetailsOpen}
+  <div class="details-scrim" role="presentation" onclick={() => (app.statusDetailsOpen = false)}></div>
+  <div class="status-menu compact-popover" style={detailsPos} role="dialog" aria-modal="true" aria-label="Session details" tabindex="-1" use:dlg.ref onkeydown={detailsKey} data-agent-id="status.details.overlay" onfocusin={(event) => { if (event.target instanceof HTMLElement) event.target.scrollIntoView({ block: "nearest" }); }}>
+    <div class="menu-head"><h2>Session details</h2><button class="action" data-dialog-initial data-agent-id="status.details.close" onclick={() => (app.statusDetailsOpen = false)}>Close</button></div>
+    {#if status.busy}<p class="current-step" data-agent-id="status.step">{status.step}</p>{/if}
+    {#if operational}<p class="operational" data-agent-id="status.operational">{operational}</p>{/if}
+    {#if view?.retry}<p data-agent-id="status.retry">Retry #{view.retry.attempt} in {view.retry.wait_secs}s · {view.retry.reason}</p>{/if}
+    {#if view?.backgroundCompaction}<p data-agent-id="status.background-compaction" data-phase={view.backgroundCompaction.phase}>{view.backgroundCompaction.blocking ? "Waiting for compaction" : "Summarizing context"} · {view.backgroundCompaction.reason}</p>{/if}
+    <dl><div><dt>Workspace</dt><dd title={folderName}>{folderName}</dd></div><div><dt>Context</dt><dd>{context.used === undefined ? "Not reported" : `${fmtTokens(context.used)} / ${fmtTokens(context.window)} tokens${context.assumed ? " (window assumed)" : ""}`}</dd></div>{#if view}<div><dt>Model</dt><dd title={chipLabel}>{chipLabel}</dd></div>{/if}</dl>
+    <div class="menu-actions">
+      {#if pendingTotal}<button class="action" onclick={() => { app.statusDetailsOpen = false; jumpToOldestPending(); }}>{pendingTotal} decisions waiting</button>{/if}
+      {#if view}<button class="action" onclick={openControls}>Model, permissions and usage</button>{/if}
+      {#if !wide}{@render deviceActions()}{/if}
+      {#if view && app.caps.includes("todos_read")}<button class="action" data-agent-id="status.todos" onclick={() => { app.statusDetailsOpen = false; app.todosReveal += 1; }}>Show todos</button>{/if}
+      {#if foldersEnabled() && view}<button class="action" onclick={chooseWorkspace}>{canMove ? "Change workspace" : "Browse workspace"}</button>{/if}
+      {#if connector}<button class="action" disabled={!canSync} onclick={() => syncConnector(connector.id)}>Pull workspace</button><button class="action" disabled={!canSync} onclick={() => pushConnector(connector.id)}>Push workspace</button>{/if}
+      {#each liveRuns as run (run.id)}<button class="action" onclick={() => { app.statusDetailsOpen = false; openRun(run.id); }}>Crew · {run.task}</button>{/each}
+      {#if selfEdit.restartPending}<button class="action" onclick={cancelRestart}>Cancel scheduled restart</button>{/if}
+    </div>
+  </div>
+{/if}
 
 <style>
-  .conn {
-    display: inline-flex;
-    gap: 4px;
-    align-items: baseline;
-    font-size: 0.9em;
-  }
-  .conn[data-state="error"] > .faint {
-    color: var(--red);
-  }
-  .sl {
-    display: flex;
-    align-items: baseline;
-    gap: 6px;
-    padding: 3px 10px;
-    overflow-x: auto;
-    white-space: nowrap;
-    font-size: 12px;
-  }
-  .dot {
-    flex-shrink: 0;
-  }
-  .sep {
-    color: var(--faint);
-    flex-shrink: 0;
-  }
-  .ctl-chip {
-    color: var(--cyan);
-    max-width: 26ch;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    flex-shrink: 1;
-  }
-  .ctl-chip .lock {
-    margin-left: 3px;
-  }
-  .ctl-chip[data-state="open"] {
-    color: var(--fg);
-  }
-  .settings-open {
-    font-size: 1.1em;
-    line-height: 1;
-  }
-  .settings-open[data-state="open"] {
-    color: var(--cyan);
-  }
-  .truncate {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    min-width: 0;
-    max-width: 220px;
-  }
-  .faint {
-    color: var(--faint);
-  }
-  .dim {
-    color: var(--dim);
-  }
-  .st-green {
-    color: var(--green);
-  }
-  .st-cyan {
-    color: var(--cyan);
-  }
-  .st-yellow {
-    color: var(--yellow);
-  }
-  .st-red {
-    color: var(--red);
-  }
-  .st-magenta {
-    color: var(--magenta);
-  }
-  .st-faint {
-    color: var(--faint);
-  }
-  .sl-right {
-    margin-left: auto;
-    display: flex;
-    gap: 10px;
-    flex-shrink: 0;
-    color: var(--faint);
-  }
-  .idx-toggle {
-    display: none;
-  }
-  .rail-restore {
-    color: var(--cyan);
+  .session-header { display: flex; gap: 8px; align-items: center; min-width: 0; height: 32px; padding: 2px 8px; position: relative; font: 12px/1.4 var(--mono); }
+  .navigation, .overflow, .context-ring { flex: none; width: 28px; height: 28px; min-height: 0; text-align: center; position: relative; }
+  .navigation, .overflow { display: inline-flex; align-items: center; justify-content: center; color: var(--dim); }
+  .glyph { width: 16px; height: 16px; fill: currentColor; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; }
+  .navigation .glyph { fill: none; }
+  .overflow .glyph { stroke: none; }
+  .identity { flex: 1; min-width: 0; height: 28px; min-height: 0; display: flex; align-items: center; gap: 10px; }
+  .session-name { display: block; flex: 0 1 auto; min-width: 0; max-width: 65%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: inherit; font-weight: 500; }
+  .subtitle { display: flex; flex: 0 1 auto; align-items: center; gap: 6px; min-width: 0; max-width: 100%; color: var(--dim); font-size: 11px; }
+  .subtitle-copy { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .full-auto { flex: none; display: inline-flex; align-items: center; gap: 4px; color: var(--yellow); font-weight: 500; white-space: nowrap; }
+  .state-pill { flex: none; min-height: 0; height: 28px; padding: 0 4px; display: flex; align-items: center; }
+  .state-pill > span { border: 1px solid color-mix(in srgb, var(--state-color) 35%, var(--line)); background: color-mix(in srgb, var(--state-color) 9%, var(--bg1)); color: var(--state-color); padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: 500; }
+  .tone-blue { --state-color: var(--blue); } .tone-amber { --state-color: var(--yellow); } .tone-green { --state-color: var(--green); } .tone-red { --state-color: var(--red); } .tone-neutral { --state-color: var(--dim); }
+  .context-ring { color: var(--context-color); }
+  .context-ring svg { position: absolute; inset: 1px; width: 26px; height: 26px; }
+  .context-ring circle { fill: none; stroke-width: 2; }
+  .ring-track { stroke: var(--line); }
+  .ring-value { stroke: currentColor; transform-origin: center; transform: rotate(-90deg); }
+  .context-ring span { position: relative; font-size: 8px; font-variant-numeric: tabular-nums; }
+  .context-ring:disabled { color: var(--dim); cursor: default; }
+  .header-space { display: none; }
+  .model-chip, .action { flex-shrink: 0; }
+  .attention { position: absolute; top: 0; right: 0; min-width: 14px; height: 14px; color: var(--yellow); background: var(--bg2); border-radius: 7px; font-size: 9px; line-height: 14px; }
+  .operation-dot { position: absolute; top: 4px; right: 2px; width: 4px; height: 4px; background: var(--yellow); border-radius: 50%; }
+  .model-chip { padding-inline: 6px; height: 28px; min-height: 0; max-width: 24ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; color: var(--dim); font: inherit; }
+  .action { min-height: 28px; padding: 4px 6px; color: var(--dim); font: inherit; }
+  .header-progress { position: absolute; bottom: 0; inset-inline: 0; width: 100%; height: 2px; appearance: none; border: 0; background: var(--line); accent-color: var(--blue); }
+  .header-progress::-webkit-progress-bar { background: var(--line); } .header-progress::-webkit-progress-value { background: var(--blue); } .header-progress::-moz-progress-bar { background: var(--blue); }
+  .details-scrim { position: fixed; inset: 0; z-index: 36; background: color-mix(in srgb, var(--bg) 55%, transparent); }
+  .status-menu { position: fixed; z-index: 37; width: min(19rem, calc(100vw - 24px)); overflow: auto; padding: 8px; border: 1px solid var(--line); border-radius: 3px; background: var(--bg3); box-shadow: 0 8px 32px #0005; font: 12px/1.5 var(--mono); }
+  .menu-head { position: sticky; top: -8px; background: var(--bg3); z-index: 1; display: flex; align-items: center; justify-content: space-between; gap: 8px; border-bottom: 1px solid var(--line); }
+  h2 { font-size: 12px; font-weight: 500; }
+  dl { margin-block: 6px; }
+  dl > div { display: grid; grid-template-columns: 5rem minmax(0, 1fr); gap: 8px; padding-block: 4px; }
+  dt { color: var(--dim); } dd { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .operational { overflow-wrap: anywhere; min-width: 0; }
+  .operational { color: var(--yellow); }
+  .current-step { color: var(--dim); overflow-wrap: anywhere; }
+  .menu-actions { display: grid; gap: 2px; border-top: 1px solid var(--line); padding-top: 4px; }
+  .menu-actions .action { text-align: left; white-space: normal; overflow-wrap: anywhere; }
+  @media (max-width: 1099px) { .shortcut { display: none; } }
+  @media (max-width: 900px), (pointer: coarse), (hover: none) {
+    /* Touch: 44px bar of 44px targets; no extra chrome above the transcript. */
+    .session-header { height: 44px; padding-block: 0; }
+    .session-header > button { height: 44px; min-height: 44px; }
+    .navigation, .overflow, .context-ring { width: 44px; }
+    .identity { gap: 6px; }
+    .context-ring svg { inset: 3px; width: 38px; height: 38px; }
+    .context-ring span { font-size: 10px; font-weight: 500; }
+    .state-pill { padding-inline: 2px; }
+    .state-pill > span { border: 0; border-radius: 999px; padding: 2px 8px; background: color-mix(in srgb, var(--state-color) 14%, transparent); }
+    .attention { top: 5px; right: 4px; }
+    .operation-dot { top: 10px; right: 10px; }
+    .shortcut { display: none; }
   }
   @media (max-width: 900px) {
-    .idx-toggle {
-      display: inline;
-    }
-    .rail-restore {
-      display: none;
-    }
-    .truncate {
-      max-width: 90px;
-    }
-    .ctl-chip {
-      max-width: 16ch;
-    }
-  }
-  .mobile-more { display: none; }
-  @media (max-width: 600px) {
-    .sl { align-items: center; flex-wrap: wrap; gap: 4px; overflow-x: hidden; padding: 2px var(--page-gutter); min-height: 48px; }
-    .sl > :not(.idx-toggle):not(.dot):not(.ctl-chip):not(.sl-right):not(.mobile-alert):not([data-agent-id="status.model"]) { display: none; }
-    .sl > .mobile-alert { order: 2; flex-basis: 100%; white-space: normal; }
-    .sl.mobile-details { max-height: calc(var(--mobile-viewport-height, 100dvh) * 0.35); overflow-y: auto; }
-    .sl .ctl-chip { flex: 1; min-width: 0; max-width: none; padding-inline: 4px; }
-    .sl > [data-agent-id="status.model"] { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-    .sl-right { gap: 0; align-items: center; }
-    .mobile-more { display: inline-block; }
-    .sl-right .act, .idx-toggle { min-width: 44px; text-align: center; }
-    .sl.mobile-details > :not(.idx-toggle):not(.dot):not(.ctl-chip):not(.sl-right):not([data-agent-id="status.model"]):not(.sep):not(.rail-restore) { display: block; order: 2; max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
-    .sl.mobile-details > .folder, .sl.mobile-details > .conn { flex-basis: 100%; }
-    .sl.mobile-details > .conn { display: flex; align-items: center; }
-    .sl.mobile-details > .truncate { max-width: 100%; }
-  }
-  .crew-tick { white-space: nowrap; }
-  .crew-tick .tick-min { display: none; }
-  @media (max-width: 900px) {
-    .crew-tick .tick-full { display: none; }
-    .crew-tick .tick-min { display: inline; }
+    .session-header { gap: 0; padding-inline: 0 2px; }
+    .identity { flex: 0 1 112px; max-width: 112px; min-width: 44px; gap: 6px; padding-inline: 2px 6px; }
+    .session-name { flex: 0 1 auto; max-width: none; font: 500 13px/1.3 var(--sans); letter-spacing: -0.01em; }
+    .model-chip { padding-inline: 6px; font: 13px/1.3 var(--sans); }
+    .header-space { display: block; flex: 1; min-width: 0; }
+    .state-pill > span { font: 500 11px/1.4 var(--sans); }
+    .subtitle { flex: none; }
+    .subtitle-copy, .auto-label { display: none; }
+    .full-auto svg { width: 13px; height: 15px; }
+    .status-menu { font: 13px/1.4 var(--sans); padding: 0 12px 6px; }
+    .menu-head { top: 0; min-height: 44px; }
+    .menu-head h2 { font-size: 14px; font-weight: 600; }
+    .menu-head .action { margin-right: -10px; color: var(--cyan); }
+    .status-menu .action { min-height: 44px; padding: 6px 0; font-size: 14px; color: var(--fg); }
+    .status-menu .action:disabled { color: var(--dim); }
+    .menu-actions { gap: 0; }
+    .menu-actions .action + .action { border-top: 1px solid color-mix(in srgb, var(--line) 70%, transparent); }
+    dl > div { grid-template-columns: auto minmax(0, 1fr); gap: 12px; }
+    dd { text-align: right; }
   }
 </style>

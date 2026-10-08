@@ -35,7 +35,7 @@
       <span class="dim tool-label">{humanizeTool(tool.name, tool.summary)}</span>
       <span class={status.className}>{status.label}</span>
     </button>
-    {#if onInspect}<button class="raw" type="button" data-agent-id={`activity.${groupId}.tool.${tool.call_id}.inspect`} onclick={() => onInspect?.(tool)}>Raw</button>{/if}
+    {#if onInspect}<button class="raw" type="button" data-agent-id={`activity.${groupId}.tool.${tool.call_id}.inspect`} onclick={() => onInspect?.(tool)}>Details</button>{/if}
   </div>
   {#if open}
     <div class="activity-tool-body"><Block block={tool} {onInspect} {sessionId} /></div>

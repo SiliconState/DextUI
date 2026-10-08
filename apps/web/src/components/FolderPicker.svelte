@@ -115,7 +115,8 @@
   // Intent: "move" relocates `moving` (this session); "open" starts a new
   // session. The other action is always one keystroke away (⇧⏎) when a
   // session is movable, so the picker never needs a mode switch.
-  const moving = $derived(folders.intent === "move" ? movableSession(folders.moveId) : null);
+  const moving = $derived(folders.intent === "move" ? app.sessions.find((session) => session.id === folders.moveId) ?? null : null);
+  const canMove = $derived.by(() => { void app.runtimeRevision; return !!moving && !!movableSession(folders.moveId); });
   const alt = $derived(folders.intent === "move" ? null : movableSession());
   const isHere = $derived(!!moving && moving.cwd === target);
   const crumbs = $derived.by(() => {
@@ -154,8 +155,8 @@
   });
 
   function useTarget(alternate = false): void {
-    if (!target) return;
-    if (!alternate) { pickCurrent(target); return; }
+    if (!target || folders.loading) return;
+    if (!alternate) { if (folders.intent === "move" && !canMove) return; pickCurrent(target); return; }
     if (folders.intent === "move") pickCurrent(target, "open");
     else if (alt) pickCurrent(target, "move");
   }
@@ -174,6 +175,7 @@
       e.preventDefault();
       return;
     }
+    if (folders.loading) return;
     if (e.key === "ArrowDown") { cursor = Math.min(visible.length - 1, cursor + 1); e.preventDefault(); }
     else if (e.key === "ArrowUp") { cursor = Math.max(-1, cursor - 1); e.preventDefault(); }
     else if (e.key === "ArrowRight" && selected && !q) { enter(selected); e.preventDefault(); } // (→ moves the filter caret while typing)
@@ -212,12 +214,12 @@
     <div class="insp-head">
       <span class="st-magenta">Folder</span>
       {#if moving}
-        <span class="dim" data-agent-id="folders.intent" data-state="move">Move <b>{moving.title}</b> · now in {shortFolder(moving.cwd) || "host folder"}</span>
+        <span class="dim" data-agent-id="folders.intent" data-state="move"><b>{moving.title}</b> · {shortFolder(moving.cwd ?? "") || "host folder"}</span>
       {:else}
         <span class="dim" data-agent-id="folders.intent" data-state="open">Where should this work happen?</span>
       {/if}
       <span class="insp-acts">
-        <button class="act" data-agent-id="folders.close" onclick={closeFolderPicker}>esc</button>
+        <button class="act" data-agent-id="folders.close" onclick={closeFolderPicker}>Close</button>
       </span>
     </div>
     {#if listing}
@@ -230,12 +232,12 @@
             </button>
           {/if}
         </div>
-        <div class="scroll">
+        <div class="scroll" inert={folders.loading}>
           {#if recents.length}
             <div class="recents">
               <span class="faint lbl">Recent</span>
               {#each recents as r, i (r)}
-                <button class="chip" class:sel={!!moving && moving.cwd === r} data-agent-id={`folders.recent.${i}`} title={moving && moving.cwd === r ? `${r}\n(current folder)` : r} onclick={() => pickCurrent(r)}>{shortFolder(r)}</button>
+                <button class="chip" class:sel={!!moving && moving.cwd === r} disabled={!!moving && !canMove} data-agent-id={`folders.recent.${i}`} title={moving && moving.cwd === r ? `${r}\n(current folder)` : r} onclick={() => pickCurrent(r)}>{shortFolder(r)}</button>
               {/each}
             </div>
           {/if}
@@ -244,7 +246,7 @@
               <span class="faint lbl">Connected</span>
               {#each connectors.items as c (c.id)}
                 <span class="conn" data-state={c.status} data-agent-id={`folders.conn.${c.id}`}>
-                  <button class="chip" title={`${KIND_LABEL[c.kind]} · ${c.remote}${c.error ? `\n${c.error}` : ""}`} onclick={() => pickCurrent(c.local)} disabled={c.status === "syncing"}>
+                  <button class="chip" title={`${KIND_LABEL[c.kind]} · ${c.remote}${c.error ? `\n${c.error}` : ""}`} onclick={() => pickCurrent(c.local)} disabled={c.status === "syncing" || (!!moving && !canMove)}>
                     <span class="kind">{KIND_LABEL[c.kind]}</span> {c.label}
                   </button>
                   {#if c.status === "syncing"}
@@ -351,13 +353,13 @@
             </form>
           {:else}
             {#if moving}
-              <button class="use" data-agent-id="folders.use" data-state={isHere ? "here" : "move"} onclick={() => useTarget()} disabled={isHere}>
-                <span class="faint">[⏎]</span> {isHere ? "Already here" : "Move here"} <b>{shortFolder(target)}</b>
-                <span class="faint sub">{isHere ? "This session is in this folder" : "Keeps the conversation; the next turn works from this folder"}</span>
+              <button class="use" data-agent-id="folders.use" data-state={isHere ? "here" : "move"} onclick={() => useTarget()} disabled={isHere || !canMove || folders.loading}>
+                <span class="faint">[⏎]</span> {!canMove ? "Wait for work to finish" : isHere ? "Already here" : "Move here"} <b>{shortFolder(target)}</b>
+                <span class="faint sub">{!canMove ? "You can browse; changing the active workspace is disabled during work" : isHere ? "This session is in this folder" : "Keeps the conversation; the next turn works from this folder"}</span>
               </button>
               <button class="act" data-agent-id="folders.alt" title="Start a new session in this folder instead" onclick={() => useTarget(true)}>[⇧⏎] New session here</button>
             {:else}
-              <button class="use" data-agent-id="folders.use" onclick={() => useTarget()}>
+              <button class="use" data-agent-id="folders.use" disabled={folders.loading} onclick={() => useTarget()}>
                 <span class="faint">[⏎]</span> Use <b>{shortFolder(target)}</b>
                 <span class="faint sub">{folders.seed ? "Opens a session and starts your pack" : "Opens a session here"}</span>
               </button>
@@ -389,16 +391,32 @@
     border: 1px solid var(--line);
     box-shadow: 0 24px 80px rgba(0, 0, 0, 0.55);
   }
+  .folders .insp-head > .dim { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .folders .insp-head .insp-acts { flex: none; }
+  .folders .body, .folders .scroll, .folders .list, .folders .entry { min-width: 0; }
+  .folders .list { grid-template-columns: minmax(0, 1fr); }
+  .folders .crumb { max-width: 100%; overflow-wrap: anywhere; }
   .folders[data-state="loading"] .scroll {
     /* Navigating: dim the (stale) list while the fresh listing is in flight. */
     opacity: 0.55;
   }
-  @media (max-width: 640px) {
-    .folders {
-      width: 100vw;
-      height: 100dvh;
-      border: 0;
-    }
+  @media (max-width: 900px) {
+    /* Workspace selection is a bounded Find-sized popup, not a phone takeover. */
+    .folders { top: calc(var(--mobile-viewport-top, 0px) + env(safe-area-inset-top, 0px) + 48px); bottom: auto; width: min(620px, 94vw); height: min(520px, calc(var(--mobile-viewport-height, 100dvh) - 64px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px))); margin: 0 auto; padding: 0; border: 1px solid var(--line); border-radius: 3px; background: var(--bg3); font-family: var(--sans); }
+    .folders .insp-head { gap: 8px; padding: 0 12px; min-height: 44px; flex-wrap: nowrap; align-items: center; }
+    .folders .insp-head > .dim { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+    .folders .insp-head .insp-acts { flex: none; }
+    .folders .insp-head .act { color: var(--cyan); }
+    .folders button, .folders input { min-height: 44px; }
+    .folders .go { width: 44px; }
+    .folders .crumbs { gap: 0; }
+    .folders .crumb { min-width: 44px; max-width: 100%; overflow-wrap: anywhere; }
+    .folders .foot { flex: none; gap: 4px 10px; padding: 6px 12px; max-height: 55%; overflow-y: auto; }
+    .folders .use { flex-wrap: wrap; width: 100%; min-width: 0; padding: 8px; gap: 4px; border-radius: 3px; }
+    .folders .use .sub { flex-basis: 100%; white-space: normal; }
+    .folders .use > .faint:not(.sub), .folders .foot > .hint { display: none; }
+    .folders .chip { max-width: 100%; }
+    .folders .newf { flex-wrap: wrap; }
   }
   .body {
     flex: 1;

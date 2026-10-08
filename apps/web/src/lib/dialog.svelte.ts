@@ -15,18 +15,27 @@ export interface DialogHdl {
 // CSS-hidden controls (including responsive desktop-only buttons) and inert
 // descendants are not part of a dialog's actual tab order.
 function available(el: HTMLElement): boolean {
+  // Some browsers retain geometry for descendants of a closed <details>.
+  // Only its first summary belongs to the tab order until it opens.
+  for (let parent = el.parentElement; parent; parent = parent.parentElement) {
+    if (parent instanceof HTMLDetailsElement && !parent.open) {
+      const summary = parent.querySelector(":scope > summary");
+      if (!summary?.contains(el)) return false;
+    }
+  }
   return el.isConnected && !el.closest("[inert]") && el.getClientRects().length > 0
     && !el.matches(":disabled, input[type='hidden']")
     && getComputedStyle(el).visibility === "visible";
 }
 
-export function useDialog(getOpen: () => boolean): DialogHdl {
+export function useDialog(getOpen: () => boolean, getReturnTarget?: () => HTMLElement | null): DialogHdl {
   let node: HTMLElement | null = null;
   let prev: HTMLElement | null = null;
 
   $effect(() => {
     if (getOpen()) {
-      prev = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      const fromOverflow = document.activeElement instanceof HTMLElement && !!document.activeElement.closest('[data-agent-id="status.details.overlay"]');
+      prev = getReturnTarget?.() ?? (fromOverflow ? document.querySelector<HTMLElement>('[data-agent-id="status.details"]') : document.activeElement instanceof HTMLElement ? document.activeElement : null);
       const frame = requestAnimationFrame(() => {
         if (!node || !available(node)) return;
         const initial = node.querySelector<HTMLElement>("[data-dialog-initial]");

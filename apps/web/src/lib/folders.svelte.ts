@@ -42,7 +42,7 @@ export function movableSession(id = app.activeId): { id: string; title: string; 
 
 /** Open the picker at `path` (default: the root). `seed` prefills the composer of the session that opens.
  *  `intent: "move"` targets `session` (default: the active one) and starts inside its current folder. */
-export function openFolderPicker(opts: { path?: string; seed?: string; onPick?: (path: string) => void; intent?: FolderIntent; session?: string } = {}): void {
+export function openFolderPicker(opts: { path?: string; seed?: string; onPick?: (path: string) => void; intent?: FolderIntent; session?: string; browseWhileWorking?: boolean } = {}): void {
   const c = app.conn;
   if (!c || !foldersEnabled()) return;
   let intent: FolderIntent = opts.intent ?? "open";
@@ -54,9 +54,16 @@ export function openFolderPicker(opts: { path?: string; seed?: string; onPick?: 
       const s = app.sessions.find((x) => x.id === (opts.session ?? app.activeId));
       const state = s && c.session(s.id).state;
       const working = !!(state?.working || state?.compacting);
-      pushToast("warn", working ? "Wait for current work to finish before changing folders" : "No session to move — pick a folder to start one");
-      if (working) return;
-      intent = "open";
+      if (working && opts.browseWhileWorking && s) {
+        // Browse the current session's workspace without turning a mid-turn
+        // click into an unrelated new session. The picker disables moving.
+        moveId = s.id;
+        if (!start && s.cwd && (s.cwd === c.home || s.cwd.startsWith(c.home + "/"))) start = s.cwd;
+      } else {
+        pushToast("warn", working ? "Wait for current work to finish before changing folders" : "No session to move — pick a folder to start one");
+        if (working) return;
+        intent = "open";
+      }
     } else {
       moveId = m.id;
       if (!start && m.cwd && (m.cwd === c.home || m.cwd.startsWith(c.home + "/"))) start = m.cwd;
@@ -112,7 +119,7 @@ export function recentFolders(limit = 4): string[] {
 export function moveSession(id: string, path: string): void {
   const c = app.conn;
   const s = app.sessions.find((x) => x.id === id);
-  if (!c || !s) return;
+  if (!c || !s || app.phase !== "live" || s.status === "exited") return;
   if (s.cwd === path) {
     pushToast("ok", `Already in ${shortFolder(path)}`);
     return;
@@ -131,7 +138,7 @@ export function moveSession(id: string, path: string): void {
 export function pickCurrent(path?: string, intent?: FolderIntent): void {
   const c = app.conn;
   const p = path ?? folders.listing?.path;
-  if (!p || !c) return;
+  if (!p || !c || folders.loading || app.phase !== "live") return;
   const hook = folders.onPick;
   const seed = folders.seed;
   const want = intent ?? folders.intent;

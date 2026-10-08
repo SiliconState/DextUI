@@ -2,16 +2,28 @@
   // Scrollback: one stream, like a terminal. No filter chips, no cards.
   // Web-native where it matters: scroll pinning + jump-to-latest.
   import type { SessionStore, ViewBlock } from "@dextui/client";
+  import { tick, untrack } from "svelte";
+  import type { HeaderTarget } from "../lib/session-header";
   import Block from "./Block.svelte";
   import ActivityGroup from "./ActivityGroup.svelte";
   import WorkMeta from "./WorkMeta.svelte";
+  import PhoneWork from "./PhoneWork.svelte";
+  import { phoneTranscriptItems, phoneCopyIds } from "../lib/phone-presentation";
   import PackGallery from "./PackGallery.svelte";
   import { transcriptItems, type TranscriptItem } from "../lib/transcript-groups";
   import { app } from "../lib/state.svelte";
   import { fmtElapsed } from "../lib/markdown";
   import { useSession } from "../lib/useSession.svelte";
 
-  let { store, onInspect }: { store: SessionStore; onInspect?: (b: ViewBlock) => void } = $props();
+  let phone = $state(matchMedia("(max-width: 600px)").matches);
+  $effect(() => {
+    const media = matchMedia("(max-width: 600px)");
+    const update = () => { phone = media.matches; };
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  });
+
+  let { store, onInspect, navigation }: { store: SessionStore; onInspect?: (b: ViewBlock) => void; navigation?: { target: HeaderTarget; revision: number } } = $props();
 
   let container: HTMLDivElement | undefined = $state();
   let pinned = $state(true);
@@ -30,8 +42,10 @@
   // The canonical store stays flat/lossless; Bash remains standalone, while
   // compactable tool classes become lazy disclosures.
   const items = $derived(app.compactTools
-    ? transcriptItems(visible)
+    ? phone ? phoneTranscriptItems(visible) : transcriptItems(visible)
     : visible.map((block): TranscriptItem => ({ kind: "block", id: block.id, block })));
+
+  const copyIds = $derived(phoneCopyIds(visible));
 
   // Manual disclosure state is keyed by stable session + first-block IDs, so
   // streaming updates and session switches do not snap open rows shut. Clean
@@ -43,11 +57,11 @@
   let toolDisclosureTouched = $state<Record<string, boolean>>({});
   let windowSession = $state("");
   const sessionGeneration = $derived(app.sessions.find((s) => s.id === view.id)?.generation ?? 0);
-  const keyOf = (item: TranscriptItem) => `${app.hostEpoch}:${view.id}:${sessionGeneration}:${item.kind}:${item.id}`;
-  function itemOpen(item: TranscriptItem): boolean {
+  const keyOf = (item: { kind: string; id: number }) => `${app.hostEpoch}:${view.id}:${sessionGeneration}:${item.kind}:${item.id}`;
+  function itemOpen(item: { kind: string; id: number }): boolean {
     return disclosure[keyOf(item)] ?? false;
   }
-  function setItemOpen(item: TranscriptItem, open: boolean, user = true) {
+  function setItemOpen(item: { kind: string; id: number }, open: boolean, user = true) {
     // Explicit disclosure buttons call this only for a user choice; keeping
     // state outside the derived grouping prevents stream updates snapping shut.
     if (user) {
@@ -127,10 +141,12 @@
   // keyed by session for this page lifetime, so switching away/back preserves
   // them too; a page refresh remounts and intentionally resets them.
   $effect(() => {
-    const id = view.id;
+    const id = `${app.hostEpoch}:${view.id}:${sessionGeneration}`;
     if (id === windowSession) return;
     windowSession = id;
     windowSize = WINDOW;
+    pinned = true;
+    lastPinnedCount = view.blocks.length;
   });
 
   let now = $state(Date.now());
@@ -144,6 +160,21 @@
     };
   });
 
+  // Count transcript blocks, not journal events: token deltas would inflate
+  // the badge into meaningless numbers.
+  let lastPinnedCount = $state(0);
+  const newBlocks = $derived(Math.max(0, view.blocks.length - lastPinnedCount));
+  let observedSnapshot: object | undefined;
+  $effect(() => {
+    const snapshot = [...view.recent].reverse().find((event) => event.event === "session.snapshot");
+    // Replay/resync replaces history, not new conversation. Keep the reader's
+    // scroll position, but baseline the badge against the authoritative snapshot.
+    if (snapshot && snapshot !== observedSnapshot) {
+      observedSnapshot = snapshot;
+      lastPinnedCount = view.blocks.length;
+    }
+    if (pinned) lastPinnedCount = view.blocks.length;
+  });
   function onScroll() {
     if (!container) return;
     pinned = container.scrollHeight - container.scrollTop - container.clientHeight < 80;
@@ -156,6 +187,41 @@
     if (pinned && container) container.scrollTop = container.scrollHeight;
   });
 
+  let seenNavigation = untrack(() => navigation?.revision ?? 0);
+  $effect(() => {
+    if (!navigation || navigation.revision === seenNavigation) return;
+    seenNavigation = navigation.revision;
+    if (navigation.target === "approval") return;
+    const work = [...items].reverse().find((item) => item.kind === "work");
+    if (work && (navigation.target === "progress" || navigation.target === "error")) setItemOpen(work, true);
+    const target = navigation.target;
+    const scope = `${app.hostEpoch}:${view.id}:${sessionGeneration}`;
+    const revision = navigation.revision;
+    void tick().then(() => {
+      if (!container || scope !== `${app.hostEpoch}:${view.id}:${sessionGeneration}` || navigation?.revision !== revision) return;
+      const selector = target === "progress" ? '[data-agent-id="transcript.working"], [data-agent-id^="phone.work."]' : target === "error" ? '.b-marker.st-red, [data-agent-id^="phone.work."][data-state="failed"], .activity[data-state="failed"]' : '[data-agent-id="block.text"], [data-agent-id="markdown.artifact"]';
+      const element = [...container.querySelectorAll<HTMLElement>(selector)].at(-1);
+      if (element) { element.scrollIntoView({ block: "nearest" }); element.tabIndex = -1; element.focus({ preventScroll: true }); }
+      else jump();
+    });
+  });
+  async function showOlder() {
+    if (!container) return;
+    const el = container;
+    const scope = `${app.hostEpoch}:${view.id}:${sessionGeneration}`;
+    const top = el.getBoundingClientRect().top;
+    const anchor = [...el.querySelectorAll<HTMLElement>('.sb-axis > [data-agent-id]:not([data-agent-id="transcript.older"]):not([data-agent-id="transcript.collapse-work"])')].find((node) => node.getBoundingClientRect().bottom > top);
+    const before = anchor?.getBoundingClientRect().top;
+    const height = el.scrollHeight;
+    const scroll = el.scrollTop;
+    pinned = false;
+    windowSize += WINDOW_STEP;
+    await tick();
+    if (container !== el || scope !== `${app.hostEpoch}:${view.id}:${sessionGeneration}`) return;
+    // Correct only the remaining shift after the browser's own scroll anchoring.
+    if (anchor?.isConnected && before !== undefined) el.scrollTop += anchor.getBoundingClientRect().top - before;
+    else el.scrollTop = scroll + el.scrollHeight - height;
+  }
   function jump() {
     pinned = true;
     if (container) container.scrollTop = container.scrollHeight;
@@ -179,7 +245,7 @@
         </div>
       {:else}
         {#if hidden > 0}
-          <button class="sb-older" data-agent-id="transcript.older" onclick={() => (windowSize += WINDOW_STEP)}>
+          <button class="sb-older" data-agent-id="transcript.older" onclick={showOlder}>
             ↑ show {Math.min(hidden, WINDOW_STEP)} older{hidden > WINDOW_STEP ? ` of ${hidden}` : ""}
           </button>
         {/if}
@@ -187,7 +253,9 @@
           <button class="work-collapse" data-agent-id="transcript.collapse-work" onclick={collapseWork}>Collapse work details</button>
         {/if}
         {#each items as item (keyOf(item))}
-          {#if item.kind === "activity"}
+          {#if item.kind === "work"}
+            <PhoneWork blocks={item.blocks} open={itemOpen(item)} onToggle={(open) => setItemOpen(item, open)} working={item.current && view.working} failed={item.current && view.failed} {onInspect} sessionId={view.id} />
+          {:else if item.kind === "activity"}
             <ActivityGroup
               id={item.id}
               tools={item.tools}
@@ -203,7 +271,7 @@
           {:else if item.kind === "meta"}
             <WorkMeta id={item.id} blocks={item.blocks} open={itemOpen(item)} onToggle={(open, user) => setItemOpen(item, open, user)} />
           {:else}
-            <Block block={item.block} {onInspect} sessionId={view.id} />
+            <Block block={item.block} showCopy={!phone || copyIds.has(item.block.id)} {onInspect} sessionId={view.id} />
           {/if}
         {/each}
         {#if view.compacting || view.working}
@@ -219,7 +287,7 @@
   </div>
 
   {#if !pinned}
-    <button class="sb-jump" data-agent-id="transcript.jump" onclick={jump}>↓ latest</button>
+    <button class="sb-jump" data-agent-id="transcript.jump" onclick={jump}>↓ Latest{newBlocks ? ` · ${newBlocks} new` : ""}</button>
   {/if}
 </div>
 
@@ -271,10 +339,17 @@
     position: absolute;
     bottom: 8px;
     right: 16px;
-    padding: 2px 10px;
+    border-radius: 20px;
+    padding: 5px 12px;
     border: 1px solid var(--line);
     background: var(--bg1);
     color: var(--dim);
+  }
+  @media (max-width: 600px) {
+    /* Safety net: transcript content wraps; never pan the conversation sideways. */
+    .sb { overflow-x: hidden; scrollbar-gutter: auto; }
+    .sb-axis { gap: 10px; }
+    .sb-axis > :global(.b-user) { margin-top: 12px; }
   }
   .sb-older {
     align-self: center;

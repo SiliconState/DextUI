@@ -142,11 +142,13 @@
     : b.head.map(() => false)}
   {@const sign = (t: string) => (/^[+]\$?\d/.test(t) ? "pos" : /^[\-\u2212]\$?\d/.test(t) ? "neg" : "")}
   <div class="md-tablewrap">
-    <table class="md-table">
+    <!-- CSS reflows cells on phones; explicit role preserves table semantics. -->
+    <!-- svelte-ignore a11y_no_redundant_roles -->
+    <table class="md-table" role="table">
       <thead>
         <tr>
           {#each b.head as cell, ci (ci)}
-            <th class:num={numCol[ci]} style={`text-align:${b.align[ci] === "r" || (numCol[ci] && b.align[ci] !== "c") ? "right" : b.align[ci] === "c" ? "center" : "left"}`}>
+            <th scope="col" class:num={numCol[ci]} style={`text-align:${b.align[ci] === "r" || (numCol[ci] && b.align[ci] !== "c") ? "right" : b.align[ci] === "c" ? "center" : "left"}`}>
               {@render inline(cell)}
             </th>
           {/each}
@@ -157,8 +159,8 @@
           <tr>
             {#each row as cell, ci (ci)}
               {@const t = cellText(cell)}
-              <td class:num={numCol[ci]} class:pos={numCol[ci] && sign(t) === "pos"} class:neg={numCol[ci] && sign(t) === "neg"} style={`text-align:${b.align[ci] === "r" || (numCol[ci] && b.align[ci] !== "c") ? "right" : b.align[ci] === "c" ? "center" : "left"}`}>
-                {@render inline(cell)}
+              <td data-label={cellText(b.head[ci] ?? [])} class:num={numCol[ci]} class:pos={numCol[ci] && sign(t) === "pos"} class:neg={numCol[ci] && sign(t) === "neg"} style={`text-align:${b.align[ci] === "r" || (numCol[ci] && b.align[ci] !== "c") ? "right" : b.align[ci] === "c" ? "center" : "left"}`}>
+                <span class="cell-value">{@render inline(cell)}</span>
               </td>
             {/each}
           </tr>
@@ -481,6 +483,24 @@
     padding-left: 10px;
     color: var(--dim);
     font-style: italic;
+  }
+  @media (max-width: 600px) {
+    .md { font-family: var(--sans); font-size: 14px; line-height: 1.5; gap: 6px; overflow-wrap: anywhere; }
+    .md-h, .md-tcard .md-h { font-size: 14px; }
+    .md :is(h1, h2).md-h { font-size: 16px; }
+    .ic, .md-code, .md-art { font-family: var(--mono); }
+    .ic { font-size: 0.85em; }
+    .md-code pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+    .md-tablewrap { overflow: visible; width: 100%; }
+    .md-table { display: block; width: 100%; font: 13px/1.5 var(--sans); }
+    .md-table thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+    .md-table tbody { display: grid; gap: 6px; }
+    .md-table tbody tr { min-width: 0; display: block; border: 1px solid var(--line); border-radius: 3px; padding: 4px 8px; background: var(--bg1); }
+    .md-table tbody td { display: grid; grid-template-columns: minmax(80px, 35%) minmax(0, 1fr); gap: 10px; border: 0; padding: 5px 0; text-align: left !important; white-space: normal; overflow-wrap: anywhere; }
+    .cell-value { min-width: 0; overflow-wrap: anywhere; }
+    .md-table tbody td::before { min-width: 0; overflow-wrap: anywhere; content: attr(data-label); color: var(--dim); font-size: 12px; font-weight: 500; }
+    .md-tcard, .md-tape > .md-tcard { width: 100%; }
+    .md-list { padding-left: 12px; }
   }
   .md-hr {
     border: 0;

@@ -9,6 +9,8 @@
   import { useDialog } from "../lib/dialog.svelte";
 
   const dlg = useDialog(() => !!artifact.document);
+  let overflowOpen = $state(false);
+  let shareBusy = $state(false);
   let mode = $state<"report" | "code">("report");
   let reportHtml = $state("");
   let reportSource = $state("");
@@ -192,6 +194,7 @@
   $effect(() => {
     const revision = artifact.revision;
     const src = item?.src;
+    overflowOpen = false;
     mode = "report";
     reportHtml = "";
     reportSource = "";
@@ -244,6 +247,24 @@
     parsed.head.prepend(meta, scheme, bridge);
     return `<!doctype html>\n${parsed.documentElement.outerHTML}`;
   });
+
+  async function shareCopy() {
+    const current = item;
+    const raw = current?.html ?? reportSource;
+    if (!current || !raw || shareBusy) return;
+    // Share a downloaded file, never a workspace URL carrying host credentials.
+    const base = current.name.split(/[\\/]/).pop() || "report.html";
+    const file = new File([raw], /\.html?$/i.test(base) ? base : `${base}.html`, { type: "text/html" });
+    try { if (!navigator.canShare?.({ files: [file] })) { downloadCopy(); return; } }
+    catch { downloadCopy(); return; }
+    const revision = artifact.revision;
+    shareBusy = true;
+    try { await navigator.share({ files: [file], title: current.name }); }
+    catch (error) {
+      if (artifact.revision === revision && !(error instanceof DOMException && error.name === "AbortError")) saveNotice = "Sharing unavailable. Use Download for a local copy.";
+    }
+    finally { shareBusy = false; }
+  }
 
   function downloadCopy() {
     const current = item;
@@ -305,9 +326,12 @@
     data-state={reportFailed ? "failed" : reportLoading ? "loading" : mode}
     onkeydown={onKey}
   >
-    <header class="insp-head">
-      <span class="st-cyan">Interactive report</span>
+    <header class="insp-head" class:overflow-open={overflowOpen}>
+      <button class="act mobile-back" data-agent-id="artifact.back" onclick={closeArtifact}>‹ Back</button>
+      <span class="st-cyan report-kind">Interactive report</span>
       <span class="dim title" id="artifact-title" title={item.name}>{item.name}</span>
+      <button class="act mobile-share" data-agent-id="artifact.share" disabled={reportLoading || reportFailed || shareBusy} onclick={shareCopy}>Share</button>
+      <button class="act mobile-overflow" data-agent-id="artifact.more" aria-label="More report actions" aria-expanded={overflowOpen} onclick={() => (overflowOpen = !overflowOpen)}>⋯</button>
       <span class="insp-acts">
         <button class="act" class:on={mode === "report"} data-agent-id="artifact.report" onclick={() => (mode = "report")}>Report</button>
         <button class="act" class:on={mode === "code"} data-agent-id="artifact.code" disabled={reportLoading || reportFailed} onclick={() => (mode = "code")}>Code</button>
@@ -315,7 +339,7 @@
         <button class="act" data-agent-id="artifact.state.request" disabled={!canSave || reportLoading || reportFailed || saveBusy || restoreBusy || !!saveRequest || pendingState !== null} onclick={requestState}>Save state</button>
         <button class="act" disabled={reportLoading || reportFailed || saveBusy || restoreBusy || !!saveRequest || pendingState !== null} onclick={() => restoreInput?.click()}>Restore state</button>
         <input hidden bind:this={restoreInput} data-agent-id="artifact.state.file" type="file" accept=".json,application/json" onchange={restoreState} />
-        <button class="act" data-agent-id="artifact.close" data-dialog-initial onclick={closeArtifact}>esc</button>
+        <button class="act" data-agent-id="artifact.close" data-dialog-initial onclick={closeArtifact}>Close</button>
       </span>
     </header>
     {#if saveNotice || saveBusy || pendingState !== null}
@@ -348,9 +372,9 @@
 {/if}
 
 <style>
-  .save-state { flex: none; max-height: 40vh; overflow: auto; padding: 10px 16px; border-bottom: 1px solid var(--line); font-size: 12px; }
+  .save-state { overflow-wrap: anywhere; min-width: 0; flex: none; max-height: 40vh; overflow: auto; padding: 10px 16px; border-bottom: 1px solid var(--line); font-size: 12px; }
   .save-state pre { margin: 8px 0; padding: 8px; max-height: 100px; height: auto; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
-  .save-state .act { margin-right: 16px; }
+  .save-state .act { white-space: normal; overflow-wrap: anywhere; margin-right: 16px; }
   .artifact-sheet {
     width: min(76rem, 96vw);
   }
@@ -406,16 +430,16 @@
     line-height: 1.45;
     white-space: pre;
   }
-  @media (max-width: 700px) {
-    .artifact-sheet {
-      width: 100vw;
-    }
-    .insp-head {
-      flex-wrap: wrap;
-    }
-    .title {
-      order: 3;
-      width: 100%;
-    }
+  .mobile-back, .mobile-share, .mobile-overflow { display: none; }
+  @media (max-width: 900px) {
+    .artifact-sheet { width: 100vw; }
+    .mobile-back, .mobile-share, .mobile-overflow { display: block; min-width: 44px; min-height: 44px; text-align: center; }
+    .insp-head { align-items: center; gap: 8px; flex-wrap: wrap; padding: 4px 8px; font-family: var(--sans); }
+    .report-kind { display: none; }
+    .title { flex: 1; order: 0; width: auto; font-size: 14px; }
+    .insp-acts { display: none; flex-basis: 100%; width: 100%; min-width: 0; gap: 8px; }
+    .overflow-open .insp-acts { display: flex; }
+    .insp-acts .act { flex: 1 1 40%; min-width: 0; white-space: normal; overflow-wrap: anywhere; min-height: 44px; padding: 8px 10px; text-align: center; border: 1px solid var(--line); border-radius: 4px; }
+    .insp-acts [data-agent-id="artifact.close"] { display: none; }
   }
 </style>

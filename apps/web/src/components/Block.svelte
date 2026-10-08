@@ -10,7 +10,7 @@
   import Markdown from "./Markdown.svelte";
   import Diff from "./Diff.svelte";
 
-  let { block, onInspect, sessionId = "" }: { block: Block; onInspect?: (b: Block) => void; sessionId?: string } = $props();
+  let { block, onInspect, sessionId = "", showCopy = true }: { block: Block; onInspect?: (b: Block) => void; sessionId?: string; showCopy?: boolean } = $props();
   let compactOpen = $state(false);
 
   // Pack attribution: dext's `pack_start` stamps the turn's prompt block (the
@@ -65,7 +65,7 @@
   };
   // Core's run-status annotations ("[objective: … | checkpoints: …]",
   // "[phase:probe] note") render as quiet meta rows, not raw prose.
-  const runMeta = $derived(block.kind === "marker" ? parseRunMeta(block.text) : null);
+  const runMeta = $derived(block.kind === "marker" && !block.auth && (block.level === "info" || block.level === "note") ? parseRunMeta(block.text) : null);
 
   function tailLines(t: string): string {
     return t.split("\n").slice(-8).join("\n");
@@ -125,7 +125,7 @@
   <div class="b-text" data-agent-id="block.text">
     <Markdown src={block.text} {sessionId} />
     {#if !block.complete}<span class="blink cursor">▊</span>{/if}
-    <button class="act hover-act" data-agent-id="block.text.copy" onclick={() => copyText(block.text, "Copied")}>Copy</button>
+    {#if showCopy}<button class="act hover-act" data-agent-id="block.text.copy" onclick={() => copyText(block.text, "Copied")}>Copy</button>{/if}
   </div>
 {:else if block.kind === "thinking"}
   {#if block.complete}
@@ -154,7 +154,7 @@
         {status.label}
       </span>
       {#if onInspect}
-        <button class="act hover-act" data-agent-id={`tool.${block.call_id}.inspect`} onclick={() => onInspect?.(block)}>Raw</button>
+        <button class="act hover-act" data-agent-id={`tool.${block.call_id}.inspect`} onclick={() => onInspect?.(block)}>Details</button>
       {/if}
     </div>
     {#if block.output_tail}
@@ -197,12 +197,12 @@
     {/if}
   </details>
 {:else if block.kind === "marker"}
-  {#if block.level !== "error" && !block.auth && isBashAdvisory(block.text)}
+  {#if (block.level === "info" || block.level === "note") && !block.auth && isBashAdvisory(block.text)}
     <details class="bash-advisory" data-agent-id="block.marker.advisory" data-state={block.level}>
       <summary>Bash guidance <span class="faint">· details</span></summary>
       <pre>{block.text}</pre>
     </details>
-  {:else if batchLabels(block.text)}
+  {:else if !block.auth && (block.level === "info" || block.level === "note") && batchLabels(block.text)}
     {@const labels = batchLabels(block.text)!}
     <details class="b-marker batch" data-agent-id="block.marker.batch" data-state={block.level}>
       <summary>
@@ -216,7 +216,7 @@
         {#each labels as l, i (i)}<li>{l}</li>{/each}
       </ul>
     </details>
-  {:else if batchFail(block.text) !== null}
+  {:else if !block.auth && batchFail(block.text) !== null}
     {@const n = batchFail(block.text)!}
     <div class={`b-marker ${markerClass[block.level] ?? "st-faint"}`} data-agent-id="block.marker">
       {markerGlyph[block.level] ?? "⚠"} Batch · {n} {n === 1 ? "call" : "calls"} failed
@@ -293,6 +293,8 @@
     align-items: baseline;
   }
   .b-user-text {
+    min-width: 0;
+    overflow-wrap: anywhere;
     white-space: pre-wrap;
     color: var(--fg);
   }
@@ -600,6 +602,32 @@
     margin-left: auto;
     flex-shrink: 0;
   }
+  @media (pointer: coarse), (hover: none) {
+    .hover-act { visibility: visible; min-height: 44px; }
+    .b-text .hover-act { position: static; display: block; margin-left: auto; padding: 4px 10px; color: var(--faint); }
+    .tool-head { flex-wrap: wrap; }
+  }
+  @media (max-width: 600px) {
+    /* Phone conversation: the prompt reads as a quiet card, not a shell line. */
+    .b-user { gap: 0; padding: 8px 12px; border-radius: 6px; background: color-mix(in srgb, var(--cyan) 7%, var(--bg1)); border: 1px solid color-mix(in srgb, var(--cyan) 14%, var(--line)); margin-top: 6px; }
+    .b-user .pg { display: none; }
+    .b-user .pack-badge { margin-right: 8px; }
+    .b-user-text { font-family: var(--sans); font-size: 14px; line-height: 1.5; }
+    .think-p { font-family: var(--sans); font-size: 13px; }
+    .b-think summary, .b-compact summary { font: 12px/1.4 var(--sans); }
+    .b-meta { font-family: var(--sans); }
+    .b-marker { font: 13px/1.45 var(--sans); }
+    .bash-advisory { font: 12px/1.45 var(--sans); }
+    .bash-advisory summary { min-height: 44px; display: flex; align-items: center; gap: 8px; list-style: none; }
+    .bash-advisory summary::-webkit-details-marker { display: none; }
+    .bash-advisory pre { font: inherit; }
+    .tool-head { flex-wrap: wrap; min-width: 0; }
+    .tool-name { max-width: 100%; overflow-wrap: anywhere; flex-shrink: 1; }
+    .tool-summary { max-width: 100%; }
+    .view-foot { flex-wrap: wrap; }
+    .tool-pre.tool-pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: none; overflow: visible; }
+    .compact-detail, .compact-error { max-height: none; overflow: visible; }
+  }
   .tool-pre {
     white-space: pre;
     overflow-x: auto;
@@ -626,6 +654,7 @@
     width: 100%;
   }
   .b-marker {
+    overflow-wrap: anywhere;
     width: 100%;
     white-space: pre-wrap;
   }

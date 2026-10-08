@@ -11,9 +11,7 @@
     queueTotal,
     respondGlobal,
     stepSession,
-    jumpToOldestPending,
     requestSessionAction,
-    openSettings,
     closeSettings,
     closeSessionCtl,
   } from "./lib/state.svelte";
@@ -25,6 +23,7 @@
   import Approval from "./components/Approval.svelte";
   import Composer from "./components/Composer.svelte";
   import StatusLine from "./components/StatusLine.svelte";
+  import ToolDetail from "./components/ToolDetail.svelte";
   import Finder from "./components/Finder.svelte";
   import Toasts from "./components/Toasts.svelte";
   import Todos from "./components/Todos.svelte";
@@ -48,12 +47,26 @@
   import Tasks from "./components/Tasks.svelte";
   import { flows, openFlows, closeFlows } from "./lib/flows.svelte";
   import { tasks, openTasks, closeTasks } from "./lib/tasks.svelte";
-  import { crew, closeRun, crewLive, openRun } from "./lib/crew.svelte";
+  import { crew, closeRun } from "./lib/crew.svelte";
   import { packSheet, closePackSheet, closePackPanel } from "./lib/packsheet.svelte";
   import { artifact, closeArtifact } from "./lib/artifact.svelte";
 
+  import type { HeaderTarget } from "./lib/session-header";
   let tokenInput = $state("");
   let inspect: ViewBlock | null = $state(null);
+  let headerNavigation = $state<{ target: HeaderTarget; revision: number }>({ target: "result", revision: 0 });
+  function navigateHeader(target: HeaderTarget) {
+    headerNavigation = { target, revision: headerNavigation.revision + 1 };
+    if (target === "error" && app.lastError) {
+      const banner = document.querySelector<HTMLElement>('[data-agent-id="banner.error"]');
+      banner?.scrollIntoView({ block: "nearest" });
+    }
+    if (target === "approval") {
+      const card = document.querySelector<HTMLElement>('[data-agent-id="approval.dock"], [data-agent-id="pack-ui.form"]');
+      card?.scrollIntoView({ block: "nearest" });
+      card?.querySelector<HTMLElement>('button, input')?.focus({ preventScroll: true });
+    }
+  }
   let indexOpen = $state(false);
   let mobileLayout = $state(false);
   const dlgIndex = useDialog(() => mobileLayout && indexOpen);
@@ -69,15 +82,9 @@
   const view = $derived(sess.view);
   const pendingList = $derived(view ? [...view.pending.values()] : []);
   const pendingUi = $derived(view?.pendingUi);
-  const blockingOverlay = $derived(app.paletteOpen || app.shortcutsOpen || !!artifact.document || !!pendingUi || !!inspect || app.eventsOpen || app.galleryOpen || app.settingsOpen || app.sessionCtlOpen || providers.open || packSheet.open || packSheet.panelOpen || !!crew.openId || folders.open || flows.open || tasks.open || packCreds.open);
+  const blockingOverlay = $derived(app.paletteOpen || app.shortcutsOpen || !!artifact.document || !!pendingUi || !!inspect || app.eventsOpen || app.galleryOpen || app.settingsOpen || app.statusDetailsOpen || app.sessionCtlOpen || app.todosOpen || app.inlineDiffOpen || providers.open || packSheet.open || packSheet.panelOpen || !!crew.openId || folders.open || flows.open || tasks.open || packCreds.open);
   const pendingUiError = $derived(view?.uiResponseError);
   const pendingUiErrorRev = $derived(view?.uiResponseErrorRev ?? 0);
-  const pendingTotal = $derived(queueTotal());
-
-  function openSettingsAt(e: MouseEvent) {
-    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
-    openSettings({ top: r.top, bottom: r.bottom, right: window.innerWidth - r.right });
-  }
 
   // Overlay dialogs: focus trap + focus restore for the block inspector and
   // the raw events drawer.
@@ -86,8 +93,6 @@
   const dlgGallery = useDialog(() => app.galleryOpen);
   // Crew run sheet: same overlay contract; Esc closes it before the gallery.
   const dlgCrew = useDialog(() => !!crew.openId);
-  const crewLiveCount = $derived(crewLive().length);
-  const crewLiveTop = $derived(crewLive()[0]);
 
   function connectSubmit(e: SubmitEvent) {
     e.preventDefault();
@@ -109,6 +114,23 @@
     untrack(() => {
       inspect = null; // never retain raw transcript content after purge/clear
       closeArtifact(); // artifact URLs are scoped to the previous host/session
+      closeSessionCtl();
+      app.statusDetailsOpen = false;
+      app.todosOpen = false;
+      closeFolderPicker();
+    });
+  });
+
+  $effect(() => {
+    if (!app.needsToken) return;
+    untrack(() => {
+      inspect = null;
+      closeArtifact();
+      closeSessionCtl();
+      closeSettings();
+      app.statusDetailsOpen = false;
+      app.todosOpen = false;
+      closeFolderPicker();
     });
   });
 
@@ -181,6 +203,8 @@
         if (pendingUi) return; // PackUiForm owns Escape and keeps failed sends editable.
         if (artifact.document) closeArtifact();
         else if (inspect) inspect = null;
+        else if (app.todosOpen) app.todosOpen = false;
+        else if (app.statusDetailsOpen) app.statusDetailsOpen = false;
         else if (app.sessionCtlOpen) closeSessionCtl();
         else if (app.settingsOpen) closeSettings();
         else if (providers.open) closeProviders();
@@ -351,14 +375,14 @@
   </div>
 {:else}
   <div class="shell" class:rail-collapsed={app.sidebarCollapsed} data-state={app.phase} data-agent-id="app.root">
-    <aside class="index" inert={mobileLayout && !indexOpen} role={mobileLayout ? "dialog" : undefined} aria-modal={mobileLayout && indexOpen ? true : undefined} aria-label="Sessions" tabindex="-1" use:dlgIndex.ref data-state={indexOpen ? "open" : "closed"} data-agent-id="session.rail.wrap">
+    <aside class="index" inert={(mobileLayout && !indexOpen) || blockingOverlay} role={mobileLayout ? "dialog" : undefined} aria-modal={mobileLayout && indexOpen ? true : undefined} aria-label="Sessions" tabindex="-1" use:dlgIndex.ref data-state={indexOpen ? "open" : "closed"} data-agent-id="session.rail.wrap">
       <SessionIndex onPick={() => (indexOpen = false)} onCollapse={toggleSidebar} onClose={() => (indexOpen = false)} />
     </aside>
     {#if indexOpen}
       <div class="index-scrim" onclick={() => (indexOpen = false)} onkeydown={() => {}} role="presentation"></div>
     {/if}
 
-    <main class="main" inert={mobileLayout && indexOpen}>
+    <main class="main" inert={blockingOverlay || (mobileLayout && indexOpen)}>
       {#if app.lastError && app.phase !== "failed"}
         <div class="errbar" data-agent-id="banner.error">
           <span class="st-red">✗ {app.lastError}</span>
@@ -367,7 +391,7 @@
       {/if}
 
       {#if activeStore}
-        <Scrollback store={activeStore} onInspect={(b) => (inspect = b)} />
+        <Scrollback store={activeStore} navigation={headerNavigation} onInspect={(b) => (inspect = b)} />
         {#if view && view.uiProgress.size > 0}
           <div class="pack-progress content-axis" data-agent-id="pack-ui.progress" aria-live="polite">
             {#each [...view.uiProgress.values()] as p (`${p.pack}:${p.params.id}`)}
@@ -408,13 +432,13 @@
       {/if}
     </main>
 
-    <div class="composer" inert={mobileLayout && indexOpen}>
+    <div class="composer" inert={blockingOverlay || (mobileLayout && indexOpen)}>
       {#if activeStore}
         <Composer store={activeStore} />
       {/if}
     </div>
 
-    <div class="todos-row" inert={mobileLayout && indexOpen}>
+    <div class="todos-row" inert={(blockingOverlay && !app.todosOpen) || (mobileLayout && indexOpen)}>
       {#if activeStore}
         <Todos store={activeStore} />
       {/if}
@@ -426,44 +450,8 @@
       {/each}
     </div>
 
-    <div class="statusline" inert={mobileLayout && indexOpen}>
-      {#if activeStore}
-        <StatusLine store={activeStore} {indexOpen} onToggleIndex={toggleNavigation} />
-      {:else}
-        <div class="sl-min" data-agent-id="status.phase" data-state={app.phase}>
-          <button class="act idx-toggle" data-agent-id="index.toggle" aria-label="Open sessions" aria-expanded={indexOpen} onclick={toggleNavigation}>☰</button>
-          {#if app.sidebarCollapsed}
-            <button class="act rail-restore-min" data-agent-id="sidebar.restore" onclick={toggleSidebar}>[› sessions]</button>
-          {/if}
-          {#if pendingTotal > 0}
-            <button
-              class="act warn queue-badge"
-              data-agent-id="queue.badge"
-              data-state="active"
-              aria-label={`jump to oldest pending approval (${pendingTotal} total)`}
-              onclick={jumpToOldestPending}
-            >⚠ {pendingTotal}</button
-            >
-          {/if}
-          {#if crewLiveTop}
-            <button class="act st-cyan" data-agent-id="status.crew" data-state={crewLiveTop.state} onclick={() => openRun(crewLiveTop.id)}>crew {crewLiveTop.status === "paused" ? "⚠" : "●"}{crewLiveCount}</button>
-          {/if}
-          <span class={app.phase === "live" ? "st-green" : app.phase === "failed" ? "st-red" : "st-yellow pulse"}>●</span>
-          <span class="dim">{app.phase}{app.phaseDetail ? ` · ${app.phaseDetail}` : ""}</span>
-          <button
-            class="act"
-            data-agent-id="settings.open"
-            aria-label="Settings"
-            data-state={app.settingsOpen ? "open" : "closed"}
-            aria-haspopup="dialog"
-            aria-expanded={app.settingsOpen}
-            onclick={openSettingsAt}
-            title="Settings — theme, work details, notifications, sign out"
-          >⚙</button
-          >
-          <span class="faint sl-min-right">⌘k Finder</span>
-        </div>
-      {/if}
+    <div class="statusline" inert={(mobileLayout && indexOpen) || (blockingOverlay && !app.statusDetailsOpen)}>
+      <StatusLine store={activeStore} {indexOpen} onToggleIndex={toggleNavigation} onNavigate={navigateHeader} />
     </div>
   </div>
 {/if}
@@ -479,14 +467,14 @@
     data-agent-id="drawer.block"
     data-state="open"
   >
-    <div class="insp-head">
-      <span class="st-magenta">{inspect.kind}</span>
-      <span class="dim">Raw block</span>
+    <div class="insp-head tool-detail-head">
+      <span class="st-magenta">{inspect.kind === "tool" ? inspect.name : inspect.kind}</span>
+      <span class="dim">Details</span>
       <span class="insp-acts">
-        <button class="act" data-agent-id="drawer.block.close" onclick={() => (inspect = null)}>esc</button>
+        <button class="act" data-agent-id="drawer.block.close" onclick={() => (inspect = null)}>Back</button>
       </span>
     </div>
-    <pre class="insp-body" data-agent-id="drawer.block.json">{JSON.stringify(inspect, null, 2)}</pre>
+    {#key inspect.id}<ToolDetail block={view?.blocks.find((block) => block.id === inspect?.id) ?? inspect} {view} />{/key}
   </div>
 {:else if app.eventsOpen && view}
   <div
@@ -503,7 +491,7 @@
       <span class="st-magenta">Events</span>
       <span class="dim">Last {view.recent.length} envelopes · seq {view.lastSeq}</span>
       <span class="insp-acts">
-        <button class="act" data-agent-id="drawer.events.close" onclick={() => (app.eventsOpen = false)}>esc</button>
+        <button class="act" data-agent-id="drawer.events.close" onclick={() => (app.eventsOpen = false)}>Close</button>
       </span>
     </div>
     <pre class="insp-body" data-agent-id="drawer.events.json">{view.recent.map((e) => JSON.stringify(e)).join("\n")}</pre>
@@ -638,6 +626,9 @@
     align-items: flex-start;
     justify-content: center;
   }
+  .tool-detail-head { flex: none; min-width: 0; }
+  .tool-detail-head > :first-child { min-width: 0; flex: 1; overflow-wrap: anywhere; }
+  .tool-detail-head .insp-acts { flex: none; }
   .appr-dock {
     flex-shrink: 0;
     max-height: min(42dvh, 26rem);
@@ -652,33 +643,7 @@
     flex-direction: column;
     gap: 6px;
   }
-  .sl-min {
-    display: flex;
-    gap: 8px;
-    align-items: baseline;
-    padding: 3px 10px;
-    font-size: 12px;
-  }
-  .sl-min-right {
-    margin-left: auto;
-  }
-  .rail-restore-min {
-    color: var(--cyan);
-  }
-  .idx-toggle {
-    display: none;
-  }
-  @media (max-width: 900px) {
-    .idx-toggle {
-      display: inline;
-    }
-    .rail-restore-min {
-      display: none;
-    }
-  }
   @media (max-width: 600px) {
-    .sl-min { align-items: center; min-height: 48px; }
-    .sl-min-right { display: none; }
     .hero { justify-content: flex-start; overflow-y: auto; padding-block: 20px; }
     .pair { top: var(--mobile-viewport-top, 0px); position: relative; height: var(--mobile-viewport-height, 100dvh); overflow-y: auto; align-items: safe center; }
     .pair-box { flex-shrink: 0; padding: 18px 16px; }
