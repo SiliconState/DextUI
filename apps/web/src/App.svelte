@@ -49,6 +49,18 @@
   import { tasks, openTasks, closeTasks } from "./lib/tasks.svelte";
   import { crew, closeRun } from "./lib/crew.svelte";
   import { packSheet, closePackSheet, closePackPanel } from "./lib/packsheet.svelte";
+  import { browser, closeBrowser } from "./lib/browser.svelte";
+  let BrowserPane = $state<typeof import("./components/BrowserPane.svelte").default | null>(null);
+  let browserLoadError = $state("");
+  $effect(() => {
+    if (browser.open && !BrowserPane) {
+      browserLoadError = "";
+      import("./components/BrowserPane.svelte").then(m => { BrowserPane = m.default; }).catch(() => { browserLoadError = "Browser panel could not load. Refresh and try again."; });
+    }
+  });
+  // The browser is host-scoped, not session-scoped: deleting or clearing a chat
+  // must not end it. A host restart closes its socket itself; sign-out closes it.
+  $effect(() => { if (app.needsToken) untrack(closeBrowser); });
   import { artifact, closeArtifact } from "./lib/artifact.svelte";
 
   import type { HeaderTarget } from "./lib/session-header";
@@ -393,7 +405,7 @@
     </form>
   </div>
 {:else}
-  <div class="shell" class:rail-collapsed={app.sidebarCollapsed} data-state={app.phase} data-agent-id="app.root">
+  <div class="shell" class:browser-open={browser.open} class:rail-collapsed={app.sidebarCollapsed} data-state={app.phase} data-agent-id="app.root">
     <aside class="index" inert={(mobileLayout && !indexOpen) || blockingOverlay} role={mobileLayout ? "dialog" : undefined} aria-modal={mobileLayout && indexOpen ? true : undefined} aria-label="Sessions" tabindex="-1" use:dlgIndex.ref data-state={indexOpen ? "open" : "closed"} data-agent-id="session.rail.wrap">
       <SessionIndex onPick={() => (indexOpen = false)} onCollapse={toggleSidebar} onClose={() => (indexOpen = false)} />
     </aside>
@@ -469,6 +481,11 @@
       {/each}
     </div>
 
+    {#if browser.open}
+      <div class="browser-dock" inert={blockingOverlay || (mobileLayout && indexOpen)}>
+        {#if BrowserPane}<BrowserPane suspended={blockingOverlay || (mobileLayout && indexOpen)} />{:else}<p>{browserLoadError || "Loading browser panel…"} <button class="act" onclick={closeBrowser}>Close</button></p>{/if}
+      </div>
+    {/if}
     <div class="statusline" inert={(mobileLayout && indexOpen) || (blockingOverlay && !app.statusDetailsOpen && !app.contextOpen)}>
       <StatusLine store={activeStore} {indexOpen} onToggleIndex={toggleNavigation} onNavigate={navigateHeader} />
     </div>

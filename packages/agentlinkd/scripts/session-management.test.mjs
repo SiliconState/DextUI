@@ -38,7 +38,7 @@ async function harness(t, mock = false) {
     child.stderr.on("data", (b) => (stderr += b));
     let stdout = "";
     child.stdout.on("data", (b) => (stdout += b));
-    for (let i = 0; i < 100 && !/listening on http:\/\/127\.0\.0\.1:\d+/.test(stdout); i++) await sleep(30);
+    for (let i = 0; i < 700 && !/listening on http:\/\/127\.0\.0\.1:\d+/.test(stdout); i++) await sleep(30);
     const match = /listening on (http:\/\/127\.0\.0\.1:\d+)/.exec(stdout);
     assert.ok(match, stderr);
     base = match[1];

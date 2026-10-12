@@ -1,24 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")/../../.."
-if ! command -v agent-browser >/dev/null 2>&1; then
-  echo 'SKIP: agent-browser not installed; chart browser regressions not run'
-  exit 0
-fi
+source apps/web/scripts/dxb-test.sh
 TMP=$(mktemp -d)
 PORT=${PORT:-8794}
 # Same isolation as browser-test.sh: build a private copy; never touch apps/web/dist.
-OUT="apps/web/dist.smoke"
-rm -rf "$OUT"
-if ! (cd apps/web && npm exec -- vite build --outDir dist.smoke --emptyOutDir >"$TMP/build.log" 2>&1); then
+OUT=$(mktemp -d apps/web/dist.staging.chart-review.XXXXXX)
+SRV=''
+cleanup() { "${B[@]}" close >/dev/null 2>&1 || true; if [ -n "$SRV" ]; then kill "$SRV" 2>/dev/null || true; wait "$SRV" 2>/dev/null || true; fi; rm -rf "$TMP" "$OUT"; }
+trap cleanup EXIT
+if ! (cd apps/web && npm exec -- vite build --outDir "${OUT#apps/web/}" --emptyOutDir >"$TMP/build.log" 2>&1); then
   echo 'FAIL: smoke build'
   tail -40 "$TMP/build.log"
   exit 1
 fi
-B=(agent-browser --session dext-chart-review)
-SRV=''
-cleanup() { "${B[@]}" close >/dev/null 2>&1 || true; [ -z "$SRV" ] || kill "$SRV" 2>/dev/null || true; rm -rf "$TMP"; rm -rf "$OUT"; }
-trap cleanup EXIT
 cat >"$TMP/chart.md" <<'EOF'
 ## Chart regression
 
@@ -89,7 +84,7 @@ N=${REPORT_CHARTS:-6}
 "${B[@]}" wait --fn "document.querySelectorAll('.chart-wrap').length === $N" >/dev/null
 # Wait for the complete streamed answer rather than inspecting an intermediate layout.
 "${B[@]}" wait --fn "document.querySelectorAll('.md-chartbox .chart-wrap, .crow__cell .chart-wrap').length === $N && !document.querySelector('[data-agent-id=\"composer.stop\"]')" >/dev/null
-check() { local result; result=$("${B[@]}" eval "$1"); echo "$result"; grep -qx true <<<"$result" || { echo 'FAIL: chart browser assertion'; exit 1; }; }
+check() { local result; result=$("${B[@]}" eval "$1"); echo "$result"; grep -qx true <<<"$result" || { echo "FAIL: chart browser assertion: $1"; "${B[@]}" eval 'JSON.stringify({scroll:document.querySelector(`.sb`)?.scrollTop,charts:[...document.querySelectorAll(`.chart-wrap`)].slice(0,2).map(c=>({title:c.querySelector(`.chart-title`)?.textContent,box:c.getBoundingClientRect().toJSON(),rows:[...c.querySelectorAll(`svg g`)].filter(g=>g.querySelector(`text`)).map(g=>({text:g.querySelector(`text`)?.textContent,rects:[...g.querySelectorAll(`rect`)].map(r=>({x:r.getAttribute(`x`),width:r.getAttribute(`width`),opacity:r.getAttribute(`opacity`)}))}))}))})'; exit 1; }; }
 check 'document.querySelectorAll(`.md-tape .chart-wrap`).length >= 2 && document.body.scrollWidth <= innerWidth'
 check '[...document.querySelectorAll(`.md-tape .chart-wrap`)].every(e => e.clientWidth >= 340)'
 if [ -z "${REPORT_FILE:-}" ]; then
@@ -109,6 +104,10 @@ if [ -z "${REPORT_FILE:-}" ]; then
   "${B[@]}" eval '[...document.querySelectorAll(`.chart-btn`)].find(b=>b.textContent===`Reset edits`)?.click()' >/dev/null
   # Click original A in first chart. The linked chart ranks A last, but still highlights A.
   "${B[@]}" wait --fn 'document.querySelector(`.chart-wrap svg g text`).textContent === `A`' >/dev/null
+  # Reset hides the edits toolbar and can move the SVG. Re-measure the fill
+  # rather than clicking coordinates from the earlier drag layout.
+  POS=$("${B[@]}" eval 'JSON.stringify((()=>{const svg=document.querySelector(`.chart-wrap svg`);svg.scrollIntoView({block:`center`});const r=svg.querySelector(`g rect[rx="3"] + rect`).getBoundingClientRect();return [r.left+r.width/2,r.top+r.height/2]})())' | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(JSON.parse(s).map(Math.round).join(" ")))')
+  read -r X Y <<<"$POS"
   "${B[@]}" mouse move "$X" "$Y" >/dev/null
   "${B[@]}" mouse down >/dev/null
   "${B[@]}" mouse up >/dev/null

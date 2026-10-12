@@ -246,6 +246,21 @@ a {
   min-width: 0;
 }
 
+/* Optional browser workspace: no second app, no modal scrim over desktop chat. */
+.browser-dock { grid-area: browser; min-width:0; min-height:0; overflow:hidden; }
+@media (min-width: 901px) {
+  /* Sessions stay reachable; the existing sidebar toggle still collapses them. */
+  .shell.browser-open {
+    grid-template-columns: var(--rail-size) minmax(0, 1fr) minmax(0, 1.15fr);
+    grid-template-areas: "status status status" "index main browser" "composer composer browser" "todos todos browser";
+  }
+  .shell.browser-open.rail-collapsed { grid-template-columns: 0 minmax(0, 1fr) minmax(0, 1.15fr); }
+}
+@media (max-width: 900px) {
+  .shell.browser-open > .browser-dock { grid-area: main; grid-row: 2 / -1; z-index: 2; }
+  .shell.browser-open > .main, .shell.browser-open > .composer, .shell.browser-open > .todos-row { display:none; }
+}
+
 /* Fluid edge gutters; content stays left-anchored and uses the available width. */
 .content-axis {
   width: 100%;

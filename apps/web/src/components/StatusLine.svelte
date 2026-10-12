@@ -12,6 +12,7 @@
   import { popoverPos } from "../lib/popover";
   import { useDialog } from "../lib/dialog.svelte";
   import { headerContext, headerModel, headerStatus, type HeaderTarget } from "../lib/session-header";
+  import { browser, openBrowser, closeBrowser } from "../lib/browser.svelte";
 
   let { store = null, onToggleIndex, onNavigate, indexOpen = false }: { store?: SessionStore | null; onToggleIndex: () => void; onNavigate?: (target: HeaderTarget) => void; indexOpen?: boolean } = $props();
   const sess = useSession(() => store);
@@ -110,6 +111,7 @@
 </script>
 
 {#snippet deviceActions()}
+  <button class="action" data-agent-id="browser.open" aria-expanded={browser.open} onclick={() => { app.statusDetailsOpen = false; browser.open ? closeBrowser() : openBrowser(); }}>{browser.open ? "Close browser" : "Browser"}</button>
   <button class="action" data-agent-id="finder.open" onclick={finder}>Find<span class="shortcut"> ⌘K</span></button>
   <button class="action" data-agent-id="settings.open" onclick={settings} aria-haspopup="dialog" aria-expanded={app.settingsOpen}>Settings</button>
 {/snippet}

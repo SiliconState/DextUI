@@ -17,7 +17,9 @@ mkdir -p "$HOME/my-project"   # or use any existing project directory
 npm run serve -- --cwd="$HOME/my-project" --approval=auto-read
 ```
 
-Open http://127.0.0.1:8788 and pair with the printed token. Every prompt runs a
+Open http://127.0.0.1:8788 and pair with the printed token. The token is saved
+in the state dir and reused on restart, so paired browsers stay signed in;
+`--rotate-token` replaces it. Every prompt runs a
 real dext turn in `--cwd`; follow-ups resume the same session.
 
 No API key? `npm run mock` starts a fixture host on http://127.0.0.1:8787
@@ -27,9 +29,13 @@ After pulling changes: web-only needs `npm run build` plus a tab reload (the
 host serves `apps/web/dist` from disk); host changes need an `agentlinkd`
 restart.
 
-Useful flags: `--port` · `--token` · `--dext` (auto-detects the binary) ·
+Useful flags: `--port` · `--token` · `--rotate-token` · `--dext` (auto-detects the binary) ·
 `--approval` · `--state-dir` (journals; default `~/.dextui/agentlinkd`) ·
 `--crew` · `--safe` (serve the last-known-good build).
+
+Pass host flags after `--` (`npm run serve -- --cwd=…`); without it npm treats
+them as its own settings. Only one host can use a state dir at a time: a second
+one exits with a message naming the running host, before touching any journal.
 
 ## Highlights
 

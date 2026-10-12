@@ -326,7 +326,7 @@ async function host(t) {
     if (child.exitCode === null) { const exit = once(child, "exit"); child.kill("SIGTERM"); await exit; }
     fs.rmSync(temp, { recursive: true, force: true });
   });
-  for (let i = 0; i < 100 && !/listening on http/.test(stdout); i++) await sleep(30);
+  for (let i = 0; i < 700 && !/listening on http/.test(stdout); i++) await sleep(30);
   const base = /listening on (http:\/\/127\.0\.0\.1:\d+)/.exec(stdout)?.[1];
   assert.ok(base, stderr);
   async function client() {

@@ -680,7 +680,7 @@ export interface UiRebuiltEvent {
 /** Broadcast lifecycle of a host restart (`x-agentlinkd.host.restart`). */
 export interface HostRestartEvent extends Partial<HostRestartRequest> {
   phase: "pending" | "restarting" | "cancelled";
-  busy?: { kind: string; session?: string; run?: string; title?: string }[] | null;
+  busy?: { kind: string; session?: string; run?: string; title?: string; launch?: string; provider?: string; count?: number }[] | null;
   force?: boolean;
   exit_code?: number;
 }

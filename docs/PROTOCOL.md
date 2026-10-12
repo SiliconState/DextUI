@@ -41,7 +41,8 @@ Command effects arrive as events. Direct replies include `hello` → `hello_ok`/
 
 ## Auth and pairing
 
-- Single-operator bearer token: agentlinkd uses `--token` / `AGENTLINKD_TOKEN`, or generates a new random value at each process start when neither is configured. It prints that value at boot; it does not create a persistent token file. Operators should provision a protected stable environment credential when pairing must survive restarts.
+- Single-operator bearer token: `--token` / `AGENTLINKD_TOKEN` when configured. Otherwise the host generates a random token on first start and saves it to `<state-dir>/pairing-token` (`0600`, owner-only; symlinks refused; a group/other-readable or malformed file is replaced, never reused). Later starts, including self-edit restarts, reuse it, so paired browsers and phones stay signed in. `--rotate-token` replaces it and signs every device out. Explicit configuration never writes the file.
+- Cross-site refusal: browser requests and WebSocket upgrades initiated by another site (judged by the unforgeable `Sec-Fetch-Site`, falling back to `Origin` vs `Host`/first `X-Forwarded-Host`) get 403 before any token comparison. They cannot probe the token and never count toward the auth lockout. Native clients (no `Origin`/`Sec-Fetch-Site`) authenticate by token as before. `AGENTLINKD_ALLOWED_ORIGINS` (comma-separated) admits extra origins, e.g. a proxy that rewrites `Host` without `X-Forwarded-Host`.
 - WS: first message must be `hello` carrying the token. Wrong token → `hello_fail` then close. Keep the WS token out of URLs; workspace file subresources separately support `?t=` and need log/history protection.
 - REST: `Authorization: Bearer <token>`.
 - Constant-time comparison; auth failures are rate-limited.

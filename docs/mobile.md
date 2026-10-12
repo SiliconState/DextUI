@@ -44,6 +44,14 @@ Tool **Details** opens Output / Command / Raw views, full-screen below 900px and
 
 Phone inline diffs reduce to file names and addition/deletion counts; Open diff shows a viewport-height viewer with a wrap control. Tool-detail diffs share the same renderer without a nested vertical scroll box. Report cards become prominent phone launchers. Below 900px the report viewer is full-screen with Back, Share and an overflow menu for code, download and state actions. Share sends a local HTML file when supported, otherwise downloads a copy; it does not share a host access URL. Desktop retains its wide report panel and visible toolbar. Report content generation is unchanged.
 
+Report themes update in place: switching light/dark/dim no longer reloads the report or discards its unsaved controls. This applies to the desktop web app and phone/PWA alike. Phone Back/Share/More and the existing sandbox remain intact.
+
+## Small browser surface
+
+**More session actions → Browser → Start browser** opens a temporary real-browser session on the host; simply opening the panel starts no process. Below 900px it replaces the transcript/composer area but keeps the header and Close accessible. The sessions drawer and reports suspend the pane's input and frame capture rather than letting it operate behind them. Closing ends the process and discards its cookies. Self-contained HTML reports still use the native report viewer, not this browser surface.
+
+The host reuses installed Chrome, Edge, Brave or Chromium; no engine is bundled or downloaded. The client can be Safari or another modern phone browser. A Safari-only host cannot supply the CDP stream and receives an explicit message. **Open externally** opens the URL in the client device's normal browser, without transferring host cookies; host-local localhost URLs may not work from a phone. Use it for screen-reader semantics and multi-window sign-in. Phone text insertion has an explicit **Send text** field; native keyboard/IME behavior on physical iOS/Android is not yet certified. Downloads, uploads, popups and audio are out of scope. See [DESIGN.md](DESIGN.md#on-demand-host-browser) for transport/security limits and verification commands.
+
 ## Mermaid diagrams
 
 DextUI renders closed `mermaid` fences as themed SVG images. This lives entirely in the browser: Dext, agentlinkd and the event protocol are unchanged. Flowcharts (including subgraphs), sequences and state diagrams are covered by the browser gate. Invalid, incomplete, over-budget or disabled syntax keeps the exact source with a concise notice; Source and Copy remain available.
@@ -72,9 +80,9 @@ cd ../.. && npm test
 cd apps/web && npm run build
 ```
 
-Root `npm run typecheck` and `npm run build` also check/build all workspaces. `npm run smoke:browser` runs the browser gates separately. Browser tests visibly skip when `agent-browser` is absent; a skipped gate is not a browser pass.
+Root `npm run typecheck` and `npm run build` also check/build all workspaces. `npm run smoke:browser` runs the browser gates separately. They drive an installed Chromium-family browser through the dxb test pack (`DEXT_PACK_DXB_DIR`, default `~/.dext/shelves/automation/packs/dxb`). If dxb is missing, the gates fail instead of skipping. dxb is a test-only dependency; the app and host never load it.
 
-The browser suite builds an isolated `apps/web/dist.smoke` and runs a loopback mock host. It checks:
+The browser suite builds a uniquely named, isolated `apps/web/dist.staging.*` copy and runs a loopback mock host. It checks:
 
 - Layout at 320x640, 375x667, 390x844, 430x932, 600x800 and 900x700, with desktop restoration afterward.
 - Unified bar width, non-pill input, 44px controls, short placeholders, bounded composer height and no document-level horizontal overflow.
@@ -83,7 +91,7 @@ The browser suite builds an isolated `apps/web/dist.smoke` and runs a loopback m
 - Touch Return, Send/Queue delivery, preserved input focus and Stop.
 - Quiet Todos access through Finder, open-menu breakpoint changes, and simulated software-keyboard viewport resizing/panning.
 
-The phone review gate additionally checks 390x844, 768x1024 and 1280x900 in light, dim and dark: shared header placement, controls, full-auto confirmation, approvals, report overflow/code/back, tool tabs/search/raw, wrap toggling and simulated keyboard-open layout. It builds a separate `dist.phone-review` and uses only a loopback mock. Capture its screenshot matrix with:
+The phone review gate additionally checks 390x844, 768x1024 and 1280x900 in light, dim and dark: shared header placement, controls, full-auto confirmation, approvals, report overflow/code/back, tool tabs/search/raw, wrap toggling and simulated keyboard-open layout. It builds its own isolated staging copy and uses only a loopback mock. Capture its screenshot matrix with:
 
 ```sh
 REVIEW_PHASE=2 SCREENSHOTS=patches/phone-upgrade/review bash apps/web/scripts/phone-review-test.sh
@@ -98,6 +106,19 @@ SCREENSHOTS=patches/compact-theme-review/header-matrix bash apps/web/scripts/hea
 Phase captures live under local `patches/phone-upgrade/phase-{1,2}/`, not published screenshots. The matrix includes mock session, controls, approvals, keyboard-open, report and tool-detail surfaces. Narrow presentation helpers also have losslessness and JSON-decoding tests. Browser presets do not reliably prove a coarse pointer, so the original gate explicitly emulates that branch. Viewport simulation does not reproduce physical iOS Safari or Android keyboard behavior.
 
 Before claiming real-device certification, manually check Safari and an installed iPhone PWA, Android Chrome, portrait/landscape safe areas, software-keyboard open/close, long drafts, uploads, native sharing and accessibility navigation. Dedicated dictation, quick replies, workspace `@` search, message long-press branching, swipe-between-files, edge navigation, swipe-down dismissal and haptics remain follow-up work. Notifications still require browser permission and opt-in, work only while the live app is hidden, and are not server Web Push. See [phone-upgrade.md](phone-upgrade.md) for the audit, tradeoffs and minimal provenance proposal.
+
+### Manual device and platform checklist
+
+Automated gates use Chromium emulation on the development Mac. These checks need real hardware or another OS and have not been certified. Desktop Safari automation additionally requires the operator to enable Safari → Settings → Developer → Allow remote automation.
+
+| Target | Check |
+|---|---|
+| iPhone Safari and installed PWA | Pair once, relaunch the host, confirm still signed in (saved token). Send/Queue/Stop, long drafts, keyboard open/close, safe areas in both orientations |
+| iPhone browser pane | Start browser, open a site, tap and scroll the canvas, use Send text for typing, Open externally, Close; drawer and report covering pauses then resumes |
+| Android Chrome | Same as iPhone, plus IME composition into the canvas and back-gesture behavior |
+| Windows host | `browserExecutable` finds Chrome/Edge under Program Files or LocalAppData; Start browser, navigate, Close removes the temporary profile; pairing-token file is created (Windows ACLs are not mode-checked) |
+| Linux host | Chrome/Chromium on PATH found; headless launch works without a display; profile removed on Close; token file 0600 |
+| Remote access (tunnel/proxy) | App loads and connects over HTTPS; Browser ticket works; if the proxy rewrites Host without X-Forwarded-Host, set `AGENTLINKD_ALLOWED_ORIGINS` |
 
 ## Deploying updates
 

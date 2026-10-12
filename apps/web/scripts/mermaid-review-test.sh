@@ -2,19 +2,18 @@
 # Mermaid/PWA fixture. No live host, provider or session mutations.
 set -euo pipefail
 cd "$(dirname "$0")/../../.."
-if ! command -v agent-browser >/dev/null 2>&1; then echo 'SKIP: agent-browser unavailable; Mermaid review not run'; exit 0; fi
+source apps/web/scripts/dxb-test.sh
 PORT=${PORT:-8798}
-OUT=apps/web/dist.header-review
+OUT=$(mktemp -d apps/web/dist.staging.mermaid-review.XXXXXX)
 TMP=$(mktemp -d)
-B=(agent-browser --session dext-mermaid-review)
 SRV=''
-cleanup() { "${B[@]}" close >/dev/null 2>&1 || true; [ -z "$SRV" ] || kill "$SRV" 2>/dev/null || true; rm -rf "$TMP" "$OUT"; }
+cleanup() { "${B[@]}" close >/dev/null 2>&1 || true; if [ -n "$SRV" ]; then kill "$SRV" 2>/dev/null || true; wait "$SRV" 2>/dev/null || true; fi; rm -rf "$TMP" "$OUT"; }
 trap cleanup EXIT
 [ -z "${SCREENSHOTS:-}" ] || mkdir -p "$SCREENSHOTS"
 capture() { [ -z "${SCREENSHOTS:-}" ] || "${B[@]}" screenshot "$SCREENSHOTS/$1.png" >/dev/null; }
 check() { local out; out=$("${B[@]}" eval "$1"); if [ "$out" != true ]; then echo "FAIL: $1"; echo "$out"; "${B[@]}" eval '(()=>{const img=document.querySelector(`[data-agent-id="mermaid.image"]`);return img?{natural:[img.naturalWidth,img.naturalHeight],actual:img.getBoundingClientRect().toJSON(),status:document.querySelector(`[data-agent-id="markdown.mermaid"]`).dataset.state}:null})()'; "${B[@]}" snapshot; capture mermaid-failure; exit 1; fi; }
 wait_js() { if ! "${B[@]}" wait --timeout 20000 --fn "$1" >/dev/null; then echo "FAIL waiting: $1"; "${B[@]}" snapshot; "${B[@]}" errors; capture mermaid-failure; exit 1; fi; }
-(cd apps/web && npm exec -- vite build --config scripts/header-review.vite.ts >"$TMP/build.log" 2>&1) || { cat "$TMP/build.log"; exit 1; }
+(cd apps/web && npm exec -- vite build --config scripts/header-review.vite.ts --outDir "${OUT#apps/web/}" >"$TMP/build.log" 2>&1) || { cat "$TMP/build.log"; exit 1; }
 node packages/mock-server/src/server.mjs --port="$PORT" --static="$OUT" >"$TMP/server.log" 2>&1 &
 SRV=$!
 sleep 1
