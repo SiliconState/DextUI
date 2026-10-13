@@ -104,9 +104,12 @@ if [ -z "${REPORT_FILE:-}" ]; then
   "${B[@]}" eval '[...document.querySelectorAll(`.chart-btn`)].find(b=>b.textContent===`Reset edits`)?.click()' >/dev/null
   # Click original A in first chart. The linked chart ranks A last, but still highlights A.
   "${B[@]}" wait --fn 'document.querySelector(`.chart-wrap svg g text`).textContent === `A`' >/dev/null
+  # DOM order updates before the 180ms row-reorder animation completes. Native
+  # input must target the settled row, not its transient animated coordinates.
+  "${B[@]}" wait --fn 'document.querySelector(`.chart-wrap svg`).getAnimations({subtree:true}).every(a=>a.playState!=="running")' >/dev/null
   # Reset hides the edits toolbar and can move the SVG. Re-measure the fill
   # rather than clicking coordinates from the earlier drag layout.
-  POS=$("${B[@]}" eval 'JSON.stringify((()=>{const svg=document.querySelector(`.chart-wrap svg`);svg.scrollIntoView({block:`center`});const r=svg.querySelector(`g rect[rx="3"] + rect`).getBoundingClientRect();return [r.left+r.width/2,r.top+r.height/2]})())' | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(JSON.parse(s).map(Math.round).join(" ")))')
+  POS=$("${B[@]}" eval 'JSON.stringify((()=>{const svg=document.querySelector(`.chart-wrap svg`);svg.scrollIntoView({block:`center`});const r=svg.querySelector(`g rect[rx="3"] + rect`).getBoundingClientRect();return [r.left+r.width/2,r.top+r.height/2]})())' | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const v=JSON.parse(s);console.log((typeof v==="string"?JSON.parse(v):v).map(Math.round).join(" "))})')
   read -r X Y <<<"$POS"
   "${B[@]}" mouse move "$X" "$Y" >/dev/null
   "${B[@]}" mouse down >/dev/null
