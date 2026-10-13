@@ -14,6 +14,9 @@ if [ ! -f "$DXB_TEST_PACK/src/session.mjs" ] || [ ! -f "$DXB_TEST_PACK/src/comma
   dxb_test() {
     if [ "${1:-}" = reset ] || [ "${1:-}" = close ]; then
       dxb_test_cleanup
+      # Closing the old daemon is asynchronous; a new fixture session avoids
+      # reconnecting to its disappearing socket during the next open.
+      if [ "${1:-}" = reset ]; then DXB_TEST_SESSION="dextui-gate-$$-$RANDOM"; fi
       return 0
     fi
     agent-browser --session "$DXB_TEST_SESSION" "$@"
