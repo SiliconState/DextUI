@@ -266,6 +266,21 @@ a {
   display: none;
 }
 
+/* Local dev-server preview (ext/browser): a third column on desktop only. */
+@media (min-width: 901px) {
+  .shell.has-preview {
+    grid-template-columns: var(--rail-size) minmax(0, 1fr) minmax(320px, 42%);
+    grid-template-areas:
+      "status status status"
+      "index main preview"
+      "composer composer preview"
+      "todos todos preview";
+  }
+  .shell.has-preview.rail-collapsed {
+    grid-template-columns: 0 minmax(0, 1fr) minmax(320px, 42%);
+  }
+}
+
 @media (max-width: 900px) {
   :root {
     --page-gutter: clamp(0.65rem, 3vw, 1.25rem);

@@ -593,4 +593,40 @@ wait_js 'document.querySelector(`[data-agent-id="session.rail.wrap"]`).dataset.s
 dxb_test set viewport 1280 800 >/dev/null
 wait_js '!document.querySelector(`[data-agent-id="session.rail.wrap"]`).inert && !document.documentElement.style.getPropertyValue("--mobile-viewport-height") && !!document.querySelector(`[data-agent-id="status.model-chip"]`) && document.querySelector(`[data-agent-id="status.hud"]`).getBoundingClientRect().height===(matchMedia(`(pointer: coarse)`).matches||matchMedia(`(hover: none)`).matches?44:32)' || { echo "FAIL: desktop layout not restored"; FAIL=1; }
 
+note "page tools: links open outside, local preview only when framing is allowed, phone uses the + menu"
+DEV_PORT=$((PORT+40)); DENY_PORT=$((PORT+41))
+node -e 'const h=require("http");const [a,b]=process.argv.slice(1).map(Number);h.createServer((q,r)=>{r.writeHead(200,{"content-type":"text/html"});r.end("<!doctype html><title>dev</title><p id=dev>local dev page</p>")}).listen(a,"127.0.0.1");h.createServer((q,r)=>{r.writeHead(200,{"x-frame-options":"DENY"});r.end("no")}).listen(b,"127.0.0.1")' "$DEV_PORT" "$DENY_PORT" >/dev/null 2>&1 &
+DEV_SRV=$!
+sleep 0.5
+dxb_test click '[data-agent-id="browser.open"]' >/dev/null
+wait_js '!!document.querySelector(`[data-agent-id="browser.menu"]`) && document.activeElement?.dataset.agentId==="browser.address" && document.querySelector(`main`).inert && document.querySelector(`[data-agent-id="browser.open"]`).getAttribute("aria-expanded")==="true"' || { echo "FAIL: page tools did not open with focus"; FAIL=1; }
+dxb_test fill '[data-agent-id="browser.address"]' 'example.com/docs' >/dev/null
+wait_js '(()=>{const a=document.querySelector(`[data-agent-id="browser.external"]`);return a?.href==="https://example.com/docs"&&a.target==="_blank"&&a.rel.includes("noopener")&&!document.querySelector(`[data-agent-id="browser.preview.open"]`)})()' || { echo "FAIL: website link not external-only"; FAIL=1; }
+dxb_test fill '[data-agent-id="browser.address"]' "localhost:$DENY_PORT" >/dev/null
+dxb_test click '[data-agent-id="browser.preview.open"]' >/dev/null
+wait_js 'document.querySelector(`[data-agent-id="browser.error"]`)?.textContent.includes("does not permit framing") && !document.querySelector(`[data-agent-id="browser.preview"]`)' || { echo "FAIL: framing refusal not honoured"; FAIL=1; }
+dxb_test fill '[data-agent-id="browser.address"]' "localhost:$DEV_PORT" >/dev/null
+dxb_test click '[data-agent-id="browser.preview.open"]' >/dev/null
+wait_js '(()=>{const p=document.querySelector(`[data-agent-id="browser.preview"]`),f=document.querySelector(`[data-agent-id="browser.preview.frame"]`);return !!p&&p.getBoundingClientRect().width>=320&&f?.src===`http://localhost:'"$DEV_PORT"'/`&&!document.querySelector(`[data-agent-id="browser.menu"]`)&&!document.querySelector(`main`).inert&&document.querySelector(`main`).getBoundingClientRect().width>300})()' || { echo "FAIL: local preview panel"; FAIL=1; }
+for theme in light dim dark; do
+  dxb_test eval "(()=>{document.documentElement.dataset.theme='$theme';return true})()" >/dev/null
+  wait_js '(()=>{const p=document.querySelector(`[data-agent-id="browser.preview"]`);return getComputedStyle(p).backgroundColor===getComputedStyle(document.querySelector(`.statusline`)).backgroundColor})()' || { echo "FAIL: preview panel ignores $theme theme"; FAIL=1; }
+done
+dxb_test click '[data-agent-id="browser.preview.close"]' >/dev/null
+wait_js '!document.querySelector(`[data-agent-id="browser.preview"]`) && !document.querySelector(`[data-agent-id="app.root"]`).classList.contains("has-preview")' || { echo "FAIL: preview close"; FAIL=1; }
+dxb_test click '[data-agent-id="browser.open"]' >/dev/null
+dxb_test press Escape >/dev/null
+wait_js '!document.querySelector(`[data-agent-id="browser.menu"]`) && document.activeElement?.dataset.agentId==="browser.open"' || { echo "FAIL: page tools Escape/focus restore"; FAIL=1; }
+dxb_test set viewport 390 844 >/dev/null
+wait_js 'getComputedStyle(document.querySelector(`[data-agent-id="browser.open"]`)).display==="none"' || { echo "FAIL: desktop globe shown on phone"; FAIL=1; }
+dxb_test click '[data-agent-id="composer.attach.menu"]' >/dev/null
+dxb_test click '[data-agent-id="composer.attach.page"]' >/dev/null
+wait_js '(()=>{const m=document.querySelector(`[data-agent-id="browser.menu"]`),r=m?.getBoundingClientRect(),i=document.querySelector(`[data-agent-id="browser.address"]`);return !!m&&r.left>=0&&r.right<=innerWidth&&r.bottom<=innerHeight&&getComputedStyle(i).fontSize==="16px"&&i.getBoundingClientRect().height>=44&&!document.querySelector(`[data-agent-id="browser.float.open"]`)})()' || { echo "FAIL: phone page tools layout"; FAIL=1; }
+dxb_test fill '[data-agent-id="browser.address"]' "localhost:$DEV_PORT" >/dev/null
+wait_js '!!document.querySelector(`[data-agent-id="browser.external"]`) && !document.querySelector(`[data-agent-id="browser.preview.open"]`)' || { echo "FAIL: phone offered a side preview"; FAIL=1; }
+dxb_test press Escape >/dev/null
+wait_js '!document.querySelector(`[data-agent-id="browser.menu"]`) && document.activeElement?.dataset.agentId==="composer.attach.menu"' || { echo "FAIL: phone page tools focus restore"; FAIL=1; }
+dxb_test set viewport 1280 800 >/dev/null
+kill "$DEV_SRV" 2>/dev/null || true
+
 if [ $FAIL -eq 0 ]; then echo "ALL BROWSER CHECKS PASSED"; else echo "BROWSER CHECKS FAILED"; exit 1; fi

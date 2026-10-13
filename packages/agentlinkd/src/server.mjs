@@ -49,6 +49,7 @@ import { normalizeUiRequest, progressKey, validUiResponse } from "./pack-ui.mjs"
 import { acceptBackground, acceptBackgroundApplication, backgroundState, clearBackground } from "./background-compaction.mjs";
 import { readForkSource, forkBoundary, forkEvents } from "./session-fork.mjs";
 import { requestSite } from "./request-origin.mjs";
+import { checkPreview } from "./preview.mjs";
 import { acquireStateLock } from "./state-lock.mjs";
 import { authStatusError, authWriteError, normaliseAuthMarker } from "./auth-errors.mjs";
 
@@ -4355,11 +4356,27 @@ function safeHttp(res, fn) {
   };
 }
 
+let previewChecks = 0;
 async function handleHttp(req, res) {
   const pathName = new URL(req.url, "http://localhost").pathname;
   if (pathName === "/health") {
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify({ ok: true, server: "agentlinkd", protocol: 1, dext: DEXT_BIN }));
+    return;
+  }
+  if (pathName === "/preview/check") {
+    if (!checkAuth(req, res, false)) return;
+    res.setHeader("cache-control", "private, no-store");
+    res.setHeader("content-type", "application/json");
+    if (req.method !== "GET" || previewChecks >= 4) { res.writeHead(req.method !== "GET" ? 405 : 429); res.end(JSON.stringify({ error: "unavailable" })); return; }
+    previewChecks++;
+    try {
+      const value = new URL(req.url, "http://localhost").searchParams.get("url");
+      const out = await checkPreview(value, { protectedPorts: [PORT, req.socket.localPort], appOrigin: req.headers.origin || `http://${req.headers.host}` });
+      res.writeHead(200); res.end(JSON.stringify(out));
+    } catch (error) {
+      res.writeHead(400); res.end(JSON.stringify({ error: "preview_refused", message: error.message }));
+    } finally { previewChecks--; }
     return;
   }
   if (pathName === "/packs" || pathName.startsWith("/packs/")) {

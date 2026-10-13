@@ -53,6 +53,9 @@
 
   import type { HeaderTarget } from "./lib/session-header";
   import { clearCachedDiagrams } from "./lib/mermaid-loader";
+  import BrowserTools from "./ext/browser/BrowserTools.svelte";
+  import FloatNote from "./ext/browser/FloatNote.svelte";
+  import { browserTools } from "./ext/browser/state.svelte";
   $effect(() => {
     const scope = app.hostEpoch;
     void app.needsToken;
@@ -88,7 +91,9 @@
   const view = $derived(sess.view);
   const pendingList = $derived(view ? [...view.pending.values()] : []);
   const pendingUi = $derived(view?.pendingUi);
-  const blockingOverlay = $derived(app.paletteOpen || app.shortcutsOpen || !!artifact.document || !!pendingUi || !!inspect || app.eventsOpen || app.galleryOpen || app.settingsOpen || app.statusDetailsOpen || app.contextOpen || app.sessionCtlOpen || app.todosOpen || app.inlineDiffOpen || providers.open || packSheet.open || packSheet.panelOpen || !!crew.openId || folders.open || flows.open || tasks.open || packCreds.open);
+  // Page tools are modal too, but must not count themselves as "another" overlay.
+  const otherOverlay = $derived(app.paletteOpen || app.shortcutsOpen || !!artifact.document || !!pendingUi || !!inspect || app.eventsOpen || app.galleryOpen || app.settingsOpen || app.statusDetailsOpen || app.contextOpen || app.sessionCtlOpen || app.todosOpen || app.inlineDiffOpen || providers.open || packSheet.open || packSheet.panelOpen || !!crew.openId || folders.open || flows.open || tasks.open || packCreds.open);
+  const blockingOverlay = $derived(browserTools.open || otherOverlay);
   const pendingFormId = $derived(pendingUi?.id);
   $effect(() => {
     if (!pendingFormId) return;
@@ -393,7 +398,7 @@
     </form>
   </div>
 {:else}
-  <div class="shell" class:rail-collapsed={app.sidebarCollapsed} data-state={app.phase} data-agent-id="app.root">
+  <div class="shell" class:rail-collapsed={app.sidebarCollapsed} class:has-preview={!!browserTools.preview} data-state={app.phase} data-agent-id="app.root">
     <aside class="index" inert={(mobileLayout && !indexOpen) || blockingOverlay} role={mobileLayout ? "dialog" : undefined} aria-modal={mobileLayout && indexOpen ? true : undefined} aria-label="Sessions" tabindex="-1" use:dlgIndex.ref data-state={indexOpen ? "open" : "closed"} data-agent-id="session.rail.wrap">
       <SessionIndex onPick={() => (indexOpen = false)} onCollapse={toggleSidebar} onClose={() => (indexOpen = false)} />
     </aside>
@@ -452,7 +457,9 @@
     </main>
 
     <div class="composer" inert={blockingOverlay || (mobileLayout && indexOpen)}>
-      {#if activeStore}
+      {#if activeStore && browserTools.floating}
+        <FloatNote />
+      {:else if activeStore}
         <Composer store={activeStore} />
       {/if}
     </div>
@@ -472,6 +479,7 @@
     <div class="statusline" inert={(mobileLayout && indexOpen) || (blockingOverlay && !app.statusDetailsOpen && !app.contextOpen)}>
       <StatusLine store={activeStore} {indexOpen} onToggleIndex={toggleNavigation} onNavigate={navigateHeader} />
     </div>
+    <BrowserTools store={activeStore} blocked={otherOverlay} />
   </div>
 {/if}
 

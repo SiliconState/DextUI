@@ -11,6 +11,7 @@ import { acceptKey, FrameParser, encodeFrame, OP_PONG, OP_TEXT } from "./ws.mjs"
 import { loadFixture, withApprovalPause } from "./replay.mjs";
 import { fold, foldMeta } from "./fold.mjs";
 import { suggestPack } from "../../agentlinkd/src/packs.mjs";
+import { checkPreview } from "../../agentlinkd/src/preview.mjs";
 
 const here = path.dirname(url.fileURLToPath(import.meta.url));
 const repoRoot = path.join(here, "..", "..", "..");
@@ -1535,6 +1536,19 @@ const server = http.createServer((req, res) => {
   if (pathName === "/health") {
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify({ ok: true, server: "agentlink-mock", protocol: 1 }));
+    return;
+  }
+  // Same loopback-only header check as agentlinkd, so Preview is exercisable.
+  if (pathName === "/preview/check") {
+    if (!requireAuth(req)) {
+      res.writeHead(401, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "unauthorized" }));
+      return;
+    }
+    const value = new URL(req.url, "http://localhost").searchParams.get("url");
+    checkPreview(value, { protectedPorts: [PORT], appOrigin: req.headers.origin || `http://${req.headers.host}` })
+      .then((out) => { res.writeHead(200, { "content-type": "application/json", "cache-control": "private, no-store" }); res.end(JSON.stringify(out)); })
+      .catch((error) => { res.writeHead(400, { "content-type": "application/json" }); res.end(JSON.stringify({ error: "preview_refused", message: error.message })); });
     return;
   }
   // Data endpoints require the pairing token. The static app shell is public —

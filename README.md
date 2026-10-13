@@ -53,6 +53,9 @@ starting against the state dir.
   compact context against a core-verified meter
 - **Real rendering**: markdown, demand-loaded Mermaid diagrams, interactive charts,
   inline images, a sandboxed HTML artifact sheet, attachments with a consent-labeled `read_image` handoff
+- **Pages without a fake browser**: open sites in your own browser, Float a
+  small always-on-top DextUI while you browse (desktop Chromium), or preview a
+  local dev server beside the chat when it allows framing
 - **Pack gallery home**: persona onboarding and starter prompts; packs run as
   first-class turns ([packs/README.md](packs/README.md))
 - **Flows**: a drag-and-drop canvas that compiles to crew runs, with
