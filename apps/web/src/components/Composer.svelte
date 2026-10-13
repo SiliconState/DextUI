@@ -7,6 +7,8 @@
   import { useSession } from "../lib/useSession.svelte";
   import { runSlash as runExtSlash, slashCommands as extSlashCommands } from "../ext";
   import { fileUrl } from "../lib/files";
+  import BrowserLauncher from "../ext/browser/Launcher.svelte";
+  import { openBrowserTools } from "../ext/browser/state.svelte";
   import { attachFiles, attachUrl, attachmentBlock, attachmentsFor, clearAttachments, imageAttachmentKind, removeAttachment } from "../lib/uploads.svelte";
 
   let { store }: { store: SessionStore } = $props();
@@ -615,12 +617,14 @@
             <div class="attach-options">
               <button data-agent-id="composer.attach.files" onclick={() => { attachmentMenuOpen = false; fileInput?.click(); }}>Attach files</button>
               <button data-agent-id="composer.attach.link" onclick={() => { attachmentMenuOpen = false; void toggleUrl(); }}>Attach a link</button>
+              <button data-agent-id="composer.attach.page" onclick={() => { attachmentMenuOpen = false; openBrowserTools(); }}>Open a page</button>
             </div>
           {/if}
         </div>
         <button class="act desktop-attach" data-agent-id="composer.attach" aria-label="Attach files" title="attach files (or drop / paste them here)" onclick={() => fileInput?.click()}>[+]</button>
         <button class="act desktop-attach" data-agent-id="composer.attachurl" aria-label="Attach from URL" title="fetch a URL into the workspace" onclick={toggleUrl}>[⤓]</button>
       {/if}
+      <BrowserLauncher />
       {#if histIdx > 0}
         <span class="faint" data-agent-id="composer.histmark">[↑{histIdx}]</span>
       {/if}
