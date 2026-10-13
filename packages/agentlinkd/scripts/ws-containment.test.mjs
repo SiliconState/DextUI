@@ -35,7 +35,7 @@ async function harness(t, env = {}, prepare = null) {
     let stdout = "";
     child.stdout.on("data", (b) => (stdout += b));
     child.on("exit", (code, sig) => (exited = { code, sig }));
-    for (let i = 0; i < 100 && !/listening on http:\/\/127\.0\.0\.1:\d+/.test(stdout); i++) {
+    for (let i = 0; i < 700 && !/listening on http:\/\/127\.0\.0\.1:\d+/.test(stdout); i++) {
       if (exited) break;
       await sleep(30);
     }

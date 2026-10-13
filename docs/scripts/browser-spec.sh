@@ -1,12 +1,9 @@
 #!/usr/bin/env bash
 # Isolated file-based docs regression gate; no host or external service needed.
+# Installed dxb is required; a missing browser driver fails instead of skipping.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
-if ! command -v agent-browser >/dev/null 2>&1; then
-  echo 'SKIP: agent-browser unavailable; documentation browser checks not run'
-  exit 0
-fi
-B=(agent-browser --session dext-spec-test)
+source apps/web/scripts/dxb-test.sh
 trap '"${B[@]}" close >/dev/null 2>&1 || true' EXIT
 check() {
   local expression="$1"

@@ -2,6 +2,8 @@
   // Full-height right-side home for interactive HTML reports. File reports are
   // fetched by the trusted parent, then rendered as srcdoc: the sandbox never
   // receives the bearer query string. Chat keeps only its compact launcher.
+  import { untrack } from "svelte";
+  import { ARTIFACT_BRIDGE } from "../lib/artifact-bridge";
   import { boundedResponseBlob, boundedResponseText } from "../lib/files";
   import { ARTIFACT_STATE_MAX, artifactStateName, validateArtifactState, validateStateReceipt } from "../lib/artifact-state";
   import { app, currentResolvedTheme } from "../lib/state.svelte";
@@ -33,7 +35,6 @@
 
   $effect(() => {
     artifact.revision;
-    currentResolvedTheme();
     frame;
     viewGeneration++;
     showFullState = false;
@@ -222,12 +223,20 @@
     return () => ctl.abort();
   });
 
-  // CSP is parsed before any model-authored markup. Inline scripts/styles keep
-  // self-contained reports interactive, while network, navigation, forms and
-  // parent access stay unavailable in the opaque-origin sandbox.
+  function syncTheme() {
+    frame?.contentWindow?.postMessage({ dextArtifact: "theme", theme: currentResolvedTheme() }, "*");
+  }
+  $effect(() => { syncTheme(); });
+
+  // CSP precedes authored markup. Subresource networking, forms and parent DOM
+  // access are blocked. Sandbox blocks top navigation, not all self-navigation.
   const doc = $derived.by(() => {
+    // Reopening identical HTML is a new document too. Sample the current theme
+    // on each revision, without making live theme changes replace srcdoc.
+    artifact.revision;
     if (!source) return undefined;
-    const theme = currentResolvedTheme();
+    // Initial theme only: later changes use the bridge, never replace srcdoc.
+    const theme = untrack(currentResolvedTheme);
     const fullDocument = /<html[\s>]/i.test(source);
     const shell = fullDocument
       ? source
@@ -243,7 +252,7 @@
     scheme.name = "color-scheme";
     scheme.content = "light dark";
     const bridge = parsed.createElement("script");
-    bridge.textContent = 'addEventListener("keydown",function(e){if(e.key==="Escape")parent.postMessage({dextArtifact:"close"},"*")},true)';
+    bridge.textContent = ARTIFACT_BRIDGE;
     parsed.head.prepend(meta, scheme, bridge);
     return `<!doctype html>\n${parsed.documentElement.outerHTML}`;
   });
@@ -285,6 +294,7 @@
     if (!el) return;
     const onMessage = (e: MessageEvent) => {
       if (frame !== el || e.source !== el.contentWindow) return;
+      if (e.data?.dextArtifact === "ready") syncTheme();
       if (e.data?.dextArtifact === "close") closeArtifact();
       if (e.data?.dextArtifact !== "state.response" || !saveRequest || e.data.requestId !== saveRequest) return;
       saveRequest = "";
@@ -361,8 +371,8 @@
         <p class="state st-red" data-agent-id="artifact.error">Could not load this report from the session workspace.</p>
       {:else}
         <div class="report" class:hidden={mode === "code"}>
-          {#key `${artifact.revision}\u001f${currentResolvedTheme()}`}
-            <iframe bind:this={frame} sandbox="allow-scripts" title={item.name} srcdoc={doc} onload={() => frame?.contentWindow?.postMessage({ theme: currentResolvedTheme() }, "*")} data-agent-id="artifact.frame"></iframe>
+          {#key artifact.revision}
+            <iframe bind:this={frame} sandbox="allow-scripts" title={item.name} srcdoc={doc} onload={syncTheme} data-agent-id="artifact.frame"></iframe>
           {/key}
         </div>
         {#if mode === "code"}<pre data-agent-id="artifact.source">{codeText}</pre>{/if}

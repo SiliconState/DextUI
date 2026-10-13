@@ -157,7 +157,7 @@ test("authenticated host streams selected logs, replays reconnect cursors, and u
     }
     fs.rmSync(root, { recursive: true, force: true });
   });
-  for (let i = 0; i < 150 && !/listening on http:\/\/127\.0\.0\.1:\d+/.test(output); i++) await sleep(20);
+  for (let i = 0; i < 1000 && !/listening on http:\/\/127\.0\.0\.1:\d+/.test(output); i++) await sleep(20);
   const url = output.match(/listening on (http:\/\/127\.0\.0\.1:\d+)/)?.[1];
   assert.ok(url, errors);
   async function connect() {

@@ -13,6 +13,8 @@ packages/agentlinkd/.selfedit-test-*/
 packages/agentlinkd/.packs-test-*/
 packages/agentlinkd/.dirs-test-*/
 packages/agentlinkd/.flows-test-*/
+packages/agentlinkd/.bridge-test-*/
+packages/agentlinkd/.durable-test-*/
 packs/target/
 packs/*/ui/panel.html
 .crew/

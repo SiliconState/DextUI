@@ -441,9 +441,10 @@ function toolFoldingPlan() {
 
 function thinkingPreviewPlan() {
   const thought = Array.from({ length: 120 }, (_, i) => `reasoning-${i + 1}`).join(" ");
+  const hold = Number(process.env.MOCK_THINKING_HOLD_MS ?? 700);
   return [
     { event: "turn_start", delay: 5 },
-    { event: "thinking_delta", data: thought, delay: 700 },
+    { event: "thinking_delta", data: thought, delay: Number.isFinite(hold) ? Math.max(700, Math.min(10000, hold)) : 700 },
     { event: "thinking_block_complete", data: thought, delay: 5 },
     { event: "thinking_preview_committed", delay: 5 },
     { event: "text_block_complete", data: "Thinking preview complete.", delay: 5 },
@@ -1567,6 +1568,11 @@ const server = http.createServer((req, res) => {
     if (!s || parts.length < 3) {
       res.writeHead(404, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: "no_session" }));
+      return;
+    }
+    if (parts[2] === "todos" && parts.length === 3 && req.method === "GET") {
+      res.writeHead(200, { "content-type": "application/json", "cache-control": "private, no-store" });
+      res.end(JSON.stringify({ session: s.id, source: "none", items: [] }));
       return;
     }
     if (parts[2] === "file" && req.method === "GET") {

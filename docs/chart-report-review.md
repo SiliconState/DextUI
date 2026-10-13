@@ -63,6 +63,6 @@ A disclaimer does not fix these methodology and provenance issues. The report is
 
 ## Reproduction
 
-`npm test` runs the unit suite, existing UI smoke and the new `apps/web/scripts/chart-review-test.sh`. The latter checks fixed-domain bars/line clipping, signed-currency cell tint, clipped label bounds, a real hbar drag with frozen domain/order, linked selection after sorting, and responsive widths. Browser tests visibly skip when `agent-browser` is unavailable.
+`npm test` runs the unit suite, existing UI smoke and the new `apps/web/scripts/chart-review-test.sh`. The latter checks fixed-domain bars/line clipping, signed-currency cell tint, clipped label bounds, a real hbar drag with frozen domain/order, linked selection after sorting, and responsive widths. Browser tests now use the installed dxb test pack and fail, rather than skip, when it is unavailable. The original review above used `agent-browser`.
 
 For an existing Markdown report: `REPORT_FILE=/absolute/report.md REPORT_CHARTS=10 SCREENSHOT_DIR=/tmp/report-shots bash apps/web/scripts/chart-review-test.sh`. The mock's `MOCK_MARKDOWN_FILE` environment option reads only the operator-supplied local fixture. It does not expose filesystem selection to a browser client and does not launch any real model.

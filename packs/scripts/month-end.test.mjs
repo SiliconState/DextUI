@@ -31,12 +31,11 @@ const tool = (pack, cwd, name, input = {}) => call(pack, cwd, "tool", { tool: na
 const view = (resp) => resp.effects.find((e) => e.type === "view")?.markdown ?? "";
 
 /** Seed a workspace through the real receipts/invoice runtimes (no hand-written state files). */
-function seed(t) {
+function seed(t, today = new Date()) {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "month-end-"));
   t.after(() => fs.rmSync(cwd, { recursive: true, force: true }));
-  const today = new Date();
   const iso = (d) => d.toISOString().slice(0, 10);
-  const ago = (n) => { const d = new Date(today); d.setDate(d.getDate() - n); return iso(d); };
+  const ago = (n) => { const d = new Date(today); d.setUTCDate(d.getUTCDate() - n); return iso(d); };
   for (const [days, vendor, amount, cat] of [[3, "Eurostar", "82.50", "Travel"], [10, "Blue Bottle", "5.40", "Meals"], [20, "Adobe", "54.99", "Software"], [40, "Landlord Ltd", "1200.00", "Rent"], [45, "Cinema", "30.00", "Personal"]]) {
     const r = tool("receipts", cwd, "add_receipt", { date: ago(days), vendor, amount, category: cat });
     assert.equal(r.is_error, false, r.content);
@@ -116,7 +115,13 @@ test("cashflow: balance, recurring, 13-week projection with receivables landing 
 
 test("taxprep: config (never guessed), quarterly estimate with non-deductible + partial categories, package files", (t) => {
   ensureBuilt();
-  const { cwd, ago } = seed(t);
+  // All asserted receipts/invoices belong to one fixed quarter, even when the
+  // test runs near a real quarter boundary. Other workflows still use today.
+  const { cwd, ago } = seed(t, new Date("2026-08-15T12:00:00Z"));
+  for (const date of ["2026-06-30", "2026-10-01"]) {
+    const receipt = tool("receipts", cwd, "add_receipt", { date, vendor: "Outside quarter", amount: "99.00", category: "Outside" });
+    assert.equal(receipt.is_error, false, receipt.content);
+  }
   const act = call("taxprep", cwd, "activate");
   assert.match(act.content, /No tax config yet/);
   assert.match(act.content, /Not tax advice/);
@@ -133,6 +138,7 @@ test("taxprep: config (never guessed), quarterly estimate with non-deductible + 
   assert.match(md, /not tax advice/);
   assert.match(md, /Personal,\$30\.00,\$0\.00,0%/, "non-deductible category at 0%");
   assert.match(md, /Meals,\$5\.40,\$2\.70,50%/, "partial category");
+  assert.doesNotMatch(md, /Outside/, "adjacent-quarter expenses are excluded");
   assert.match(md, /Before you file/);
   assert.equal(tool("taxprep", cwd, "estimate", { quarter: "Q3" }).is_error, true, "bad quarter format");
   const pkg = tool("taxprep", cwd, "build_package", { quarter: q });
