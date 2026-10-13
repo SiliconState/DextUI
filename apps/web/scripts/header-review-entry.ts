@@ -34,7 +34,9 @@ function set(state = stateName, fullAuto = auto, stress = false) {
   const m = meta();
   app.sessions = [m, meta("other-fixture")];
   const tool: Block = { kind: "tool", call_id: "fixture-tool", name: "bash", summary: `Rebuilding report · ${long}`, status: state === "working" || state === "review" ? "running" : state === "failed" ? "failed" : "ok", content: `exit: ${state === "failed" ? 1 : 0}\n--- stdout ---\n${long}\n--- stderr ---\n` };
-  const blocks: Block[] = [{ kind: "user", text: `Review ${long}` }, tool];
+  const blocks: Block[] = [{ kind: "user", text: `Review ${long}` }];
+  if (stress) blocks.push({ kind: "marker", level: "warn", text: "Workspace policy warning remains visible" });
+  blocks.push(tool);
   if (stress) {
     const tip = `[runtime-note] bash advisory: prefer native tools for ${long}; full guidance remains available.`;
     blocks.push(
@@ -45,7 +47,6 @@ function set(state = stateName, fullAuto = auto, stress = false) {
       { kind: "marker", level: "note", text: tip },
       { kind: "marker", level: "note", text: tip },
       { kind: "marker", level: "warn", text: "bash advisory: Keep this guidance inside work" },
-      { kind: "marker", level: "warn", text: "Workspace policy warning remains visible" },
       { kind: "marker", level: "warn", text: "Batch: 1 tool call(s) failed." },
       { kind: "marker", level: "warn", text: "runtime guidance: objective checkpoints still look unresolved: log decisions and follow-up improvements. Before ending this turn, address them or explicitly say why each remaining item is not applicable / blocked." },
     );

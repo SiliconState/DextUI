@@ -8,7 +8,7 @@
   import ActivityGroup from "./ActivityGroup.svelte";
   import WorkMeta from "./WorkMeta.svelte";
   import PhoneWork from "./PhoneWork.svelte";
-  import { phoneTranscriptItems, phoneCopyIds } from "../lib/phone-presentation";
+  import { phoneTranscriptItems, phoneCopyIds, phoneWorkState } from "../lib/phone-presentation";
   import PackGallery from "./PackGallery.svelte";
   import { transcriptItems, type TranscriptItem } from "../lib/transcript-groups";
   import { app } from "../lib/state.svelte";
@@ -48,7 +48,7 @@
 
   const copyIds = $derived(phoneCopyIds(visible));
 
-  // Manual disclosure state is keyed by stable session + first-block IDs, so
+  // Manual disclosure state is keyed by stable session + group IDs, so
   // streaming updates and session switches do not snap open rows shut. Clean
   // and running activity starts compact; failures open unless the user already
   // made a choice. No status transition ever auto-closes a disclosure.
@@ -194,15 +194,27 @@
     if (!navigation || navigation.revision === seenNavigation) return;
     seenNavigation = navigation.revision;
     if (navigation.target === "approval") return;
-    const work = [...items].reverse().find((item) => item.kind === "work");
-    if (work && (navigation.target === "progress" || navigation.target === "error")) setItemOpen(work, true);
     const target = navigation.target;
+    const work = [...items].reverse().find((item) => item.kind === "work" && item.currentTurn && phoneWorkState(item, view) === (target === "error" ? "failed" : "working"));
+    if (work && (target === "progress" || target === "error")) setItemOpen(work, true);
     const scope = `${app.hostEpoch}:${view.id}:${sessionGeneration}`;
     const revision = navigation.revision;
     void tick().then(() => {
       if (!container || scope !== `${app.hostEpoch}:${view.id}:${sessionGeneration}` || navigation?.revision !== revision) return;
-      const selector = target === "progress" ? '[data-agent-id="transcript.working"], [data-agent-id^="phone.work."]' : target === "error" ? '.b-marker.st-red, [data-agent-id^="phone.work."][data-state="failed"], .activity[data-state="failed"]' : '[data-agent-id="block.text"], [data-agent-id="markdown.artifact"]';
-      const element = [...container.querySelectorAll<HTMLElement>(selector)].at(-1);
+      const selector = target === "progress" ? '[data-agent-id="transcript.working"], section[data-agent-id^="phone.work."][data-state="working"]' : target === "error" ? '.b-marker.st-red, section[data-agent-id^="phone.work."][data-state="failed"], .activity[data-state="failed"]' : '[data-agent-id="block.text"], [data-agent-id="markdown.artifact"]';
+      const candidates = phone && target === "error"
+        ? (() => {
+          // Old failed phases stay labeled in history, but header attention is
+          // scoped to this turn. Do not focus a previous request's failure.
+          const nodes = [...container.querySelectorAll<HTMLElement>('.sb-axis > [data-agent-id]')];
+          let start = 0;
+          for (let i = nodes.length - 1; i >= 0; i--) {
+            if (nodes[i]?.dataset.agentId === "block.user") { start = i + 1; break; }
+          }
+          return nodes.slice(start).filter((node) => node.matches('.b-marker.st-red, section[data-agent-id^="phone.work."][data-state="failed"]'));
+        })()
+        : [...container.querySelectorAll<HTMLElement>(selector)];
+      const element = candidates.at(-1);
       if (element) { element.scrollIntoView({ block: "nearest" }); element.tabIndex = -1; element.focus({ preventScroll: true }); }
       else jump();
     });
@@ -256,7 +268,8 @@
         {/if}
         {#each items as item (keyOf(item))}
           {#if item.kind === "work"}
-            <PhoneWork blocks={item.blocks} open={itemOpen(item)} onToggle={(open) => setItemOpen(item, open)} working={item.current && view.working} failed={item.current && view.failed} {onInspect} sessionId={view.id} />
+            {@const state = phoneWorkState(item, view)}
+            <PhoneWork id={item.id} blocks={item.blocks} open={itemOpen(item)} onToggle={(open) => setItemOpen(item, open)} working={state === "working"} failed={state === "failed"} {onInspect} sessionId={view.id} />
           {:else if item.kind === "activity"}
             <ActivityGroup
               id={item.id}

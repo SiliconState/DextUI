@@ -41,7 +41,7 @@ export function readableOutput(content: string): string {
 
 export type PhoneItem =
   | { kind: "block"; id: number; block: ViewBlock }
-  | { kind: "work"; id: number; blocks: ViewBlock[]; current: boolean };
+  | { kind: "work"; id: number; blocks: ViewBlock[]; current: boolean; currentTurn: boolean };
 
 const ADVISORY = /^(?:\[runtime-note\]\s*)?bash advisory:\s*/i;
 // Only batch-start label lists are redundant; failure messages are not.
@@ -81,6 +81,20 @@ export function phoneWorkCounts(blocks: ViewBlock[]): { total: number; passed: n
   return counts;
 }
 
+/** Work cards describe their own tool outcomes, not the whole task. A response
+ *  can arrive before a parallel tool finishes; keep that card active until its
+ *  tool finishes (or the session stops). Notes alone cannot inherit turn failure. */
+export function phoneWorkState(item: Extract<PhoneItem, { kind: "work" }>, session: Pick<SessionState, "working" | "failed">): "working" | "failed" | "complete" {
+  const counts = phoneWorkCounts(item.blocks);
+  const liveThinking = item.blocks.some((block) => block.kind === "thinking" && !block.complete);
+  const unfinished = counts.running > 0 || counts.pending > 0 || liveThinking;
+  if (session.working && item.currentTurn && (item.current || unfinished)) return "working";
+  const batchFailed = item.blocks.some((block) => block.kind === "marker" && isBatchFailureMarker(block) && Number(BATCH_FAILURE.exec(block.text.trim())?.[1]) > 0);
+  const execution = item.blocks.some((block) => block.kind === "tool" || block.kind === "thinking" || (block.kind === "marker" && !block.auth && (block.level === "info" || block.level === "note") && BATCH.test(block.text)));
+  if (counts.failed > 0 || batchFailed || (item.currentTurn && session.failed && execution && (item.current || unfinished))) return "failed";
+  return "complete";
+}
+
 /** One readable clause for a tip line; the full text stays one tap away. */
 export function tipSummary(text: string): string {
   const body = text.trim().replace(ADVISORY, "");
@@ -99,12 +113,14 @@ export type WorkRow =
 export function phoneWorkRows(blocks: ViewBlock[]): WorkRow[] {
   const rows: WorkRow[] = [];
   // A later batch may never start, even if an earlier batch had tools. Drop
-  // only labels followed by tool rows before the next batch-start boundary.
+  // only labels followed by tool rows before the next batch boundary (start
+  // or failure). A recovery tool after a failed batch belongs to later work.
   const redundantBatches = new Set<number>();
   let followingTool = false;
   for (let i = blocks.length - 1; i >= 0; i--) {
     const block = blocks[i]!;
     if (block.kind === "tool") followingTool = true;
+    else if (isBatchFailureMarker(block)) followingTool = false;
     else if (block.kind === "marker" && !block.auth && (block.level === "info" || block.level === "note") && BATCH.test(block.text)) {
       if (followingTool) redundantBatches.add(block.id);
       followingTool = false;
@@ -139,25 +155,43 @@ export function phoneCopyIds(blocks: ViewBlock[]): Set<number> {
   return ids;
 }
 
-/** Only presentation changes. Answers, real warnings, auth and compaction stay
- *  visible. In Show all, tool blocks remain rich but shell guidance and exact batch
- *  result notices still get a work container instead of assistant narration. */
+function isPhoneWorkBlock(block: ViewBlock, compact: boolean): boolean {
+  if (isAdvisoryMarker(block) || isBatchFailureMarker(block) || isRuntimeGuidanceMarker(block)) return true;
+  if (!compact) return false;
+  if (block.kind === "tool" || block.kind === "thinking") return true;
+  return block.kind === "marker" && !block.auth && (block.level === "info" || block.level === "note") && (BATCH.test(block.text) || RUN_META.test(block.text));
+}
+
+/** Fold only consecutive work blocks, never across Dext responses or visible
+ *  notices. The original order stays lossless: work, response, work, response.
+ *  In Show all, tools remain rich; recognized runtime guidance stays contained. */
 export function phoneTranscriptItems(blocks: ViewBlock[], compact = true): PhoneItem[] {
-  const groups = new Map<number, { blocks: ViewBlock[]; current: boolean }>();
-  const skip = new Set<number>();
-  let start = 0;
-  for (let end = 0; end <= blocks.length; end++) {
-    if (end < blocks.length && blocks[end]?.kind !== "user") continue;
-    const work = blocks.slice(start, end).filter((block) => isAdvisoryMarker(block) || isBatchFailureMarker(block) || isRuntimeGuidanceMarker(block) || (compact && (block.kind === "tool" || block.kind === "thinking" || (block.kind === "marker" && !block.auth && (block.level === "info" || block.level === "note") && (BATCH.test(block.text) || RUN_META.test(block.text))))));
-    if (work.length) {
-      groups.set(work[0]!.id, { blocks: work, current: end === blocks.length });
-      for (const block of work.slice(1)) skip.add(block.id);
+  const items: PhoneItem[] = [];
+  let work: Extract<PhoneItem, { kind: "work" }> | undefined;
+  let current: typeof work;
+  const turnWork: NonNullable<typeof work>[] = [];
+  for (const block of blocks) {
+    if (block.kind === "user") turnWork.length = 0;
+    if (isPhoneWorkBlock(block, compact)) {
+      if (!work) {
+        work = { kind: "work", id: block.id, blocks: [], current: false, currentTurn: false };
+        items.push(work);
+        turnWork.push(work);
+      }
+      work.blocks.push(block);
+      // SessionStore inserts new annotations before an open thinking block.
+      // Keep the oldest identity, not the new first row, so it stays mounted.
+      work.id = Math.min(work.id, block.id);
+      current = work;
+    } else {
+      items.push({ kind: "block", id: block.id, block });
+      work = undefined;
+      // A response closes the preceding work phase as soon as it streams.
+      // Trailing warnings/errors still let the latest work show turn failure.
+      if (block.kind !== "marker") current = undefined;
     }
-    start = end;
   }
-  return blocks.flatMap((block): PhoneItem[] => {
-    const group = groups.get(block.id);
-    if (group) return [{ kind: "work", id: block.id, ...group }];
-    return skip.has(block.id) ? [] : [{ kind: "block", id: block.id, block }];
-  });
+  for (const item of turnWork) item.currentTurn = true;
+  if (current) current.current = true;
+  return items;
 }

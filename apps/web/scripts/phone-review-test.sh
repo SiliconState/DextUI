@@ -166,7 +166,8 @@ if [ "${REVIEW_PHASE:-1}" -ge 2 ]; then
   "${B[@]}" fill '[data-agent-id="composer.input"]' 'tool folding demo' >/dev/null
   "${B[@]}" click '[data-agent-id="composer.send"]' >/dev/null
   wait_js 'document.body.textContent.includes("Tool folding demo complete") && !document.querySelector(`[data-agent-id="composer.stop"]`)'
-  check 'document.querySelectorAll(`[data-agent-id^="phone.work."]`).length>=1 && [...document.querySelectorAll(`[data-agent-id^="phone.work."]`)].at(-1).querySelector(`button`).getAttribute("aria-expanded")==="false" && [...document.querySelectorAll(`[data-agent-id^="phone.work."]`)].at(-1).querySelector(`[data-agent-id="phone.summary.failed"]`).textContent.includes("1 failed") && [...document.querySelectorAll(`[data-agent-id^="phone.work."]`)].at(-1).querySelector(`[data-agent-id="phone.summary.passed"]`).textContent.includes("10 passed") && !document.querySelector(`[data-agent-id="tool.fold-bash"]`)'
+  # Each response is a boundary: work summaries must not pull later calls above it.
+  check '(()=>{const nodes=[...document.querySelector(`.sb-axis`).children],start=nodes.findLastIndex(e=>e.dataset.agentId==="block.user"&&e.textContent.includes("tool folding demo")),turn=nodes.slice(start+1).filter(e=>e.tagName==="SECTION"||e.dataset.agentId==="block.text"),work=turn.filter(e=>e.tagName==="SECTION");return start>=0&&turn.length===16&&work.length===8&&turn.every((e,i)=>i%2===0?e.tagName==="SECTION":e.dataset.agentId==="block.text")&&work.map(e=>Number(e.querySelector(`[data-agent-id="phone.summary.steps"]`)?.textContent.match(/\d+/)?.[0]||0)).join(",")==="0,4,2,1,1,1,1,1"&&work.every(e=>e.querySelector(`button`).getAttribute("aria-expanded")==="false")&&work.at(-1).querySelector(`[data-agent-id="phone.summary.failed"]`).textContent.includes("1 failed")&&!document.querySelector(`[data-agent-id="tool.fold-bash"]`)})()'
   if [ "$width" -le 900 ]; then wait_js 'document.querySelector(`[data-agent-id="status.hud"]`).getBoundingClientRect().height===44'; fi
   for theme in ${REVIEW_THEMES:-light dim dark}; do
     open_settings
@@ -175,7 +176,7 @@ if [ "${REVIEW_PHASE:-1}" -ge 2 ]; then
     "${B[@]}" eval '(()=>{const s=document.querySelector(`.sb`);s.scrollTop=s.scrollHeight;return true})()' >/dev/null
     capture "390-$theme-work-summary"
   done
-  "${B[@]}" eval '[...document.querySelectorAll(`[data-agent-id^="phone.work."]`)].at(-1).querySelector(`button`).click()' >/dev/null
+  "${B[@]}" eval '(()=>{const nodes=[...document.querySelector(`.sb-axis`).children],response=nodes.find(e=>e.dataset.agentId==="block.text"&&e.textContent.includes("Applying the compact activity presentation")),b=response.previousElementSibling.querySelector(`button`);if(b.getAttribute("aria-expanded")==="false")b.click();return true})()' >/dev/null
   for size in '390 844' '768 1024' '1280 900'; do
     read -r width height <<<"$size"
     "${B[@]}" set viewport "$width" "$height" >/dev/null
@@ -204,7 +205,9 @@ if [ "${REVIEW_PHASE:-1}" -ge 2 ]; then
   done
   "${B[@]}" set viewport 390 844 >/dev/null
   "${B[@]}" wait 250 >/dev/null
-  "${B[@]}" eval '(()=>{const b=[...document.querySelectorAll(`[data-agent-id^="phone.work."]`)].at(-1).querySelector(`button`);if(b.getAttribute("aria-expanded")==="false")b.click();return true})()' >/dev/null
+  "${B[@]}" eval '(()=>{const response=[...document.querySelector(`.sb-axis`).children].find(e=>e.dataset.agentId==="block.text"&&e.textContent.includes("Applying the compact activity presentation")),b=response.previousElementSibling.querySelector(`button`);if(b.getAttribute("aria-expanded")==="false")b.click();return true})()' >/dev/null
+  "${B[@]}" eval '(()=>{document.querySelector(`[data-agent-id="phone.tool.fold-diff"]`).scrollIntoView({block:"center"});return true})()' >/dev/null
+  "${B[@]}" wait 160 >/dev/null
   "${B[@]}" click '[data-agent-id="phone.tool.fold-diff"]' >/dev/null
   check 'document.querySelector(`[data-agent-id="diff.view"]`).classList.contains("expanded") && getComputedStyle(document.querySelector(`[data-agent-id="diff.view"]`)).maxHeight==="none"'
   "${B[@]}" click '[data-agent-id="diff.wrap"]' >/dev/null
@@ -212,4 +215,4 @@ if [ "${REVIEW_PHASE:-1}" -ge 2 ]; then
   capture '390-dark-diff'
   "${B[@]}" click '[data-agent-id="drawer.block.close"]' >/dev/null
 fi
-echo 'PHONE REVIEW PASSED: size/theme matrix, session state, controls, approvals, full-auto confirmation and keyboard viewport'
+echo 'PHONE REVIEW PASSED: size/theme matrix, ordered work phases, session state, controls, approvals, full-auto confirmation and keyboard viewport'

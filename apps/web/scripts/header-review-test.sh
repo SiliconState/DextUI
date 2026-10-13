@@ -169,7 +169,8 @@ wait_js 'window.__todoFetches===1'
 # Runtime forms supersede header sheets rather than sharing competing focus traps.
 "${B[@]}" click '[data-agent-id="status.ctx"]' >/dev/null
 "${B[@]}" eval 'window.__headerReview.requestForm()' >/dev/null
-wait_js '!!document.querySelector(`[data-agent-id="pack-ui.form"]`) && !document.querySelector(`[data-agent-id="status.context.overlay"]`)'
+# Dialog focus is assigned on the next animation frame, after mount/inert updates.
+wait_js '!!document.querySelector(`[data-agent-id="pack-ui.form"]`) && !document.querySelector(`[data-agent-id="status.context.overlay"]`) && document.querySelector(`[data-agent-id="pack-ui.form"]`).contains(document.activeElement) && document.querySelector(`.statusline`).inert && document.querySelector(`main`).inert'
 check 'document.querySelector(`[data-agent-id="pack-ui.form"]`).contains(document.activeElement) && document.querySelector(`.statusline`).inert && document.querySelector(`main`).inert'
 "${B[@]}" eval 'window.__headerReview.event("ui.resolved",{id:"streaming-form",status:"ok"})' >/dev/null
 wait_js '!document.querySelector(`[data-agent-id="pack-ui.form"]`) && !document.querySelector(`main`).inert'
@@ -345,6 +346,73 @@ capture '390-show-all-contained-tips'
 "${B[@]}" click '[data-agent-id="settings.open"]' >/dev/null
 "${B[@]}" click '[data-agent-id="tools.view.compact"]' >/dev/null
 "${B[@]}" press Escape >/dev/null
+# Mobile work phases close as soon as Dext starts streaming, not at turn end.
+"${B[@]}" set viewport 390 844 >/dev/null
+"${B[@]}" eval '(()=>{window.__headerReview.set("working",false);window.__headerReview.event("tool_call_result",{call_id:"fixture-tool",name:"bash",ok:true,content:"First phase complete"});return true})()' >/dev/null
+wait_js 'document.querySelector(`section[data-agent-id^="phone.work."]`)?.dataset.state==="working"'
+"${B[@]}" eval '(()=>{window.__phaseOne=document.querySelector(`section[data-agent-id^="phone.work."]`);const b=window.__phaseOne.querySelector(`button`);if(b.getAttribute("aria-expanded")==="false")b.click();window.__headerReview.event("text_delta","First check complete. ");return true})()' >/dev/null
+wait_js 'window.__phaseOne.dataset.state==="complete" && document.querySelector(`[data-agent-id="block.text"]`)?.textContent.includes("First check complete")'
+"${B[@]}" eval '(()=>{window.__headerReview.event("text_delta","Now applying the update.");window.__headerReview.event("tool_call_start",{call_id:"phase-two",name:"edit_file",summary:"Apply the mobile update"});return true})()' >/dev/null
+wait_js 'document.querySelectorAll(`section[data-agent-id^="phone.work."]`).length===2'
+check '(()=>{const w=[...document.querySelectorAll(`section[data-agent-id^="phone.work."]`)];return w[0]===window.__phaseOne&&w[0].isConnected&&w[0].dataset.state==="complete"&&w[1].dataset.state==="working"&&w[0].nextElementSibling.dataset.agentId==="block.text"&&w[0].nextElementSibling.nextElementSibling===w[1]&&w[0].querySelector(`button`).getAttribute("aria-expanded")==="true"&&w[1].querySelector(`button`).getAttribute("aria-expanded")==="false"&&w.every(e=>e.querySelector(`[data-agent-id="phone.summary.steps"]`).textContent.includes("1 step"))})()'
+"${B[@]}" eval '(()=>{const w=[...document.querySelectorAll(`section[data-agent-id^="phone.work."]`)];w[1].querySelector(`button`).click();w[0].querySelector(`button`).click();window.__headerReview.event("tool_call_result",{call_id:"phase-two",name:"edit_file",ok:true,content:"Updated"});window.__headerReview.event("text_delta","Mobile update complete.");return true})()' >/dev/null
+wait_js '[...document.querySelectorAll(`section[data-agent-id^="phone.work."]`)].every(e=>e.dataset.state==="complete")'
+check '(()=>{const w=[...document.querySelectorAll(`section[data-agent-id^="phone.work."]`)];return w[0].querySelector(`button`).getAttribute("aria-expanded")==="false"&&w[1].querySelector(`button`).getAttribute("aria-expanded")==="true"&&w[1].nextElementSibling.dataset.agentId==="block.text"&&document.querySelector(`[data-agent-id="transcript.root"]`).dataset.state==="working"})()'
+"${B[@]}" eval '(()=>{window.__headerReview.event("text_block_complete","Mobile update complete.");window.__headerReview.event("turn_end",{failed:false});return true})()' >/dev/null
+capture '390-work-response-work-response'
+# Desktop uses the existing rich transcript, with no phone work containers.
+"${B[@]}" set viewport 1280 844 >/dev/null
+wait_js '!document.querySelector(`section[data-agent-id^="phone.work."]`) && !!document.querySelector(`[data-agent-id="tool.fixture-tool"]`)'
+"${B[@]}" set viewport 390 844 >/dev/null
+wait_js 'document.querySelectorAll(`section[data-agent-id^="phone.work."]`).length===2'
+check '[...document.querySelectorAll(`section[data-agent-id^="phone.work."] > button`)].map(e=>e.getAttribute("aria-expanded")).join(",")==="false,true"'
+# Overlapping tools keep their own live/failure state after narration starts.
+"${B[@]}" eval '(()=>{window.__headerReview.set("working",false);window.__headerReview.event("text_delta","The first tool is still finishing.");return true})()' >/dev/null
+wait_js 'document.querySelector(`[data-agent-id="block.text"]`)?.textContent.includes("still finishing")'
+check 'document.querySelector(`section[data-agent-id^="phone.work."]`).dataset.state==="working"'
+"${B[@]}" eval '(()=>{window.__headerReview.event("tool_call_start",{call_id:"overlap-next",name:"edit_file",summary:"Continue updating"});return true})()' >/dev/null
+wait_js 'document.querySelectorAll(`section[data-agent-id^="phone.work."]`).length===2'
+check '[...document.querySelectorAll(`section[data-agent-id^="phone.work."]`)].every(e=>e.dataset.state==="working")'
+"${B[@]}" eval '(()=>{window.__headerReview.event("tool_call_result",{call_id:"fixture-tool",name:"bash",ok:false,content:"Earlier tool failed"});return true})()' >/dev/null
+wait_js '[...document.querySelectorAll(`section[data-agent-id^="phone.work."]`)].map(e=>e.dataset.state).join(",")==="failed,working"'
+"${B[@]}" eval '(()=>{window.__headerReview.event("tool_call_result",{call_id:"overlap-next",name:"edit_file",ok:true,content:"Updated"});window.__headerReview.event("text_block_complete","The update is ready.");window.__headerReview.event("warn","runtime guidance: review the missing evidence");window.__headerReview.event("turn_end",{failed:true});return true})()' >/dev/null
+wait_js '[...document.querySelectorAll(`section[data-agent-id^="phone.work."]`)].map(e=>e.dataset.state).join(",")==="failed,complete,complete"'
+"${B[@]}" click '[data-agent-id="status.session-state"]' >/dev/null
+wait_js 'document.activeElement?.matches(`section[data-agent-id^="phone.work."][data-state="failed"]`)'
+check '(()=>{const w=[...document.querySelectorAll(`section[data-agent-id^="phone.work."]`)];return w[0].querySelector(`button`).getAttribute("aria-expanded")==="true"&&w.slice(1).every(e=>e.querySelector(`button`).getAttribute("aria-expanded")==="false")})()'
+# A new failed turn without a work phase must not focus an older failed phase.
+"${B[@]}" eval '(()=>{window.__oldFailedPhase=document.querySelector(`section[data-agent-id^="phone.work."][data-state="failed"]`);window.__oldFailedPhase.querySelector(`button`).click();window.__headerReview.event("user_message",{text:"A separate request"});window.__headerReview.event("turn_start",{});window.__headerReview.event("turn_end",{failed:true});return true})()' >/dev/null
+wait_js 'document.querySelector(`[data-agent-id="status.session-state"] .state-label`).textContent==="Error" && [...document.querySelectorAll(`[data-agent-id="block.user"]`)].at(-1).textContent.includes("A separate request")'
+"${B[@]}" click '[data-agent-id="status.session-state"]' >/dev/null
+"${B[@]}" wait 180 >/dev/null
+check 'document.activeElement?.dataset.agentId==="status.session-state" && window.__oldFailedPhase.querySelector(`button`).getAttribute("aria-expanded")==="false"'
+# Error markers and active-tool navigation remain scoped to their own new turn.
+"${B[@]}" eval '(()=>{window.__headerReview.event("error","The separate request failed.");return true})()' >/dev/null
+"${B[@]}" click '[data-agent-id="status.session-state"]' >/dev/null
+wait_js 'document.activeElement?.textContent.includes("The separate request failed")'
+"${B[@]}" eval '(()=>{window.__headerReview.event("user_message",{text:"One more request"});window.__headerReview.event("turn_start",{});window.__headerReview.event("tool_call_start",{call_id:"navigation-current",name:"read_file",summary:"Check the current request"});return true})()' >/dev/null
+wait_js 'document.querySelector(`[data-agent-id="status.session-state"] .state-label`).textContent==="Active"'
+"${B[@]}" click '[data-agent-id="status.session-state"]' >/dev/null
+wait_js '!!document.querySelector(`[data-agent-id="phone.tool.navigation-current"]`)'
+check 'window.__oldFailedPhase.querySelector(`button`).getAttribute("aria-expanded")==="false"'
+# A failed batch that never starts stays reachable when recovery follows it.
+"${B[@]}" eval '(()=>{window.__headerReview.set("working",false);window.__headerReview.event("tool_call_result",{call_id:"fixture-tool",name:"bash",ok:true,content:"Checked"});window.__headerReview.event("text_block_complete","Running the requested batch.");window.__headerReview.event("tool_batch_start",{labels:["read_file: blocked.fixture"]});window.__headerReview.event("tool_batch_end",{failed:1});window.__headerReview.event("tool_call_start",{call_id:"batch-recovery",name:"read_file",summary:"Read recovery evidence"});window.__headerReview.event("tool_call_result",{call_id:"batch-recovery",name:"read_file",ok:true,content:"Recovered"});window.__headerReview.event("text_block_complete","Recovery checked.");window.__headerReview.event("turn_end",{failed:false});return true})()' >/dev/null
+wait_js 'document.querySelectorAll(`section[data-agent-id^="phone.work."]`).length===2 && [...document.querySelectorAll(`[data-agent-id="block.text"]`)].at(-1)?.textContent.includes("Recovery checked")'
+"${B[@]}" eval '(()=>{const b=[...document.querySelectorAll(`section[data-agent-id^="phone.work."] > button`)].at(-1);if(b.getAttribute("aria-expanded")==="false")b.click();return true})()' >/dev/null
+check 'document.querySelector(`[data-agent-id="block.marker.batch"]`)?.textContent.includes("blocked.fixture") && !!document.querySelector(`[data-agent-id="phone.tool.batch-recovery"]`)'
+# Terminal failure also labels an unfinished earlier tool behind a response.
+"${B[@]}" eval '(()=>{window.__headerReview.set("working",false);window.__headerReview.event("text_block_complete","The earlier tool is unfinished.");window.__headerReview.event("warn","runtime guidance: check remaining evidence");window.__headerReview.event("turn_end",{failed:true});return true})()' >/dev/null
+wait_js '[...document.querySelectorAll(`section[data-agent-id^="phone.work."]`)].map(e=>e.dataset.state).join(",")==="failed,complete" && document.querySelector(`[data-agent-id="block.text"]`)?.textContent.includes("unfinished")'
+"${B[@]}" click '[data-agent-id="status.session-state"]' >/dev/null
+wait_js 'document.activeElement?.matches(`section[data-agent-id^="phone.work."][data-state="failed"]`)'
+check 'document.querySelector(`[data-agent-id="phone.tool.fixture-tool"]`)?.dataset.state==="running" && [...document.querySelectorAll(`section[data-agent-id^="phone.work."] > button`)].at(-1).getAttribute("aria-expanded")==="false"'
+# Backend annotations prepend to live thinking; disclosure and DOM identity stay stable.
+"${B[@]}" eval '(()=>{window.__headerReview.set("working",false);window.__headerReview.event("tool_call_result",{call_id:"fixture-tool",name:"bash",ok:true,content:"Checked"});window.__headerReview.event("text_block_complete","Checking the next phase.");window.__headerReview.event("thinking_delta","Inspecting the next evidence.");return true})()' >/dev/null
+wait_js 'document.querySelectorAll(`section[data-agent-id^="phone.work."]`).length===2 && document.querySelector(`[data-agent-id="block.text"]`)?.textContent.includes("Checking the next phase")'
+"${B[@]}" eval '(()=>{window.__thinkingPhase=[...document.querySelectorAll(`section[data-agent-id^="phone.work."]`)].at(-1);window.__thinkingPhaseId=window.__thinkingPhase.dataset.agentId;window.__thinkingPhase.querySelector(`button`).click();window.__headerReview.event("warn","runtime guidance: preserve every phase");window.__headerReview.event("thinking_delta"," Keeping the same card open.");return true})()' >/dev/null
+wait_js 'window.__thinkingPhase.isConnected && window.__thinkingPhase.querySelector(`button`).getAttribute("aria-expanded")==="true" && window.__thinkingPhase.textContent.includes("preserve every phase")'
+check 'window.__thinkingPhase.dataset.agentId===window.__thinkingPhaseId && [...window.__thinkingPhase.querySelectorAll(`.row`)].map(e=>e.querySelector(`[data-agent-id]`).dataset.agentId).join(",")==="block.marker,block.thinking" && window.__thinkingPhase.dataset.state==="working"'
+"${B[@]}" eval '(()=>{window.__headerReview.event("thinking_preview_discarded",{});window.__headerReview.event("turn_end",{failed:false});return true})()' >/dev/null
 # Mobile history acceptance: realistic multi-turn prose, notices, code and tables.
 "${B[@]}" set viewport 390 844 >/dev/null
 "${B[@]}" eval 'window.__headerReview.history()' >/dev/null

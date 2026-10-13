@@ -1,19 +1,19 @@
 <script lang="ts">
-  // Phone-only work summary: one quiet disclosure per turn. Expanded rows wrap
+  // Phone-only work summary: one quiet disclosure per work phase. Expanded rows wrap
   // inside the card (no inner scrollbars, no sideways panning); full output,
   // command and raw JSON open in the full-screen ToolDetail on tap.
   import type { ViewBlock } from "@dextui/client";
   import Block from "./Block.svelte";
   import { humanizeTool } from "../lib/display";
   import { phoneWorkRows, phoneWorkCounts } from "../lib/phone-presentation";
-  let { blocks, working = false, failed = false, open, onToggle, onInspect, sessionId }: { blocks: ViewBlock[]; working?: boolean; failed?: boolean; open: boolean; onToggle: (open: boolean) => void; onInspect?: (block: ViewBlock) => void; sessionId: string } = $props();
+  let { id, blocks, working = false, failed = false, open, onToggle, onInspect, sessionId }: { id: number; blocks: ViewBlock[]; working?: boolean; failed?: boolean; open: boolean; onToggle: (open: boolean) => void; onInspect?: (block: ViewBlock) => void; sessionId: string } = $props();
   const counts = $derived(phoneWorkCounts(blocks));
   const manyOutcomes = $derived(1 + Number(counts.failed > 0) + Number(counts.running > 0) + Number(counts.pending > 0) > 2);
   const rows = $derived(phoneWorkRows(blocks));
   const guidanceOnly = $derived(rows.length > 0 && rows.every((row) => row.kind === "tip"));
   const summaryTitle = $derived(working ? "Working" : failed ? "Work failed" : guidanceOnly ? "Work guidance" : "Work details");
   const summaryLabel = $derived(`${summaryTitle}${counts.total ? ` · ${counts.total} ${counts.total === 1 ? "step" : "steps"} · ${counts.passed} passed${counts.failed ? ` · ${counts.failed} failed` : ""}${counts.running ? ` · ${counts.running} running` : ""}${counts.pending ? ` · ${counts.pending} pending` : ""}` : " · Runtime notes"}`);
-  // Very long turns show the newest rows first; earlier ones stay one tap away.
+  // Very long phases show the newest rows first; earlier ones stay one tap away.
   const LIMIT = 24;
   const KEEP = 16;
   let showAll = $state(false);
@@ -22,7 +22,7 @@
   const isShell = (name: string) => /^(bash|sh|shell)$/i.test(name);
 </script>
 
-<section class="work" data-agent-id={`phone.work.${blocks[0]?.id}`} data-state={working ? "working" : failed ? "failed" : "complete"}>
+<section class="work" data-agent-id={`phone.work.${id}`} data-state={working ? "working" : failed ? "failed" : "complete"}>
   <button class="summary" class:many-outcomes={manyOutcomes} aria-label={summaryLabel} aria-expanded={open} onclick={() => onToggle(!open)}>
     <span class="caret" class:open aria-hidden="true">›</span>
     <span class="summary-top">
