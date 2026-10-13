@@ -36,6 +36,10 @@ Useful flags: `--port` · `--token` · `--rotate-token` · `--dext` (auto-detect
 Pass host flags after `--` (`npm run serve -- --cwd=…`); without it npm treats
 them as its own settings. Only one host can use a state dir at a time: a second
 one exits with a message naming the running host, before touching any journal.
+State locking requires atomic hard-link support. Dead host locks are reclaimed;
+a killed process during the short lock-guard operation fails closed and reports
+the guard path. Only remove that guard after confirming no host is running or
+starting against the state dir.
 
 ## Highlights
 

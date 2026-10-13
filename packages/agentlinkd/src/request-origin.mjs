@@ -35,15 +35,15 @@ export function requestSite(req, extra = allowedOrigins()) {
   if (rawOrigin && rawOrigin !== "null") {
     try { origin = new URL(rawOrigin); } catch { return "cross"; }
   }
+  // Opaque and non-web origins cannot be made safe by fetch metadata.
+  if (rawOrigin === "null" || (origin && !["http:", "https:"].includes(origin.protocol))) return "cross";
   const allowed = origin && extra.has(origin.origin.toLowerCase());
   // The browser computed this relative to the real page origin, so it stays
   // correct behind proxies that rewrite Host. Trust it when present.
   if (site === "same-origin" || site === "none") return "same";
   if (site === "cross-site" || site === "same-site") return allowed ? "same" : "cross";
   // Older browsers without fetch metadata: fall back to comparing Origin.
-  if (rawOrigin === "null") return "cross";
-  if (!origin) return "native";
-  if (!["http:", "https:"].includes(origin.protocol)) return "cross";
+  if (!origin) return site ? "cross" : "native";
   if (allowed) return "same";
   const host = String(req.headers.host ?? "").toLowerCase();
   const fwd = forwardedHost(req);

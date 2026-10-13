@@ -139,10 +139,15 @@ if (!fs.existsSync(DEFAULT_CWD)) {
 if (!fs.statSync(DEFAULT_CWD).isDirectory()) {
   throw new Error(`--cwd is not a directory: ${DEFAULT_CWD}`);
 }
+const explicitToken = argValue("token", process.env.AGENTLINKD_TOKEN);
+if (explicitToken !== undefined && !explicitToken) throw new Error("pairing token must not be empty");
+if (explicitToken !== undefined && process.argv.includes("--rotate-token")) throw new Error("--rotate-token cannot be combined with --token or AGENTLINKD_TOKEN");
 // Only after every startup refusal above: from here on the host creates and
 // writes durable state, so a refused start must leave no state behind.
 fs.mkdirSync(STATE_DIR, { recursive: true, mode: 0o700 });
 if (!lstatChecked(STATE_DIR, "state dir")?.isDirectory()) throw new Error(`--state-dir is not a directory: ${STATE_DIR}`);
+const stateStat = fs.statSync(STATE_DIR);
+if (process.platform !== "win32" && stateStat.uid !== process.getuid()) throw new Error(`state dir is foreign-owned, refusing: ${STATE_DIR}`);
 // One host per state dir, claimed before the token, journals or index are
 // touched: a second host would interleave journal appends with duplicate seqs
 // and journal the first host's running turns as "lost".
@@ -153,6 +158,7 @@ try {
   console.error(`agentlinkd: ${err.message}`);
   process.exit(1);
 }
+if (process.platform !== "win32") fs.chmodSync(STATE_DIR, 0o700);
 const { token: TOKEN, source: TOKEN_SOURCE } = resolvePairingToken();
 if (!TOKEN) throw new Error("pairing token must not be empty");
 
@@ -927,8 +933,12 @@ function makeSession({ cwd, approval, seat, persist = true }) {
 function readSavedToken() {
   let fd;
   try {
-    // O_NOFOLLOW: never read a token through a planted symlink.
-    fd = fs.openSync(PAIRING_TOKEN_FILE, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
+    // Reject links and special files before open; O_NONBLOCK also prevents a
+    // swapped FIFO from hanging startup between lstat and fstat.
+    const stat = lstatChecked(PAIRING_TOKEN_FILE, "pairing token file");
+    if (!stat) return { missing: true };
+    if (!stat.isFile()) throw new Error(`pairing token path is not a regular file: ${PAIRING_TOKEN_FILE}`);
+    fd = fs.openSync(PAIRING_TOKEN_FILE, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0));
   } catch (err) {
     if (err.code === "ELOOP") throw new Error(`pairing token file is a symlink, refusing: ${PAIRING_TOKEN_FILE}`);
     if (err.code === "ENOENT") return { missing: true };
@@ -951,31 +961,31 @@ function resolvePairingToken() {
   if (process.env.AGENTLINKD_TOKEN !== undefined) return { token: process.env.AGENTLINKD_TOKEN, source: "AGENTLINKD_TOKEN" };
   const rotate = process.argv.includes("--rotate-token");
   // STATE_DIR is created, symlink-checked and locked by the caller.
-  let replace = rotate;
-  if (!rotate) {
-    const saved = readSavedToken();
-    if (saved.token) return { token: saved.token, source: "saved" };
-    if (saved.reason) { replace = true; console.error(`agentlinkd: ${saved.reason} pairing token file replaced with a new token`); }
-  }
+  // Rotation must reject the same unsafe paths as ordinary startup.
+  const saved = readSavedToken();
+  if (!rotate && saved.token) return { token: saved.token, source: "saved" };
+  const replace = rotate || !!saved.reason;
+  if (saved.reason) console.error(`agentlinkd: ${saved.reason} pairing token file replaced with a new token`);
   const token = crypto.randomBytes(9).toString("base64url");
   const tmp = `${PAIRING_TOKEN_FILE}.${process.pid}.${crypto.randomBytes(4).toString("hex")}.tmp`;
   try {
     fs.writeFileSync(tmp, `${token}\n`, { mode: 0o600, flag: "wx" });
     if (replace) fs.renameSync(tmp, PAIRING_TOKEN_FILE); // atomic replace of a bad or rotated file
     else {
-      // First start: create without replacing. If a concurrent start won the
-      // race, adopt its token so both hosts agree with the file on disk.
+      // First start: publish without replacing an existing path. The state
+      // lock serializes hosts; unexpected external replacements fail closed.
       try { fs.linkSync(tmp, PAIRING_TOKEN_FILE); }
       catch (err) {
         if (err.code !== "EEXIST") throw err;
         const winner = readSavedToken();
         if (winner.token) return { token: winner.token, source: "saved" };
-        throw err;
+        throw Object.assign(new Error("pairing token path changed during startup; refusing"), { code: "EUNSAFETOKEN" });
       } finally { fs.rmSync(tmp, { force: true }); }
     }
     return { token, source: rotate ? "rotated" : "new" };
   } catch (err) {
     try { fs.rmSync(tmp, { force: true }); } catch { /* best effort */ }
+    if (replace || ["EUNSAFETOKEN", "ELOOP"].includes(err.code) || /symlink|not a regular file/.test(err.message)) throw err;
     console.error(`agentlinkd: could not save the pairing token (${err.code ?? err.message}); this token lasts until the host stops`);
     return { token, source: "ephemeral" };
   }
@@ -4378,6 +4388,11 @@ async function handleHttp(req, res) {
     return;
   }
   if (pathName.startsWith("/hooks/")) {
+    if (requestSite(req) === "cross") {
+      res.writeHead(403, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "cross_site" }));
+      return;
+    }
     // Webhook trigger: POST /hooks/<token>. The token is derived from the
     // pairing token + workspace + flow name (HMAC), so it is unguessable and
     // never stored; no bearer needed (the token *is* the credential).

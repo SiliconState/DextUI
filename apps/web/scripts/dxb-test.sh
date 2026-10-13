@@ -1,10 +1,26 @@
 #!/usr/bin/env bash
-# Source from a gate; the driver/browser are owned by this shell and never persist.
+# Source from a gate; each backend owns an isolated browser and cleans it up.
+# Prefer installed dxb; retain the installed agent-browser backend on hosts that
+# do not have that user-global pack. Neither backend is downloaded or skipped.
 DXB_TEST_DRIVER="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/dxb-test.mjs"
 DXB_TEST_PACK="${DEXT_PACK_DXB_DIR:-$HOME/.dext/shelves/automation/packs/dxb}"
 if [ ! -f "$DXB_TEST_PACK/src/session.mjs" ] || [ ! -f "$DXB_TEST_PACK/src/commands.mjs" ]; then
-  echo 'FAIL: installed dxb pack required; browser gates do not skip or download an engine' >&2
-  exit 1
+  if ! command -v agent-browser >/dev/null 2>&1; then
+    echo 'FAIL: installed dxb or agent-browser required; browser gates never skip or download an engine' >&2
+    exit 1
+  fi
+  DXB_TEST_SESSION="dextui-gate-$$-$RANDOM"
+  dxb_test_cleanup() { agent-browser --session "$DXB_TEST_SESSION" close >/dev/null 2>&1 || true; }
+  dxb_test() {
+    if [ "${1:-}" = reset ] || [ "${1:-}" = close ]; then
+      dxb_test_cleanup
+      return 0
+    fi
+    agent-browser --session "$DXB_TEST_SESSION" "$@"
+  }
+  trap dxb_test_cleanup EXIT
+  B=(dxb_test)
+  return 0
 fi
 DXB_TEST_DIR=$(mktemp -d "${TMPDIR:-/tmp}/dt.XXXXXX")
 export DXB_TEST_SOCKET="$DXB_TEST_DIR/b.sock"

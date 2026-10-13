@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Isolated file-based docs regression gate; no host or external service needed.
-# Installed dxb is required; a missing browser driver fails instead of skipping.
+# Installed dxb or agent-browser is required; missing drivers fail, never skip.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 source apps/web/scripts/dxb-test.sh

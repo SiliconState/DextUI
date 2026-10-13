@@ -74,7 +74,7 @@ cd ../.. && npm test
 cd apps/web && npm run build
 ```
 
-Root `npm run typecheck` and `npm run build` also check/build all workspaces. `npm run smoke:browser` runs the browser gates separately. They drive an installed Chromium-family browser through the dxb test pack (`DEXT_PACK_DXB_DIR`, default `~/.dext/shelves/automation/packs/dxb`). If dxb is missing, the gates fail instead of skipping. dxb is a test-only dependency; the app and host never load it.
+Root `npm run typecheck` and `npm run build` also check/build all workspaces. `npm run smoke:browser` runs the browser gates separately. They drive an installed Chromium-family browser through the dxb test pack (`DEXT_PACK_DXB_DIR`, default `~/.dext/shelves/automation/packs/dxb`), or an isolated `agent-browser` session if dxb is absent. If neither driver is installed, the gates fail instead of skipping. Both are test-only dependencies; the app and host never load them.
 
 The browser suite builds a uniquely named, isolated `apps/web/dist.staging.*` copy and runs a loopback mock host. It checks:
 

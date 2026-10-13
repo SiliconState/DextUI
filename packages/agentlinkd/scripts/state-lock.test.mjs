@@ -6,9 +6,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import http from "node:http";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
-import { acquireStateLock, processStarted, LOCK_NAME } from "../src/state-lock.mjs";
+import { acquireStateLock, processStarted, LOCK_NAME, GUARD_NAME } from "../src/state-lock.mjs";
 
 const root = path.resolve("packages/agentlinkd");
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -43,6 +43,7 @@ test("state lock: live holder refuses, dead or recycled holder is replaced, unsa
   fs.writeFileSync(file, JSON.stringify({ pid: holder.pid, started: "Thu Jan 1 00:00:00 1970", nonce: "recycled" }), { mode: 0o600 });
   const logs = [];
   const recycled = acquireStateLock({ stateDir: state, port: 2, log: (m) => logs.push(m) });
+  assert.throws(() => acquireStateLock({ stateDir: state, port: 9 }), (err) => err.code === "ELOCKED", "Even the same process cannot own two host locks");
   assert.equal(JSON.parse(fs.readFileSync(file, "utf8")).pid, process.pid);
   assert.match(logs.join("\n"), /removed stale state lock/);
   recycled.release();
@@ -67,7 +68,53 @@ test("state lock: live holder refuses, dead or recycled holder is replaced, unsa
   fs.symlinkSync(outside, file);
   assert.throws(() => acquireStateLock({ stateDir: state, port: 5 }), /symlink, refusing/);
   assert.equal(fs.readFileSync(outside, "utf8"), "keep");
-  assert.equal(fs.readdirSync(state).filter((n) => n.includes(".tmp") || n.includes(".stale.")).length, 0, "no temporary files left behind");
+  assert.equal(fs.readdirSync(state).filter((n) => n.includes(".tmp") || n.includes(".stale.") || n === GUARD_NAME).length, 0, "no temporary files left behind");
+});
+
+test("state lock: stale guard and unsupported hard links fail closed", (t) => {
+  const state = path.join(tempRoot(t), "state");
+  const guard = path.join(state, GUARD_NAME);
+  fs.writeFileSync(guard, "malformed interrupted guard", { mode: 0o600 });
+  assert.throws(() => acquireStateLock({ stateDir: state, port: 0 }), /stale state-lock guard/);
+  assert.equal(fs.readFileSync(guard, "utf8"), "malformed interrupted guard");
+  fs.rmSync(guard);
+  t.mock.method(fs, "linkSync", () => { throw Object.assign(new Error("hard links unavailable"), { code: "ENOTSUP" }); });
+  assert.throws(() => acquireStateLock({ stateDir: state, port: 0 }), (err) => err.code === "ENOTSUP");
+  assert.deepEqual(fs.readdirSync(state), [], "Never publish an empty fallback record");
+});
+
+test("state lock: directories and FIFOs cannot hang acquisition", { skip: process.platform === "win32" }, (t) => {
+  const state = path.join(tempRoot(t), "state");
+  const file = path.join(state, LOCK_NAME);
+  fs.mkdirSync(file);
+  assert.throws(() => acquireStateLock({ stateDir: state, port: 0 }), /not a regular file/);
+  fs.rmdirSync(file);
+  assert.equal(spawnSync("mkfifo", [file]).status, 0);
+  assert.throws(() => acquireStateLock({ stateDir: state, port: 0 }), /not a regular file/);
+});
+
+test("simultaneous stale-lock claimants never acquire two host locks", { timeout: 30000 }, async (t) => {
+  const state = path.join(tempRoot(t), "state");
+  fs.writeFileSync(path.join(state, LOCK_NAME), "stale", { mode: 0o600 });
+  const module = new URL("../src/state-lock.mjs", import.meta.url).href;
+  const script = `import { acquireStateLock } from ${JSON.stringify(module)};
+    process.once('message', () => {
+      try { const lock = acquireStateLock({ stateDir: process.argv[1], port: 0 }); process.send('acquired'); process.once('message', () => { lock.release(); process.exit(0); }); }
+      catch (err) { process.send(err.code === 'ELOCKED' ? 'blocked' : 'error:' + err.message); process.exit(0); }
+    }); process.send('ready');`;
+  const children = Array.from({ length: 8 }, () => spawn(process.execPath, ["--input-type=module", "--eval", script, state], { stdio: ["ignore", "ignore", "pipe", "ipc"] }));
+  t.after(async () => { await Promise.all(children.map(async (child) => { if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL"); await exited(child); })); });
+  await Promise.all(children.map(async (child) => assert.deepEqual(await once(child, "message"), ["ready", undefined])));
+  const replies = children.map((child) => once(child, "message"));
+  for (const child of children) child.send("start");
+  const results = (await Promise.all(replies)).map(([value]) => value);
+  assert.equal(results.filter((value) => value === "acquired").length, 1, results.join(","));
+  assert.equal(results.filter((value) => value === "blocked").length, 7, results.join(","));
+  const winner = children[results.indexOf("acquired")];
+  assert.equal(JSON.parse(fs.readFileSync(path.join(state, LOCK_NAME), "utf8")).pid, winner.pid);
+  winner.send("release");
+  await Promise.all(children.map(exited));
+  assert.deepEqual(fs.readdirSync(state), []);
 });
 
 async function startHost(t, dir, port = 0, extra = []) {

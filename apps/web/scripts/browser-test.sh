@@ -1,5 +1,5 @@
 set -uo pipefail
-# Full browser gate: installed dxb is required; missing prerequisites fail closed.
+# Browser gate: installed dxb or agent-browser required; missing drivers fail.
 cd "$(dirname "$0")/../../.."
 source apps/web/scripts/dxb-test.sh
 PORT="${PORT:-8793}"

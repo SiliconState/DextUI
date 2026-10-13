@@ -7,7 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import net from "node:net";
 import http from "node:http";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
 import { requestSite, allowedOrigins } from "../src/request-origin.mjs";
 
@@ -30,6 +30,9 @@ test("request provenance: fetch metadata first, Origin fallback, native clients 
   assert.equal(requestSite(req({ origin: "https://dext.example.test", "x-forwarded-host": "dext.example.test, inner" }), none), "same");
   assert.equal(requestSite(req({ origin: "https://evil.test" }), none), "cross");
   assert.equal(requestSite(req({ origin: "null" }), none), "cross", "sandboxed/opaque documents");
+  assert.equal(requestSite(req({ origin: "null", "sec-fetch-site": "same-origin" }), none), "cross");
+  assert.equal(requestSite(req({ origin: "chrome-extension://abc", "sec-fetch-site": "none" }), none), "cross");
+  assert.equal(requestSite(req({ "sec-fetch-site": "unexpected" }), none), "cross");
   assert.equal(requestSite(req({ origin: "chrome-extension://abc" }), none), "cross");
   assert.equal(requestSite(req({ origin: "not a url" }), none), "cross");
   const extra = allowedOrigins({ AGENTLINKD_ALLOWED_ORIGINS: " https://Dext.Example.com/ , https://other.test" });
@@ -114,14 +117,25 @@ test("unsafe saved tokens are never reused: symlinks refused, shared or malforme
   assert.equal(linked.base, undefined, "host refuses to start on a symlinked token file");
   assert.match(linked.stderr(), /symlink, refusing/);
   assert.equal(fs.readFileSync(outside, "utf8"), "planted-token-value-123\n", "symlink target untouched");
+  const rotatedLink = await startHost(t, dir, ["--rotate-token"]);
+  assert.equal(rotatedLink.base, undefined, "rotation also refuses symlinks");
+  assert.match(rotatedLink.stderr(), /symlink, refusing/);
+  assert.ok(fs.lstatSync(tokenFile(dir)).isSymbolicLink());
   fs.rmSync(tokenFile(dir));
+  fs.mkdirSync(tokenFile(dir));
+  const directory = await startHost(t, dir, ["--rotate-token"]);
+  assert.equal(directory.base, undefined, "rotation cannot fall back to ephemeral auth on an unsafe path");
+  assert.match(directory.stderr(), /not a regular file/);
+  fs.rmdirSync(tokenFile(dir));
 
+  fs.chmodSync(path.join(dir, "state"), 0o755);
   fs.writeFileSync(tokenFile(dir), "leaked-shared-token-value\n", { mode: 0o644 });
   fs.chmodSync(tokenFile(dir), 0o644);
   const shared = await startHost(t, dir);
   assert.ok(shared.token && shared.token !== "leaked-shared-token-value", "a group/world-readable token may have leaked");
   assert.match(shared.stderr(), /group\/other-accessible/);
   assert.equal(fs.statSync(tokenFile(dir)).mode & 0o777, 0o600);
+  assert.equal(fs.statSync(path.join(dir, "state")).mode & 0o777, 0o700);
   await shared.stop();
 
   fs.writeFileSync(tokenFile(dir), "bad token with spaces\n", { mode: 0o600 });
@@ -129,6 +143,25 @@ test("unsafe saved tokens are never reused: symlinks refused, shared or malforme
   assert.ok(malformed.token && malformed.token !== "bad");
   assert.match(malformed.stderr(), /malformed pairing token file replaced/);
   await malformed.stop();
+});
+
+test("conflicting pairing configuration refuses before creating state", async (t) => {
+  const dir = tempRoot(t);
+  for (const args of [["--token="], ["--token=fixture-explicit", "--rotate-token"]]) {
+    const host = await startHost(t, dir, args);
+    assert.equal(host.base, undefined);
+    assert.equal(fs.existsSync(path.join(dir, "state")), false);
+    assert.match(host.stderr(), /pairing token must not be empty|cannot be combined/);
+  }
+});
+
+test("pairing-token FIFOs refuse promptly instead of blocking startup", { skip: process.platform === "win32" }, async (t) => {
+  const dir = tempRoot(t);
+  fs.mkdirSync(path.join(dir, "state"), { mode: 0o700 });
+  assert.equal(spawnSync("mkfifo", [tokenFile(dir)]).status, 0);
+  const host = await startHost(t, dir);
+  assert.equal(host.base, undefined);
+  assert.match(host.stderr(), /not a regular file/);
 });
 
 function rawRequest(base, { method = "GET", path: p = "/", headers = {} }) {
@@ -177,7 +210,7 @@ test("cross-site pages cannot reach token checks, probe the token, or lock the o
     assert.equal(await rawRequest(h.base, { path: "/sessions", headers: { authorization: "Bearer guess", origin: "https://evil.test", "sec-fetch-site": "cross-site" } }), 403);
     assert.equal(await rawRequest(h.base, { path: `/sessions/x/file/a.png?t=guess${i}`, headers: { "sec-fetch-site": "cross-site", "sec-fetch-dest": "image" } }), 403);
   }
-  for (let i = 0; i < 6; i++) assert.equal(await rawRequest(h.base, { method: "POST", path: `/hooks/${"a".repeat(31)}${i}`, headers: { origin: "https://evil.test", "sec-fetch-site": "cross-site" } }), 404);
+  for (let i = 0; i < 6; i++) assert.equal(await rawRequest(h.base, { method: "POST", path: `/hooks/${"a".repeat(31)}${i}`, headers: { origin: "https://evil.test", "sec-fetch-site": "cross-site" } }), 403);
   // None of that counted: the operator still signs in from the app's own origin.
   assert.equal((await hello(h.base, "operator-fixture-token")).event, "hello_ok");
   assert.match(await rawUpgrade(h.base, { Origin: `http://127.0.0.1:${port}`, "Sec-Fetch-Site": "same-origin" }), /^HTTP\/1\.1 101/);

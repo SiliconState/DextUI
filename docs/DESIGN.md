@@ -165,7 +165,7 @@ It uses isolated temporary state and a loopback mock provider to exercise real c
 
 ### Replaying a chart report without a model
 
-`npm test` includes chart geometry/validation tests and real-browser drag, cross-highlight, clipping and responsive-layout checks (the browser gate requires the installed dxb test pack and fails rather than skipping if it is unavailable). To replay a report directly:
+`npm test` includes chart geometry/validation tests and real-browser drag, cross-highlight, clipping and responsive-layout checks (the browser gate requires installed dxb or agent-browser and fails rather than skipping if neither is available). To replay a report directly:
 
 ```sh
 REPORT_FILE=/absolute/report.md REPORT_CHARTS=10 SCREENSHOT_DIR=/tmp/report-shots \
