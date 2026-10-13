@@ -85,6 +85,7 @@
     | { kind: "pan"; px: number; i0: number; w: number; moved: number }
     | { kind: "brush"; a: number; moved: number };
   let gesture = $state<Gesture | null>(null);
+  let gestureStart = { x: 0, y: 0 };
 
   const vals = (s: number): number[] => edit[s] ?? seriesAll[s]!.values;
   const visible = $derived(seriesAll.map((_, s) => s).filter((s) => !hidden.has(s)));
@@ -138,6 +139,7 @@
 
   const begin = (e: PointerEvent, g: Gesture) => {
     e.stopPropagation();
+    gestureStart = { x: e.clientX, y: e.clientY };
     gesture = g;
     hoverI = -1;
     tip = { ...tip, on: false };
@@ -156,7 +158,10 @@
       if (host) tip = { x: e.clientX - host.left, y: e.clientY - host.top, on: hoverI >= 0 };
       return;
     }
-    g.moved++;
+    // Coalesced pointer events can cover a large drag in one event. Measure
+    // distance, not event count, so that drag never becomes a selection click.
+    g.moved = Math.max(g.moved, Math.hypot(e.clientX - gestureStart.x, e.clientY - gestureStart.y));
+    if (g.moved < 3) return;
     const p = toSvg(e);
     if (g.kind === "drag") {
       if (g.ax === "x") setVal(g.s, g.i, hbarValueAtDom(p.x, g.dom));

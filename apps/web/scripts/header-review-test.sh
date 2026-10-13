@@ -2,27 +2,32 @@
 # Adversarial header/state matrix, with no live host or provider mutations.
 set -euo pipefail
 cd "$(dirname "$0")/../../.."
-if ! command -v agent-browser >/dev/null 2>&1; then echo 'SKIP: agent-browser unavailable; header matrix not run'; exit 0; fi
+source apps/web/scripts/dxb-test.sh
 PORT=${PORT:-8796}
-OUT=apps/web/dist.header-review
+OUT=$(mktemp -d apps/web/dist.staging.header-review.XXXXXX)
 TMP=$(mktemp -d)
-B=(agent-browser --session dext-header-review)
 SRV=''
-cleanup() { "${B[@]}" close >/dev/null 2>&1 || true; [ -z "$SRV" ] || kill "$SRV" 2>/dev/null || true; rm -rf "$TMP" "$OUT"; }
+cleanup() { "${B[@]}" close >/dev/null 2>&1 || true; if [ -n "$SRV" ]; then kill "$SRV" 2>/dev/null || true; wait "$SRV" 2>/dev/null || true; fi; rm -rf "$TMP" "$OUT"; }
 trap cleanup EXIT
 [ -z "${SCREENSHOTS:-}" ] || mkdir -p "$SCREENSHOTS"
 capture() { [ -z "${SCREENSHOTS:-}" ] || "${B[@]}" screenshot "$SCREENSHOTS/$1.png" >/dev/null; }
 wait_js() { if ! "${B[@]}" wait --fn "$1" >/dev/null; then echo "FAIL waiting: $1"; "${B[@]}" snapshot; "${B[@]}" eval '({focus:document.activeElement?.dataset.agentId,tag:document.activeElement?.tagName,mainInert:document.querySelector(`main`)?.inert,diff:!!document.querySelector(`[data-agent-id="diff.overlay"]`),launch:[...document.querySelectorAll(`[data-agent-id="diff.open"]`)].map(e=>({connected:e.isConnected,inert:!!e.closest(`[inert]`),rects:e.getClientRects().length,visibility:getComputedStyle(e).visibility,display:getComputedStyle(e).display,top:e.getBoundingClientRect().top})),history:document.querySelector(`.sb`)?.scrollTop})'; capture failure; exit 1; fi; }
 check() { local out; out=$("${B[@]}" eval "$1"); if [ "$out" != true ]; then echo "FAIL: $1"; echo "$out"; "${B[@]}" eval 'JSON.stringify({failures:window.__fitFailures,width:innerWidth,work:{summaries:[...document.querySelectorAll(`section[data-agent-id^="phone.work."] > button`)].map(e=>({label:e.getAttribute("aria-label"),text:e.textContent,state:e.parentElement.dataset.state})),steps:document.querySelectorAll(`section[data-agent-id^="phone.work."] .step`).length,tips:[...document.querySelectorAll(`[data-agent-id="phone.work.tip"]`)].map(e=>e.textContent),markers:[...document.querySelectorAll(`.b-marker`)].map(e=>e.textContent)},popup:(()=>{const p=document.querySelector(`[data-agent-id="session.controls.overlay"]`);return p?{height:p.getBoundingClientRect().height,width:p.getBoundingClientRect().width,text:p.textContent,sections:[...p.querySelectorAll(`.sec`)].map(e=>[e.textContent,e.getBoundingClientRect().height])}:null})(),header:(()=>{const h=document.querySelector(`[data-agent-id="status.hud"]`),t=h.querySelector(`.session-name`);return {height:h.getBoundingClientRect().height,scroll:h.scrollWidth,client:h.clientWidth,titleWidth:t.clientWidth,titleScroll:t.scrollWidth,buttons:[...h.querySelectorAll(`:scope > button`)].map(x=>[x.dataset.agentId,x.getBoundingClientRect().height,x.getBoundingClientRect().width,getComputedStyle(x).fontSize,x.querySelector(`.pill-label`)?{font:getComputedStyle(x.querySelector(`.pill-label`)).fontSize,padding:getComputedStyle(x.querySelector(`.pill-label`)).padding}:null])}})()})' || true; capture failure; exit 1; fi; }
-(cd apps/web && npm exec -- vite build --config scripts/header-review.vite.ts >"$TMP/build.log" 2>&1) || { cat "$TMP/build.log"; exit 1; }
+(cd apps/web && npm exec -- vite build --config scripts/header-review.vite.ts --outDir "${OUT#apps/web/}" --minify false >"$TMP/build.log" 2>&1) || { cat "$TMP/build.log"; exit 1; }
 node packages/mock-server/src/server.mjs --port="$PORT" --static="$OUT" >"$TMP/server.log" 2>&1 &
 SRV=$!
 sleep 1
+fresh_browser() {
+"${B[@]}" reset >/dev/null
 "${B[@]}" open "http://127.0.0.1:$PORT" >/dev/null
 wait_js '!!window.__headerReview && !!document.querySelector(`[data-agent-id="status.hud"]`)'
 "${B[@]}" eval '(()=>{window.__fits=selector=>{const roots=[...document.querySelectorAll(selector)];window.__fitFailures=[];for(const root of roots){const r=root.getBoundingClientRect();for(const child of root.querySelectorAll(`button,input,select,.session-name,.subtitle,.full-auto,.cell-value,.art,.tabs,.search,.appr-actions`)){const c=child.getBoundingClientRect();if(!c.width||!c.height)continue;if(c.left<r.left-1||c.right>r.right+1)window.__fitFailures.push({root:selector,id:child.dataset.agentId,tag:child.tagName,left:c.left,right:c.right,rootLeft:r.left,rootRight:r.right});}}return roots.length>0&&window.__fitFailures.length===0};return true})()' >/dev/null
+}
 COUNT=0
+phase_matrix() {
 for width in ${HEADER_WIDTHS:-320 360 375 390 499 501 768 1280}; do
+  echo "HEADER: matrix width $width"
+  fresh_browser
   "${B[@]}" set viewport "$width" 844 >/dev/null
   "${B[@]}" wait 220 >/dev/null
   for theme in ${HEADER_THEMES:-light dim dark}; do
@@ -114,6 +119,8 @@ for width in ${HEADER_WIDTHS:-320 360 375 390 499 501 768 1280}; do
     "${B[@]}" click '[data-agent-id="folders.close"]' >/dev/null
   fi
  done
+}
+phase_interactions() {
 # Stream updates must not reset overlays, confirmation, drafts, or todo refresh.
 "${B[@]}" set viewport 390 844 >/dev/null
 "${B[@]}" eval 'window.__headerReview.set("done",false)' >/dev/null
@@ -392,6 +399,8 @@ wait_js '!!document.querySelector(`[data-agent-id="artifact.overlay"]`)'
 check '!document.querySelector(`[data-agent-id="artifact.state.status"]`)'
 "${B[@]}" click '[data-agent-id="artifact.back"]' >/dev/null
 "${B[@]}" eval '(()=>{navigator.share=window.__savedShare;navigator.canShare=window.__savedCanShare;window.__headerReview.set("done",false);return true})()' >/dev/null
+}
+phase_models() {
 # Model/effort alternatives must remain one line at readable, uniform type.
 for width in 320 375 430; do
   "${B[@]}" set viewport "$width" 812 >/dev/null
@@ -408,6 +417,8 @@ for width in 320 375 430; do
   "${B[@]}" eval 'window.__headerReview.model("claude-opus-4-6","high")' >/dev/null
   capture "$width-inline-model-active"
 done
+}
+phase_surfaces() {
 # Edge-to-edge page surfaces and actual model/effort/context labels.
 for width in 320 375; do
   "${B[@]}" set viewport "$width" 812 >/dev/null
@@ -461,6 +472,8 @@ for width in 320 375; do
     "${B[@]}" eval '(()=>{for(const n of ["--safe-top","--safe-bottom"])document.documentElement.style.removeProperty(n);return true})()' >/dev/null
   done
 done
+}
+phase_viewports() {
 "${B[@]}" set viewport 375 812 >/dev/null
 "${B[@]}" eval '(()=>{window.__viewportHeightDesc=Object.getOwnPropertyDescriptor(visualViewport,"height");window.__viewportTopDesc=Object.getOwnPropertyDescriptor(visualViewport,"offsetTop");document.documentElement.style.setProperty("--safe-top","47px");Object.defineProperties(visualViewport,{height:{value:500,configurable:true},offsetTop:{value:24,configurable:true}});visualViewport.dispatchEvent(new Event("resize"));visualViewport.dispatchEvent(new Event("scroll"));return true})()' >/dev/null
 wait_js 'document.querySelector(`[data-agent-id="app.root"]`).getBoundingClientRect().top===24 && document.querySelector(`[data-agent-id="app.root"]`).getBoundingClientRect().height===500'
@@ -523,4 +536,13 @@ capture '390-keyboard-workspace'
 wait_js '!!document.querySelector(`[data-agent-id="todos.overlay"]`)'
 check '(()=>{const p=document.querySelector(`[data-agent-id="todos.overlay"]`),r=p.getBoundingClientRect();return r.top>=0&&r.bottom<=320&&window.__fits(`[data-agent-id="todos.overlay"]`)})()'
 capture '390-keyboard-todos'
-echo "HEADER REVIEW PASSED: $COUNT width/theme/state/permission combinations; long content, state actions, focus, disclosure persistence and keyboard checks"
+}
+# Independent fresh-browser phases bound test lifetime without dropping assertions.
+for phase in ${HEADER_PHASES:-matrix interactions models surfaces viewports}; do
+  case "$phase" in matrix|interactions|models|surfaces|viewports) ;; *) echo "Unknown header phase: $phase"; exit 1;; esac
+  echo "HEADER: phase $phase"
+  [ "$phase" = matrix ] || fresh_browser
+  "phase_$phase"
+  echo "HEADER: phase $phase passed"
+done
+echo "HEADER REVIEW PASSED: $COUNT width/theme/state/permission combinations; phases ${HEADER_PHASES:-matrix interactions models surfaces viewports}"

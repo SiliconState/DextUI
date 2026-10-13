@@ -124,8 +124,26 @@ function offerReload(why: string): void {
   }
 }
 
-function busyLabel(b: HostRestartEvent["busy"]): string[] {
-  return (b ?? []).map((x) => (x.kind === "turn" ? `turn: ${x.title ?? x.session ?? ""}` : x.kind === "crew" ? `crew ${x.run?.slice(0, 8) ?? ""}` : x.kind));
+// Readable wording for what a queued restart is waiting on. Unknown kinds from
+// a newer host fall back to the raw value rather than disappearing.
+const BUSY_WORDS: Record<string, string> = {
+  setting: "a background-summary setting change",
+  cleanup: "a session cleanup",
+  fork: "a session fork",
+  management: "a session change",
+  compact: "context compaction",
+  background: "a background summary",
+  flow: "a flow launch",
+  provider_auth: "a provider sign-in",
+  provider_refresh: "a provider list refresh",
+};
+export function busyLabel(b: HostRestartEvent["busy"]): string[] {
+  return (b ?? []).map((x) => {
+    if (x.kind === "turn") return `the turn in ${x.title || x.session || "a session"}`;
+    if (x.kind === "crew") return `crew run ${x.run?.slice(0, 8) ?? ""}`.trim();
+    if (x.kind === "compact" || x.kind === "background" || x.kind === "fork") return `${BUSY_WORDS[x.kind]}${x.title ? ` in ${x.title}` : ""}`;
+    return BUSY_WORDS[x.kind] ?? x.kind;
+  });
 }
 
 /** Control-plane tap (wired from state.svelte.ts). */

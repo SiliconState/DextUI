@@ -44,6 +44,8 @@ Tool **Details** opens Output / Command / Raw views, full-screen below 900px and
 
 Phone inline diffs reduce to file names and addition/deletion counts; Open diff shows a viewport-height viewer with a wrap control. Tool-detail diffs share the same renderer without a nested vertical scroll box. Report cards become prominent phone launchers. Below 900px the report viewer is full-screen with Back, Share and an overflow menu for code, download and state actions. Share sends a local HTML file when supported, otherwise downloads a copy; it does not share a host access URL. Desktop retains its wide report panel and visible toolbar. Report content generation is unchanged.
 
+Report themes update in place: switching light/dark/dim no longer reloads the report or discards its unsaved controls. This applies to the desktop web app and phone/PWA alike. Phone Back/Share/More and the existing sandbox remain intact.
+
 ## Mermaid diagrams
 
 DextUI renders closed `mermaid` fences as themed SVG images. This lives entirely in the browser: Dext, agentlinkd and the event protocol are unchanged. Flowcharts (including subgraphs), sequences and state diagrams are covered by the browser gate. Invalid, incomplete, over-budget or disabled syntax keeps the exact source with a concise notice; Source and Copy remain available.
@@ -72,9 +74,9 @@ cd ../.. && npm test
 cd apps/web && npm run build
 ```
 
-Root `npm run typecheck` and `npm run build` also check/build all workspaces. `npm run smoke:browser` runs the browser gates separately. Browser tests visibly skip when `agent-browser` is absent; a skipped gate is not a browser pass.
+Root `npm run typecheck` and `npm run build` also check/build all workspaces. `npm run smoke:browser` runs the browser gates separately. They drive an installed Chromium-family browser through the dxb test pack (`DEXT_PACK_DXB_DIR`, default `~/.dext/shelves/automation/packs/dxb`), or an isolated `agent-browser` session if dxb is absent. If neither driver is installed, the gates fail instead of skipping. Both are test-only dependencies; the app and host never load them.
 
-The browser suite builds an isolated `apps/web/dist.smoke` and runs a loopback mock host. It checks:
+The browser suite builds a uniquely named, isolated `apps/web/dist.staging.*` copy and runs a loopback mock host. It checks:
 
 - Layout at 320x640, 375x667, 390x844, 430x932, 600x800 and 900x700, with desktop restoration afterward.
 - Unified bar width, non-pill input, 44px controls, short placeholders, bounded composer height and no document-level horizontal overflow.
@@ -83,7 +85,7 @@ The browser suite builds an isolated `apps/web/dist.smoke` and runs a loopback m
 - Touch Return, Send/Queue delivery, preserved input focus and Stop.
 - Quiet Todos access through Finder, open-menu breakpoint changes, and simulated software-keyboard viewport resizing/panning.
 
-The phone review gate additionally checks 390x844, 768x1024 and 1280x900 in light, dim and dark: shared header placement, controls, full-auto confirmation, approvals, report overflow/code/back, tool tabs/search/raw, wrap toggling and simulated keyboard-open layout. It builds a separate `dist.phone-review` and uses only a loopback mock. Capture its screenshot matrix with:
+The phone review gate additionally checks 390x844, 768x1024 and 1280x900 in light, dim and dark: shared header placement, controls, full-auto confirmation, approvals, report overflow/code/back, tool tabs/search/raw, wrap toggling and simulated keyboard-open layout. It builds its own isolated staging copy and uses only a loopback mock. Capture its screenshot matrix with:
 
 ```sh
 REVIEW_PHASE=2 SCREENSHOTS=patches/phone-upgrade/review bash apps/web/scripts/phone-review-test.sh
@@ -98,6 +100,18 @@ SCREENSHOTS=patches/compact-theme-review/header-matrix bash apps/web/scripts/hea
 Phase captures live under local `patches/phone-upgrade/phase-{1,2}/`, not published screenshots. The matrix includes mock session, controls, approvals, keyboard-open, report and tool-detail surfaces. Narrow presentation helpers also have losslessness and JSON-decoding tests. Browser presets do not reliably prove a coarse pointer, so the original gate explicitly emulates that branch. Viewport simulation does not reproduce physical iOS Safari or Android keyboard behavior.
 
 Before claiming real-device certification, manually check Safari and an installed iPhone PWA, Android Chrome, portrait/landscape safe areas, software-keyboard open/close, long drafts, uploads, native sharing and accessibility navigation. Dedicated dictation, quick replies, workspace `@` search, message long-press branching, swipe-between-files, edge navigation, swipe-down dismissal and haptics remain follow-up work. Notifications still require browser permission and opt-in, work only while the live app is hidden, and are not server Web Push. See [phone-upgrade.md](phone-upgrade.md) for the audit, tradeoffs and minimal provenance proposal.
+
+### Manual device and platform checklist
+
+Automated gates use Chromium emulation on the development Mac. These checks need real hardware or another OS and have not been certified. Desktop Safari automation additionally requires the operator to enable Safari → Settings → Developer → Allow remote automation.
+
+| Target | Check |
+|---|---|
+| iPhone Safari and installed PWA | Pair once, relaunch the host, confirm still signed in (saved token). Send/Queue/Stop, long drafts, keyboard open/close, safe areas in both orientations |
+| Android Chrome | Same as iPhone, plus back-gesture behavior |
+| Windows host | Host starts, pairing-token file is created and reused after restart (Windows ACLs are not mode-checked); a second host on the same state dir exits with a message |
+| Linux host | Pairing-token file is 0600 and reused after restart; a second host on the same state dir exits with a message |
+| Remote access (tunnel/proxy) | App loads and connects over HTTPS; if the proxy rewrites Host without X-Forwarded-Host, set `AGENTLINKD_ALLOWED_ORIGINS` |
 
 ## Deploying updates
 

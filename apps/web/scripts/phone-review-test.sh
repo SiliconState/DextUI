@@ -2,16 +2,12 @@
 # Responsive regression and optional screenshot matrix. Uses only a loopback mock.
 set -euo pipefail
 cd "$(dirname "$0")/../../.."
-if ! command -v agent-browser >/dev/null 2>&1; then
-  echo 'SKIP: agent-browser unavailable; phone review not run'
-  exit 0
-fi
+source apps/web/scripts/dxb-test.sh
 PORT=${PORT:-8795}
-OUT=apps/web/dist.phone-review
+OUT=$(mktemp -d apps/web/dist.staging.phone-review.XXXXXX)
 TMP=$(mktemp -d)
-B=(agent-browser --session dext-phone-review)
 SRV=''
-cleanup() { "${B[@]}" close >/dev/null 2>&1 || true; [ -z "$SRV" ] || kill "$SRV" 2>/dev/null || true; rm -rf "$TMP" "$OUT"; }
+cleanup() { "${B[@]}" close >/dev/null 2>&1 || true; if [ -n "$SRV" ]; then kill "$SRV" 2>/dev/null || true; wait "$SRV" 2>/dev/null || true; fi; rm -rf "$TMP" "$OUT"; }
 trap cleanup EXIT
 if [ -n "${SCREENSHOTS:-}" ]; then mkdir -p "$SCREENSHOTS"; fi
 capture() { [ -z "${SCREENSHOTS:-}" ] || { "${B[@]}" wait 180 >/dev/null; "${B[@]}" screenshot "$SCREENSHOTS/$1.png" >/dev/null; }; }
@@ -26,7 +22,7 @@ wait_js() {
     exit 1
   fi
 }
-(cd apps/web && npm exec -- vite build --outDir dist.phone-review --emptyOutDir >"$TMP/build.log" 2>&1) || { cat "$TMP/build.log"; exit 1; }
+(cd apps/web && npm exec -- vite build --outDir "${OUT#apps/web/}" --emptyOutDir >"$TMP/build.log" 2>&1) || { cat "$TMP/build.log"; exit 1; }
 cat >"$TMP/report.md" <<'EOF'
 ## Daily market brief
 

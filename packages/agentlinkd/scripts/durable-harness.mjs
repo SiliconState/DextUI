@@ -6,15 +6,21 @@ import os from "node:os";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-export async function until(fn, message = "condition timed out") {
-  for (let i = 0; i < 200; i++) { const value = fn(); if (value) return value; await sleep(20); }
+// Time-based, not iteration-based: the full suite runs host tests in parallel,
+// and fake-agent round trips that take ~1s idle can exceed 4s under that load.
+// A generous deadline only delays a genuine failure; it never hides one.
+export async function until(fn, message = "condition timed out", ms = 12000) {
+  for (const end = Date.now() + ms; Date.now() < end; await sleep(20)) { const value = fn(); if (value) return value; }
+  const value = fn(); if (value) return value;
   throw new Error(message);
 }
 export async function durableHost(t, { bridge = false, args = [], env = {}, bin, setup, umask } = {}) {
   const root = path.resolve("packages/agentlinkd");
   // Real core checkpoints must not discover the surrounding UI repository:
   // concurrent fake-host tests legitimately mutate scratch files there.
-  const temp = fs.mkdtempSync(path.join(bin ? os.tmpdir() : root, ".durable-test-"));
+  // Canonicalize macOS's /var -> /private/var temporary-root alias; production
+  // checkpoint reads intentionally refuse symlink ancestors, even in fixtures.
+  const temp = fs.realpathSync(fs.mkdtempSync(path.join(bin ? os.tmpdir() : root, ".durable-test-")));
   const home = path.join(temp, "home");
   const state = path.join(temp, "state");
   const cwd = path.join(temp, "workspace");
@@ -67,7 +73,14 @@ export async function durableHost(t, { bridge = false, args = [], env = {}, bin,
     } finally { if (oldMask !== undefined) process.umask(oldMask); }
     child.stderr.on("data", (b) => stderr += b);
     let stdout = ""; child.stdout.on("data", (b) => stdout += b);
-    const match = await until(() => /listening on (http:\/\/127\.0\.0\.1:\d+)/.exec(stdout), stderr);
+    // Host startup probes the (fake) agent and takes ~2s idle, 3s+ when the
+    // whole suite runs in parallel: allow 20s, but fail at once if it exits.
+    let match;
+    for (const end = Date.now() + 20000; Date.now() < end; await sleep(20)) {
+      match = /listening on (http:\/\/127\.0\.0\.1:\d+)/.exec(stdout);
+      if (match || child.exitCode !== null) break;
+    }
+    if (!match) throw new Error(`host did not start: ${stderr}`);
     base = match[1];
   }
   async function client() {

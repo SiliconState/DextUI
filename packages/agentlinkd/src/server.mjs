@@ -4,7 +4,7 @@
 // seat-based session resume, per-session journals, and static PWA serving.
 //
 //   node packages/agentlinkd/src/server.mjs \
-//     [--port=8788] [--token=SECRET] [--dext=/path/to/dext] \
+//     [--port=8788] [--token=SECRET | --rotate-token] [--dext=/path/to/dext] \
 //     [--cwd=/work/dir] [--approval=auto-read] [--static=apps/web/dist] \
 //     [--state-dir=~/.dextui/agentlinkd]
 //
@@ -48,6 +48,8 @@ import { bridgeArgs, probeNdjsonSupport, probePackUiSupport, spawnBridge, suppor
 import { normalizeUiRequest, progressKey, validUiResponse } from "./pack-ui.mjs";
 import { acceptBackground, acceptBackgroundApplication, backgroundState, clearBackground } from "./background-compaction.mjs";
 import { readForkSource, forkBoundary, forkEvents } from "./session-fork.mjs";
+import { requestSite } from "./request-origin.mjs";
+import { acquireStateLock } from "./state-lock.mjs";
 import { authStatusError, authWriteError, normaliseAuthMarker } from "./auth-errors.mjs";
 
 const here = path.dirname(url.fileURLToPath(import.meta.url));
@@ -70,7 +72,6 @@ function resolveDext() {
 }
 
 const PORT = Number(argValue("port", process.env.AGENTLINKD_PORT ?? 8788));
-const TOKEN = argValue("token", process.env.AGENTLINKD_TOKEN ?? crypto.randomBytes(9).toString("base64url"));
 const DEXT_BIN = resolveDext();
 // Every dext child (turns, catalog probes, auth) runs with the dext binary's
 // own directory (and ~/.cargo/bin) ahead of PATH: under a service unit PATH
@@ -108,6 +109,11 @@ const STATIC_DIR = STATIC_RESOLVED.dir;
 const STATE_DIR = path.resolve(
   argValue("state-dir", process.env.AGENTLINKD_STATE_DIR ?? path.join(process.env.HOME ?? "", ".dextui", "agentlinkd")),
 );
+// Pairing token: --token, then AGENTLINKD_TOKEN, then <state>/pairing-token
+// (created 0600 on first start, reused on every restart, replaced by
+// --rotate-token). A stable token keeps phones and tabs paired across relaunch
+// and self-edit restarts; webhook URLs derived from it stay stable too.
+const PAIRING_TOKEN_FILE = path.join(STATE_DIR, "pairing-token");
 const JOURNALS_DIR = path.join(STATE_DIR, "journals");
 const INDEX_PATH = path.join(STATE_DIR, "sessions.json");
 const JOURNAL_TRUNCATE_BYTES = 64 * 1024 * 1024;
@@ -123,7 +129,6 @@ const STEERING_MAX_CHARS = 100_000;
 const PACK_UI_METHODS = ["form", "progress"];
 
 if (!Number.isInteger(PORT) || PORT < 0 || PORT > 65535) throw new Error(`invalid --port '${PORT}'`);
-if (!TOKEN) throw new Error("pairing token must not be empty");
 if (!APPROVALS.has(DEFAULT_APPROVAL)) throw new Error(`invalid --approval '${DEFAULT_APPROVAL}'`);
 if (!fs.existsSync(DEFAULT_CWD)) {
   throw new Error(
@@ -134,6 +139,28 @@ if (!fs.existsSync(DEFAULT_CWD)) {
 if (!fs.statSync(DEFAULT_CWD).isDirectory()) {
   throw new Error(`--cwd is not a directory: ${DEFAULT_CWD}`);
 }
+const explicitToken = argValue("token", process.env.AGENTLINKD_TOKEN);
+if (explicitToken !== undefined && !explicitToken) throw new Error("pairing token must not be empty");
+if (explicitToken !== undefined && process.argv.includes("--rotate-token")) throw new Error("--rotate-token cannot be combined with --token or AGENTLINKD_TOKEN");
+// Only after every startup refusal above: from here on the host creates and
+// writes durable state, so a refused start must leave no state behind.
+fs.mkdirSync(STATE_DIR, { recursive: true, mode: 0o700 });
+if (!lstatChecked(STATE_DIR, "state dir")?.isDirectory()) throw new Error(`--state-dir is not a directory: ${STATE_DIR}`);
+const stateStat = fs.statSync(STATE_DIR);
+if (process.platform !== "win32" && stateStat.uid !== process.getuid()) throw new Error(`state dir is foreign-owned, refusing: ${STATE_DIR}`);
+// One host per state dir, claimed before the token, journals or index are
+// touched: a second host would interleave journal appends with duplicate seqs
+// and journal the first host's running turns as "lost".
+try {
+  acquireStateLock({ stateDir: STATE_DIR, port: PORT, log: (m) => console.error(`agentlinkd: ${m}`) });
+} catch (err) {
+  if (err.code !== "ELOCKED") throw err;
+  console.error(`agentlinkd: ${err.message}`);
+  process.exit(1);
+}
+if (process.platform !== "win32") fs.chmodSync(STATE_DIR, 0o700);
+const { token: TOKEN, source: TOKEN_SOURCE } = resolvePairingToken();
+if (!TOKEN) throw new Error("pairing token must not be empty");
 
 // ---------- auth: constant-time compare + failure limiter ----------
 
@@ -347,6 +374,11 @@ async function providerStatusAsync() {
 // reply agree.
 let modelRefresh = null;
 let providerWrite = null;
+// In-flight provider status refreshes. A pending restart must wait for them,
+// or a tab that asked for the post-login list gets a dropped connection
+// instead (the refresh spawns `dext auth status` and can exceed the 250ms
+// restart notice under load).
+let providerRefreshes = 0;
 let providerRevision = 0;
 function refreshModelCatalog() {
   modelRefresh ??= reloadModelCatalog().finally(() => { modelRefresh = null; });
@@ -688,7 +720,7 @@ function hostIdle() {
   return busyDetail().length === 0;
 }
 function busyDetail() {
-  return [...restartBusyDetail(sessions.values(), CREW?.activeRuns() ?? [], LAUNCH_BY_ID.values()), ...(providerWrite ? [{ kind: "provider_auth", provider: providerWrite.provider }] : [])];
+  return [...restartBusyDetail(sessions.values(), CREW?.activeRuns() ?? [], LAUNCH_BY_ID.values()), ...(providerWrite ? [{ kind: "provider_auth", provider: providerWrite.provider }] : []), ...(providerRefreshes > 0 ? [{ kind: "provider_refresh", count: providerRefreshes }] : [])];
 }
 SELF = createSelfEdit({
   repoRoot,
@@ -895,6 +927,70 @@ function makeSession({ cwd, approval, seat, persist = true }) {
 
 // ---------- durable state (--state-dir) ----------
 
+// Pairing token resolution. Explicit configuration always wins; otherwise the
+// generated token is saved 0600 in the state dir and reused, so a relaunch or a
+// self-edit restart does not sign out every paired tab and phone.
+function readSavedToken() {
+  let fd;
+  try {
+    // Reject links and special files before open; O_NONBLOCK also prevents a
+    // swapped FIFO from hanging startup between lstat and fstat.
+    const stat = lstatChecked(PAIRING_TOKEN_FILE, "pairing token file");
+    if (!stat) return { missing: true };
+    if (!stat.isFile()) throw new Error(`pairing token path is not a regular file: ${PAIRING_TOKEN_FILE}`);
+    fd = fs.openSync(PAIRING_TOKEN_FILE, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0));
+  } catch (err) {
+    if (err.code === "ELOOP") throw new Error(`pairing token file is a symlink, refusing: ${PAIRING_TOKEN_FILE}`);
+    if (err.code === "ENOENT") return { missing: true };
+    throw err;
+  }
+  try {
+    const st = fs.fstatSync(fd);
+    if (!st.isFile()) throw new Error(`pairing token path is not a regular file: ${PAIRING_TOKEN_FILE}`);
+    const owned = process.platform === "win32" || ((st.mode & 0o077) === 0 && st.uid === process.getuid());
+    const saved = st.size <= 1024 ? fs.readFileSync(fd, "utf8").trim() : "";
+    if (!owned) return { reason: "group/other-accessible or foreign-owned" }; // may have leaked: never reuse
+    if (!/^[A-Za-z0-9_-]{12,256}$/.test(saved)) return { reason: "malformed" };
+    return { token: saved };
+  } finally { fs.closeSync(fd); }
+}
+
+function resolvePairingToken() {
+  const fromArg = argValue("token");
+  if (fromArg !== undefined) return { token: fromArg, source: "--token" };
+  if (process.env.AGENTLINKD_TOKEN !== undefined) return { token: process.env.AGENTLINKD_TOKEN, source: "AGENTLINKD_TOKEN" };
+  const rotate = process.argv.includes("--rotate-token");
+  // STATE_DIR is created, symlink-checked and locked by the caller.
+  // Rotation must reject the same unsafe paths as ordinary startup.
+  const saved = readSavedToken();
+  if (!rotate && saved.token) return { token: saved.token, source: "saved" };
+  const replace = rotate || !!saved.reason;
+  if (saved.reason) console.error(`agentlinkd: ${saved.reason} pairing token file replaced with a new token`);
+  const token = crypto.randomBytes(9).toString("base64url");
+  const tmp = `${PAIRING_TOKEN_FILE}.${process.pid}.${crypto.randomBytes(4).toString("hex")}.tmp`;
+  try {
+    fs.writeFileSync(tmp, `${token}\n`, { mode: 0o600, flag: "wx" });
+    if (replace) fs.renameSync(tmp, PAIRING_TOKEN_FILE); // atomic replace of a bad or rotated file
+    else {
+      // First start: publish without replacing an existing path. The state
+      // lock serializes hosts; unexpected external replacements fail closed.
+      try { fs.linkSync(tmp, PAIRING_TOKEN_FILE); }
+      catch (err) {
+        if (err.code !== "EEXIST") throw err;
+        const winner = readSavedToken();
+        if (winner.token) return { token: winner.token, source: "saved" };
+        throw Object.assign(new Error("pairing token path changed during startup; refusing"), { code: "EUNSAFETOKEN" });
+      } finally { fs.rmSync(tmp, { force: true }); }
+    }
+    return { token, source: rotate ? "rotated" : "new" };
+  } catch (err) {
+    try { fs.rmSync(tmp, { force: true }); } catch { /* best effort */ }
+    if (replace || ["EUNSAFETOKEN", "ELOOP"].includes(err.code) || /symlink|not a regular file/.test(err.message)) throw err;
+    console.error(`agentlinkd: could not save the pairing token (${err.code ?? err.message}); this token lasts until the host stops`);
+    return { token, source: "ephemeral" };
+  }
+}
+
 // Fail closed on symlinks anywhere under the state dir: a swapped link would
 // redirect private journal/index writes outside the operator's 0700 tree.
 function lstatChecked(p, what) {
@@ -964,7 +1060,12 @@ function indexEntryOf(s) {
 // Rewrites sessions.json only when one of its fields actually changed; the
 // tmp+rename swap keeps readers from ever seeing a torn index. `force` covers
 // removals, which the per-session dirty check cannot observe.
+// Set once restoreSessions() has loaded the index. Restore now runs after the
+// port is bound, so a signal or restart arriving in that gap must never write
+// the (still empty) in-memory list over the real sessions.json.
+let INDEX_RESTORED = false;
 function persistIndex(force = false, strict = false) {
+  if (!INDEX_RESTORED) return;
   const entries = [...sessions.values()].map(indexEntryOf);
   if (!force && [...sessions.values()].every((s, i) => s.indexEntry === JSON.stringify(entries[i]))) return;
   try {
@@ -1151,6 +1252,8 @@ function restoreSessions() {
     s.indexEntry = JSON.stringify(indexEntryOf(s));
   }
   // Load the entire index BEFORE completing intents (completion rewrites it).
+  // From here the in-memory list is the real one, so index writes are safe.
+  INDEX_RESTORED = true;
   for (const s of [...sessions.values()]) {
     if (!s.cleanup) continue;
     try { finishCleanup(s); } catch (err) {
@@ -3377,10 +3480,16 @@ async function handleAuthCommand(client, frame) {
   delete frame.credential; // never retain a key in an async request/error frame
   const op = frame.cmd.slice("x-agentlinkd.auth.".length);
   if (op === "status") {
-    if (providerWrite) await providerWrite.done;
-    if (shuttingDown) return sendError(client, "busy", "host is shutting down; reconnect before refreshing providers", frame.cmd);
-    try { await applyAuthCommand(client, frame); }
-    catch (err) { sendError(client, "auth_status_failed", err.message, frame.cmd); }
+    providerRefreshes += 1;
+    try {
+      if (providerWrite) await providerWrite.done;
+      if (shuttingDown) return sendError(client, "busy", "host is shutting down; reconnect before refreshing providers", frame.cmd);
+      try { await applyAuthCommand(client, frame); }
+      catch (err) { sendError(client, "auth_status_failed", err.message, frame.cmd); }
+    } finally {
+      providerRefreshes -= 1;
+      SELF?.tick();
+    }
     return;
   }
   if (op !== "login" && op !== "logout") return sendError(client, "unknown_command", `unsupported cmd ${frame.cmd}`);
@@ -3880,6 +3989,14 @@ const MIME = {
 };
 
 function checkAuth(req, res, allowQuery = false) {
+  // A page from another site (any tab in any local browser) can aim requests
+  // here but never read the token. Refuse before comparing so it cannot probe
+  // tokens or trip the operator lockout.
+  if (requestSite(req) === "cross") {
+    res.writeHead(403, { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: "cross_site" }));
+    return false;
+  }
   if (authLocked()) {
     res.writeHead(429, { "content-type": "application/json" });
     res.end(JSON.stringify({ error: "rate_limited" }));
@@ -4271,6 +4388,11 @@ async function handleHttp(req, res) {
     return;
   }
   if (pathName.startsWith("/hooks/")) {
+    if (requestSite(req) === "cross") {
+      res.writeHead(403, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "cross_site" }));
+      return;
+    }
     // Webhook trigger: POST /hooks/<token>. The token is derived from the
     // pairing token + workspace + flow name (HMAC), so it is unguessable and
     // never stored; no bearer needed (the token *is* the credential).
@@ -4289,7 +4411,10 @@ async function handleHttp(req, res) {
     req.on("end", safeHttp(res, () => {
       const r = TRIGGERS.webhook(token);
       if (r.error) {
-        noteAuthFailure(); // a wrong hook token counts like a wrong bearer
+        // A wrong hook token counts like a wrong bearer, except from cross-site
+        // browser pages: a 192-bit derived token is not guessable, and counting
+        // them would let any website lock the operator out with blind POSTs.
+        if (requestSite(req) !== "cross") noteAuthFailure();
         res.writeHead(404, { "content-type": "application/json" });
         res.end(JSON.stringify({ error: "no_hook" }));
         return;
@@ -4493,6 +4618,15 @@ server.on("upgrade", (req, socket, head) => {
     socket.write("HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n");
     socket.destroy();
   };
+  // Browsers always send Origin (and usually Sec-Fetch-Site) on WebSocket
+  // upgrades. A cross-site page may not reach the hello/token check at all:
+  // otherwise it could guess tokens, trip the lockout and fill client slots.
+  // Native clients send neither header and still authenticate by token.
+  if (requestSite(req) === "cross") {
+    socket.write("HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
+    socket.destroy();
+    return;
+  }
   if (clients.size >= MAX_WS_CLIENTS) {
     socket.write("HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n");
     socket.destroy();
@@ -4621,16 +4755,32 @@ function shutdown() {
 process.once("SIGINT", shutdown);
 process.once("SIGTERM", shutdown);
 
-initStateDir();
-restoreSessions();
-watchPackRoots();
-SELF.start();
-TRIGGERS.addWorkspace(DEFAULT_CWD);
-TRIGGERS.start();
+// A busy port used to surface as an unhandled stack trace. The state lock (held
+// above) means any journal work done before this point was on state that no
+// other host owns; exiting releases the lock.
+function onListenError(err) {
+  console.error(err.code === "EADDRINUSE"
+    ? `agentlinkd: port ${PORT} on 127.0.0.1 is already in use (another agentlinkd or another app). Stop it, or start with --port=<free port>.`
+    : `agentlinkd: could not listen on 127.0.0.1:${PORT}: ${err.message}`);
+  process.exit(1);
+}
 
+// Restore only after the port is bound: a host that cannot listen (for example
+// a second host started against the same state, or a pre-lock host still
+// running) must exit before restoring sessions, because restore journals any
+// "unfinished" turn as lost and that turn may belong to the running host.
+// Connections accepted meanwhile wait: this callback runs to completion first.
+server.once("error", onListenError);
 server.listen(PORT, "127.0.0.1", () => {
+  server.off("error", onListenError);
+  initStateDir();
+  restoreSessions();
+  watchPackRoots();
+  SELF.start();
+  TRIGGERS.addWorkspace(DEFAULT_CWD);
+  TRIGGERS.start();
   console.log(`agentlinkd listening on http://127.0.0.1:${server.address().port}`);
-  console.log(`  token:    ${TOKEN}`);
+  console.log(`  token:    ${TOKEN}  (${TOKEN_SOURCE === "saved" ? `saved in ${PAIRING_TOKEN_FILE}; --rotate-token replaces it` : TOKEN_SOURCE === "new" ? `new, saved in ${PAIRING_TOKEN_FILE}` : TOKEN_SOURCE === "rotated" ? `rotated; paired devices must sign in again` : TOKEN_SOURCE === "ephemeral" ? "not saved; changes on restart" : `from ${TOKEN_SOURCE}`})`);
   console.log(`  dext:     ${DEXT_BIN}`);
   console.log(`  cwd:      ${DEFAULT_CWD}`);
   console.log(`  state:    ${STATE_DIR}`);

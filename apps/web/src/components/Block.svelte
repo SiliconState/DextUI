@@ -327,6 +327,13 @@
     top: 0;
     right: 0;
   }
+  /* Diagram headers own their Copy/Source controls. Keep transcript Copy in
+     flow below rich diagram content, never hit-test over its toolbar. */
+  .b-text:has(:global([data-agent-id="markdown.mermaid"])) > .hover-act {
+    position: static;
+    display: block;
+    margin-left: auto;
+  }
   .b-text:hover .hover-act,
   .tool:hover .hover-act,
   .b-slash:hover .hover-act {
